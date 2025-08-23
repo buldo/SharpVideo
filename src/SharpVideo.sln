@@ -5,6 +5,10 @@ VisualStudioVersion = 17.14.36414.22
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo", "SharpVideo\SharpVideo.csproj", "{649A8C43-441A-43C5-9598-CA801F6B13D8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.Linux.Native", "SharpVideo.Linux.Native\SharpVideo.Linux.Native.csproj", "{0E0D285B-B2A3-6C60-D939-041CA2675391}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.DrmDemo", "SharpVideo.DrmDemo\SharpVideo.DrmDemo.csproj", "{3D7902BC-193B-4122-9418-031FE65CBE50}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,6 +19,14 @@ Global
 		{649A8C43-441A-43C5-9598-CA801F6B13D8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{649A8C43-441A-43C5-9598-CA801F6B13D8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{649A8C43-441A-43C5-9598-CA801F6B13D8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0E0D285B-B2A3-6C60-D939-041CA2675391}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0E0D285B-B2A3-6C60-D939-041CA2675391}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0E0D285B-B2A3-6C60-D939-041CA2675391}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0E0D285B-B2A3-6C60-D939-041CA2675391}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3D7902BC-193B-4122-9418-031FE65CBE50}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3D7902BC-193B-4122-9418-031FE65CBE50}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3D7902BC-193B-4122-9418-031FE65CBE50}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3D7902BC-193B-4122-9418-031FE65CBE50}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
