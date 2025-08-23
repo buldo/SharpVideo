@@ -4,32 +4,46 @@ using System.Runtime.Versioning;
 namespace SharpVideo.Linux.Native;
 
 [SupportedOSPlatform("linux")]
-public static partial class LibDrm
+public static unsafe partial class LibDrm
 {
-    private const string Drm = "drm";
+    // ------------------------------------------------------------
+    //  libdrm ‑ drmModeGetResources
+    // ------------------------------------------------------------
 
-    [DllImport(Drm, SetLastError = true)]
-    public static extern IntPtr drmModeGetResources(int fd);
+    // libdrm is typically available as "libdrm.so.2" or through the
+    // linker alias "drm".  Using "drm" keeps the binding portable.
+    private const string LibraryName = "drm";
 
-    [DllImport(Drm)]
-    public static extern void drmModeFreeResources(IntPtr ptr);
+    // -------------------- P/Invoke ------------------------------
 
-    [StructLayout(LayoutKind.Sequential)]
-    public struct DrmModeRes
-    {
-        public int count_fbs;
-        public IntPtr fbs;
+    /// <summary>
+    /// Retrieve resource handles for a given DRM file descriptor.
+    /// The returned pointer must be freed with <see cref="drmModeFreeResources" />.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <returns>Pointer to a <see cref="DrmModeRes"/> structure, or <c>IntPtr.Zero</c> on failure.</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeGetResources")]
+    internal static partial nint drmModeGetResources(int fd);
 
-        public int count_crtcs;
-        public IntPtr crtcs;
+    /// <summary>
+    /// Free a structure obtained from <see cref="drmModeGetResources" />.
+    /// </summary>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeFreeResources")]
+    internal static partial void drmModeFreeResources(nint resources);
 
-        public int count_connectors;
-        public IntPtr connectors;
+    // ------------------- Managed helpers ------------------------
 
-        public int count_encoders;
-        public IntPtr encoders;
+    /// <summary>
+    /// Obtain a pointer to <see cref="DrmModeRes"/> for the given DRM file descriptor.
+    /// The caller is responsible for eventually invoking
+    /// <see cref="FreeResources(DrmModeRes*)"/> when done.
+    /// </summary>
+    public static DrmModeRes* GetResources(int fd) =>
+        (DrmModeRes*)drmModeGetResources(fd);
 
-        public uint min_width, max_width;
-        public uint min_height, max_height;
-    }
+    /// <summary>
+    /// Free the resources structure obtained from <see cref="GetResources"/>.
+    /// </summary>
+    public static void FreeResources(DrmModeRes* res) =>
+        drmModeFreeResources((nint)res);
 }

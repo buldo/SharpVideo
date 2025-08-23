@@ -15,7 +15,11 @@ public static partial class Libc
     /// <param name="pathname">The path to the file.</param>
     /// <param name="flags">The file access mode and other options.</param>
     /// <returns>A file descriptor on success, or -1 on error.</returns>
-    [LibraryImport(LibraryName, EntryPoint = "open", SetLastError = true)]
+    [LibraryImport(
+        LibraryName, 
+        EntryPoint = "open", 
+        SetLastError = true, 
+        StringMarshalling = StringMarshalling.Utf8)]
     public static partial int open(string pathname, OpenFlags flags);
 
     /// <summary>
@@ -25,7 +29,11 @@ public static partial class Libc
     /// <param name="flags">The file access mode and other options.</param>
     /// <param name="mode">The file permissions to use when creating the file.</param>
     /// <returns>A file descriptor on success, or -1 on error.</returns>
-    [LibraryImport(LibraryName, EntryPoint = "open", SetLastError = true)]
+    [LibraryImport(
+        LibraryName, 
+        EntryPoint = "open", 
+        SetLastError = true, 
+        StringMarshalling = StringMarshalling.Utf8)]
     public static partial int open(string pathname, OpenFlags flags, int mode);
 
     /// <summary>
@@ -33,6 +41,9 @@ public static partial class Libc
     /// </summary>
     /// <param name="fd">The file descriptor to close.</param>
     /// <returns>0 on success, or -1 on error.</returns>
-    [LibraryImport(LibraryName, EntryPoint = "close", SetLastError = true)]
+    [LibraryImport(
+        LibraryName, 
+        EntryPoint = "close", 
+        SetLastError = true)]
     public static partial int close(int fd);
 }
