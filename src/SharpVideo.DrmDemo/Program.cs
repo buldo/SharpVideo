@@ -35,7 +35,10 @@ namespace SharpVideo.DrmDemo
             Console.WriteLine($"Framebuffers: {string.Join(", ", resources?.FrameBuffers ?? Array.Empty<uint>())}");
             Console.WriteLine($"CRTCs: {string.Join(", ", resources?.Crtcs ?? Array.Empty<uint>())}");
             Console.WriteLine($"Connectors: {string.Join(", ", resources?.Connectors ?? Array.Empty<uint>())}");
-            Console.WriteLine($"Encoders: {string.Join(", ", resources?.Encoders ?? Array.Empty<uint>())}");
+            foreach (var encoder in resources.Encoders)
+            {
+                Console.WriteLine($"Encoder {encoder.EncoderId}: EncoderType {encoder.EncoderType}, Crtc {encoder.CrtcId}, PossibleClones {encoder.PossibleClones}, PossibleCrtcs {encoder.PossibleCrtcs}");
+            }
         }
     }
 }

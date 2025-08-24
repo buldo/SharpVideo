@@ -27,3 +27,19 @@ void fill_native_drm_mode_res(drmModeRes* s) {
 int get_native_drm_mode_res_size(void) {
     return sizeof(drmModeRes);
 }
+
+// Function to fill drmModeEncoder structure with test data
+void fill_native_drm_mode_encoder(drmModeEncoder* s) {
+    if (!s) return;
+    
+    s->encoder_id = 100;
+    s->encoder_type = 1; // DRM_MODE_ENCODER_DAC
+    s->crtc_id = 200;
+    s->possible_crtcs = 0x07; // Bitmask: can connect to CRTCs 0, 1, 2
+    s->possible_clones = 0x03; // Bitmask: can clone encoders 0, 1
+}
+
+// Function to get drmModeEncoder structure size for verification
+int get_native_drm_mode_encoder_size(void) {
+    return sizeof(drmModeEncoder);
+}

@@ -31,6 +31,22 @@ public static unsafe partial class LibDrm
     [LibraryImport(LibraryName, EntryPoint = "drmModeFreeResources")]
     internal static partial void drmModeFreeResources(nint resources);
 
+    /// <summary>
+    /// Retrieve encoder information for a given encoder ID.
+    /// The returned pointer must be freed with <see cref="drmModeFreeEncoder" />.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="encoder_id">Encoder ID to query</param>
+    /// <returns>Pointer to a <see cref="DrmModeEncoder"/> structure, or <c>IntPtr.Zero</c> on failure.</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeGetEncoder")]
+    public static partial DrmModeEncoder* drmModeGetEncoder(int fd, uint encoder_id);
+
+    /// <summary>
+    /// Free a structure obtained from <see cref="drmModeGetEncoder" />.
+    /// </summary>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeFreeEncoder")]
+    public static partial void drmModeFreeEncoder(DrmModeEncoder* encoder);
+
     // ------------------- Managed helpers ------------------------
 
     /// <summary>

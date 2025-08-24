@@ -16,4 +16,12 @@ public static unsafe partial class NativeTestLibrary
     // Function to get drmModeRes structure size for verification
     [LibraryImport(LibraryName, EntryPoint = "get_native_drm_mode_res_size")]
     public static partial int GetNativeDrmModeResSize();
+
+    // Function to fill drmModeEncoder structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_drm_mode_encoder")]
+    public static partial void FillNativeDrmModeEncoder(DrmModeEncoder* structure);
+
+    // Function to get drmModeEncoder structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_drm_mode_encoder_size")]
+    public static partial int GetNativeDrmModeEncoderSize();
 }
