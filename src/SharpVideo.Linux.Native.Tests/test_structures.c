@@ -2,10 +2,9 @@
 #include <string.h>
 #include <xf86drmMode.h>
 
-// We use the real drmModeRes structure from libdrm headers
+// We use the real DRM structures from libdrm headers
 
 // Function to fill drmModeRes structure with test data
-
 void fill_native_drm_mode_res(drmModeRes* s) {
     if (!s) return;
     
@@ -42,4 +41,131 @@ void fill_native_drm_mode_encoder(drmModeEncoder* s) {
 // Function to get drmModeEncoder structure size for verification
 int get_native_drm_mode_encoder_size(void) {
     return sizeof(drmModeEncoder);
+}
+
+// Function to fill drmModeConnector structure with test data
+void fill_native_drm_mode_connector(drmModeConnector* s) {
+    if (!s) return;
+    
+    s->connector_id = 300;
+    s->encoder_id = 100;
+    s->connector_type = 11; // DRM_MODE_CONNECTOR_HDMIA
+    s->connector_type_id = 1;
+    s->connection = 1; // DRM_MODE_CONNECTED
+    s->mmWidth = 510; // 510mm width
+    s->mmHeight = 287; // 287mm height
+    s->subpixel = 2; // DRM_MODE_SUBPIXEL_HORIZONTAL_RGB
+    s->count_modes = 0;
+    s->modes = NULL;
+    s->count_props = 0;
+    s->props = NULL;
+    s->prop_values = NULL;
+    s->count_encoders = 0;
+    s->encoders = NULL;
+}
+
+// Function to get drmModeConnector structure size for verification
+int get_native_drm_mode_connector_size(void) {
+    return sizeof(drmModeConnector);
+}
+
+// Function to fill drmModeCrtc structure with test data
+void fill_native_drm_mode_crtc(drmModeCrtc* s) {
+    if (!s) return;
+    
+    s->crtc_id = 400;
+    s->buffer_id = 500;
+    s->x = 0;
+    s->y = 0;
+    s->width = 1920;
+    s->height = 1080;
+    s->mode_valid = 1;
+    // Fill mode info with test data
+    s->mode.clock = 148500;
+    s->mode.hdisplay = 1920;
+    s->mode.hsync_start = 2008;
+    s->mode.hsync_end = 2052;
+    s->mode.htotal = 2200;
+    s->mode.hskew = 0;
+    s->mode.vdisplay = 1080;
+    s->mode.vsync_start = 1084;
+    s->mode.vsync_end = 1089;
+    s->mode.vtotal = 1125;
+    s->mode.vscan = 0;
+    s->mode.vrefresh = 60;
+    s->mode.flags = 0x5; // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
+    s->mode.type = 0x40; // DRM_MODE_TYPE_PREFERRED
+    strcpy(s->mode.name, "1920x1080");
+    s->gamma_size = 256;
+}
+
+// Function to get drmModeCrtc structure size for verification
+int get_native_drm_mode_crtc_size(void) {
+    return sizeof(drmModeCrtc);
+}
+
+// Function to fill drmModeModeInfo structure with test data
+void fill_native_drm_mode_mode_info(drmModeModeInfo* s) {
+    if (!s) return;
+    
+    s->clock = 148500;
+    s->hdisplay = 1920;
+    s->hsync_start = 2008;
+    s->hsync_end = 2052;
+    s->htotal = 2200;
+    s->hskew = 0;
+    s->vdisplay = 1080;
+    s->vsync_start = 1084;
+    s->vsync_end = 1089;
+    s->vtotal = 1125;
+    s->vscan = 0;
+    s->vrefresh = 60;
+    s->flags = 0x5; // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
+    s->type = 0x40; // DRM_MODE_TYPE_PREFERRED
+    strcpy(s->name, "1920x1080");
+}
+
+// Function to get drmModeModeInfo structure size for verification
+int get_native_drm_mode_mode_info_size(void) {
+    return sizeof(drmModeModeInfo);
+}
+
+// Function to fill drmModePlane structure with test data
+void fill_native_drm_mode_plane(drmModePlane* s) {
+    if (!s) return;
+    
+    s->count_formats = 0;
+    s->formats = NULL;
+    s->plane_id = 600;
+    s->crtc_id = 400;
+    s->fb_id = 500;
+    s->crtc_x = 0;
+    s->crtc_y = 0;
+    s->x = 0;
+    s->y = 0;
+    s->possible_crtcs = 0x07; // Can be used with CRTCs 0, 1, 2
+    s->gamma_size = 256;
+}
+
+// Function to get drmModePlane structure size for verification
+int get_native_drm_mode_plane_size(void) {
+    return sizeof(drmModePlane);
+}
+
+// Function to fill drmModeFB structure with test data
+void fill_native_drm_mode_fb(drmModeFB* s) {
+    if (!s) return;
+    
+    s->fb_id = 700;
+    s->width = 1920;
+    s->height = 1080;
+    s->pitch = 7680; // 1920 * 4 bytes per pixel
+    s->bpp = 32;
+    s->depth = 24;
+    s->handle = 800;
+}
+
+// Function to get drmModeFB structure size for verification
+int get_native_drm_mode_fb_size(void) {
+    return sizeof(drmModeFB);
 }
