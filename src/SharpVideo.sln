@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.DrmDemo", "Sharp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.Linux.Native.Tests", "SharpVideo.Linux.Native.Tests\SharpVideo.Linux.Native.Tests.csproj", "{2AFA9325-96F0-4567-A944-4496FCE38791}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.DrmDmaDemo", "SharpVideo.DrmDmaDemo\SharpVideo.DrmDmaDemo.csproj", "{8E0A3004-B598-48DE-9A08-28898E016541}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +71,18 @@ Global
 		{2AFA9325-96F0-4567-A944-4496FCE38791}.Release|x64.Build.0 = Release|Any CPU
 		{2AFA9325-96F0-4567-A944-4496FCE38791}.Release|x86.ActiveCfg = Release|Any CPU
 		{2AFA9325-96F0-4567-A944-4496FCE38791}.Release|x86.Build.0 = Release|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Debug|x64.Build.0 = Debug|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Debug|x86.Build.0 = Debug|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Release|x64.ActiveCfg = Release|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Release|x64.Build.0 = Release|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Release|x86.ActiveCfg = Release|Any CPU
+		{8E0A3004-B598-48DE-9A08-28898E016541}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
