@@ -10,16 +10,16 @@ public unsafe readonly struct DrmModeRes
 {
     /* Primary object counts */
     public readonly int CountFbs;
-    private readonly nint _fbs;                /* uint32_t* */
+    private readonly UInt32* _fbs;                /* uint32_t* */
 
     public readonly int CountCrtcs;
-    private readonly nint _crtcs;              /* uint32_t* */
+    private readonly UInt32* _crtcs;              /* uint32_t* */
 
     public readonly int CountConnectors;
-    private readonly nint _connectors;         /* uint32_t* */
+    private readonly UInt32* _connectors;         /* uint32_t* */
 
     public readonly int CountEncoders;
-    private readonly nint _encoders;           /* uint32_t* */
+    private readonly UInt32* _encoders;           /* uint32_t* */
 
     /* Screen limits */
     public readonly int MinWidth;
@@ -33,19 +33,20 @@ public unsafe readonly struct DrmModeRes
      *  native structure is pinned and has not been freed with
      *  drmModeFreeResources.
      * ----------------------------------------------------------------*/
-    public ReadOnlySpan<uint> FramebufferIds => _fbs == 0
+    public ReadOnlySpan<uint> FramebufferIds => _fbs == null
         ? ReadOnlySpan<uint>.Empty
-        : new ReadOnlySpan<uint>((void*)_fbs, CountFbs);
+        : new ReadOnlySpan<uint>(_fbs, CountFbs);
 
-    public ReadOnlySpan<uint> CrtcIds => _crtcs == 0
+    public ReadOnlySpan<uint> CrtcIds => _crtcs == null
         ? ReadOnlySpan<uint>.Empty
-        : new ReadOnlySpan<uint>((void*)_crtcs, CountCrtcs);
+        : new ReadOnlySpan<uint>(_crtcs, CountCrtcs);
 
-    public ReadOnlySpan<uint> ConnectorIds => _connectors == 0
+    public ReadOnlySpan<uint> ConnectorIds => _connectors == null
         ? ReadOnlySpan<uint>.Empty
-        : new ReadOnlySpan<uint>((void*)_connectors, CountConnectors);
+        : new ReadOnlySpan<uint>(_connectors, CountConnectors);
 
-    public ReadOnlySpan<uint> EncoderIds => _encoders == 0
+    public ReadOnlySpan<uint> EncoderIds => _encoders == null
         ? ReadOnlySpan<uint>.Empty
-        : new ReadOnlySpan<uint>((void*)_encoders, CountEncoders);
+        : new ReadOnlySpan<uint>(_encoders, CountEncoders);
 }
+
