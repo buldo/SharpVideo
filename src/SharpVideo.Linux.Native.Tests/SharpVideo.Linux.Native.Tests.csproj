@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,5 +25,12 @@
   <ItemGroup>
     <ProjectReference Include="..\SharpVideo.Linux.Native\SharpVideo.Linux.Native.csproj" />
   </ItemGroup>
+
+  <Target Name="BuildNativeTestLibrary" BeforeTargets="Build">
+    <Message Text="Building native test library..." Importance="high" />
+    <Exec Command="gcc -shared -fPIC -I/usr/include/drm -o $(OutputPath)libtest_structures.so test_structures.c $(shell pkg-config --cflags --libs libdrm)" 
+          WorkingDirectory="$(ProjectDir)" 
+          ContinueOnError="false" />
+  </Target>
 
 </Project>
