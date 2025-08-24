@@ -57,7 +57,7 @@ public class DrmDevice
                         continue;
                     }
 
-                    encoders.Add(new DrmEncoder()
+                    encoders.Add(new DrmEncoder
                     {
                         CrtcId = encoder->CrtcId,
                         EncoderId = encoder->EncoderId,
@@ -68,12 +68,93 @@ public class DrmDevice
                     LibDrm.drmModeFreeEncoder(encoder);
                 }
 
+                var encodersById = encoders.ToDictionary(en => en.EncoderId);
+
+                var connectors = new List<DrmConnector>();
+                foreach (var connId in resources->ConnectorIds)
+                {
+                    var connector = LibDrm.drmModeGetConnector(_deviceFd, connId);
+                    if (connector == null)
+                    {
+                        continue;
+                    }
+
+                    var currentEncoder = encodersById.GetValueOrDefault(connector->EncoderId);
+
+                    var connectorEncoders = new List<DrmEncoder>();
+                    foreach (var encId in connector->Encoders)
+                    {
+                        if(encodersById.TryGetValue(encId, out var encoder))
+                        {
+                            connectorEncoders.Add(encoder);
+                        }
+                    }
+
+                    var connectorModes = new List<DrmModeInfo>();
+                    foreach (var mode in connector->Modes)
+                    {
+                        connectorModes.Add(new DrmModeInfo
+                        {
+                            Clock = mode.Clock,
+                            HDisplay = mode.HDisplay,
+                            HSyncStart = mode.HSyncStart,
+                            HSyncEnd = mode.HSyncEnd,
+                            HTotal = mode.HTotal,
+                            HSkew = mode.HSkew,
+                            VDisplay = mode.VDisplay,
+                            VSyncStart = mode.VSyncStart,
+                            VSyncEnd = mode.VSyncEnd,
+                            VTotal = mode.VTotal,
+                            VScan = mode.VScan,
+                            VRefresh = mode.VRefresh,
+                            Flags = mode.Flags,
+                            Type = mode.Type,
+                            Name = mode.NameString
+                        });
+                    }
+
+                    var props = new List<DrmProperty>();
+                    var origProps = connector->Props;
+                    var origValues = connector->PropValues;
+                    for (int i = 0; i < connector->CountProps; i++)
+                    {
+                        var prop = LibDrm.GetProperty(_deviceFd, origProps[i]);
+                        if (prop == null)
+                        {
+                            continue;
+                        }
+                        props.Add(new DrmProperty
+                        {
+                            Id = prop->PropId,
+                            Name = prop->NameString,
+                        });
+
+                        LibDrm.FreeProperty(prop);
+                    }
+
+                    connectors.Add(new DrmConnector
+                    {
+                        Connection = connector->Connection,
+                        ConnectorId = connector->ConnectorId,
+                        ConnectorType = connector->ConnectorType,
+                        ConnectorTypeId = connector->ConnectorTypeId,
+                        MmHeight = connector->MmHeight,
+                        MmWidth = connector->MmWidth,
+                        Encoder = currentEncoder,
+                        SubPixel = connector->SubPixel,
+                        Encoders = connectorEncoders,
+                        Modes = connectorModes,
+                        Props = props
+                    });
+                    LibDrm.drmModeFreeConnector(connector);
+                }
+
 
                 return new DrmDeviceResources
                 {
                     FrameBuffers = resources->FramebufferIds.ToArray(),
                     Crtcs = resources->CrtcIds.ToArray(),
-                    Connectors = resources->ConnectorIds.ToArray(),
+                    Connectors = connectors,
                     Encoders = encoders,
                     MinWidth = resources->MinWidth,
                     MaxWidth = resources->MaxWidth,

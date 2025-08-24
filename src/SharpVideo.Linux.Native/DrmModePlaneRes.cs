@@ -7,7 +7,7 @@ namespace SharpVideo.Linux.Native;
 /// Contains plane resource information.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe readonly struct DrmModePlaneRes
+public readonly unsafe struct DrmModePlaneRes
 {
     /// <summary>
     /// Number of planes.

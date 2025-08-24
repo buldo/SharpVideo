@@ -2,7 +2,7 @@ using SharpVideo.Linux.Native;
 
 namespace SharpVideo.Drm;
 
-public readonly struct DrmEncoder
+public class DrmEncoder
 {
   /// <summary>
   /// Unique identifier for the encoder.

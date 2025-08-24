@@ -6,7 +6,7 @@ namespace SharpVideo.Linux.Native;
 /// Managed representation of the native <c>drmModeRes</c> structure.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe readonly struct DrmModeRes
+public readonly unsafe struct DrmModeRes
 {
     /* Primary object counts */
     public readonly int CountFbs;

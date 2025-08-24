@@ -7,7 +7,7 @@ namespace SharpVideo.Linux.Native;
 /// Contains lessee list information.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe readonly struct DrmModeLesseeListRes
+public readonly unsafe struct DrmModeLesseeListRes
 {
     /// <summary>
     /// Number of lessees.

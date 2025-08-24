@@ -89,7 +89,7 @@ public unsafe class StructureCompatibilityTests
         // Verify that the managed structure fields have the expected values
         Assert.Equal(300u, nativeFilledStruct.ConnectorId);
         Assert.Equal(100u, nativeFilledStruct.EncoderId);
-        Assert.Equal(11u, nativeFilledStruct.ConnectorType); // DRM_MODE_CONNECTOR_HDMIA
+        Assert.Equal(ConnectorType.HDMIA, nativeFilledStruct.ConnectorType); // DRM_MODE_CONNECTOR_HDMIA
         Assert.Equal(1u, nativeFilledStruct.ConnectorTypeId);
         Assert.Equal(DrmModeConnection.Connected, nativeFilledStruct.Connection);
         Assert.Equal(510u, nativeFilledStruct.MmWidth);
@@ -128,7 +128,7 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal(1080u, nativeFilledStruct.Height);
         Assert.Equal(1, nativeFilledStruct.ModeValid);
         Assert.Equal(256, nativeFilledStruct.GammaSize);
-        
+
         // Verify embedded mode info
         Assert.Equal(148500u, nativeFilledStruct.Mode.Clock);
         Assert.Equal(1920, nativeFilledStruct.Mode.HDisplay);
@@ -169,8 +169,8 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal(1125, nativeFilledStruct.VTotal);
         Assert.Equal(0, nativeFilledStruct.VScan);
         Assert.Equal(60u, nativeFilledStruct.VRefresh);
-        Assert.Equal(0x5u, nativeFilledStruct.Flags); // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
-        Assert.Equal(0x40u, nativeFilledStruct.Type); // DRM_MODE_TYPE_PREFERRED
+        Assert.Equal(DrmModeFlag.DRM_MODE_FLAG_NHSYNC | DrmModeFlag.DRM_MODE_FLAG_NVSYNC, nativeFilledStruct.Flags); // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
+        Assert.Equal(DrmModeType.PREFERRED, nativeFilledStruct.Type); // DRM_MODE_TYPE_PREFERRED
         Assert.Equal("1920x1080", nativeFilledStruct.NameString);
     }
 

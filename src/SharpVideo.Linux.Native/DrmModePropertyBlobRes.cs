@@ -7,7 +7,7 @@ namespace SharpVideo.Linux.Native;
 /// Contains property blob information.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe readonly struct DrmModePropertyBlobRes
+public readonly unsafe struct DrmModePropertyBlobRes
 {
     /// <summary>
     /// Property blob ID.

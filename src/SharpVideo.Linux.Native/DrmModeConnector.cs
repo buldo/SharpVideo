@@ -7,7 +7,7 @@ namespace SharpVideo.Linux.Native;
 /// Contains connector information.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe readonly struct DrmModeConnector
+public readonly unsafe struct DrmModeConnector
 {
     /// <summary>
     /// Connector ID.
@@ -22,7 +22,7 @@ public unsafe readonly struct DrmModeConnector
     /// <summary>
     /// Connector type.
     /// </summary>
-    public readonly uint ConnectorType;
+    public readonly ConnectorType ConnectorType;
 
     /// <summary>
     /// Connector type ID.

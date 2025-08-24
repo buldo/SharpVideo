@@ -34,7 +34,23 @@ namespace SharpVideo.DrmDemo
             Console.WriteLine($"Height: {resources?.MinHeight} - {resources?.MaxHeight}");
             Console.WriteLine($"Framebuffers: {string.Join(", ", resources?.FrameBuffers ?? Array.Empty<uint>())}");
             Console.WriteLine($"CRTCs: {string.Join(", ", resources?.Crtcs ?? Array.Empty<uint>())}");
-            Console.WriteLine($"Connectors: {string.Join(", ", resources?.Connectors ?? Array.Empty<uint>())}");
+
+            foreach (var connector in resources.Connectors)
+            {
+                Console.WriteLine($"Connector {connector.ConnectorId}. ConnectorType {connector.ConnectorType}, MmWidth {connector.MmWidth}, MmHeight {connector.MmHeight}");
+                Console.WriteLine("Modes:");
+                foreach (var mode in connector.Modes)
+                {
+                    Console.WriteLine($"  {mode.Name}: {mode.HDisplay}x{mode.VDisplay} @ {mode.VRefresh}Hz. Flags {mode.Flags}, Type {mode.Type}");
+                }
+
+                Console.WriteLine("Props:");
+                foreach (var prop in connector.Props)
+                {
+                    Console.WriteLine($"  Prop {prop.Id}: {prop.Name}");
+                }
+            }
+
             foreach (var encoder in resources.Encoders)
             {
                 Console.WriteLine($"Encoder {encoder.EncoderId}: EncoderType {encoder.EncoderType}, Crtc {encoder.CrtcId}, PossibleClones {encoder.PossibleClones}, PossibleCrtcs {encoder.PossibleCrtcs}");

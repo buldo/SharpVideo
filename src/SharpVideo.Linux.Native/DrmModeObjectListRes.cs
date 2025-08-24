@@ -7,7 +7,7 @@ namespace SharpVideo.Linux.Native;
 /// Contains object list information.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe readonly struct DrmModeObjectListRes
+public readonly unsafe struct DrmModeObjectListRes
 {
     /// <summary>
     /// Number of objects.

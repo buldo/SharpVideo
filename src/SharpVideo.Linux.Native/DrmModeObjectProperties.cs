@@ -7,7 +7,7 @@ namespace SharpVideo.Linux.Native;
 /// Contains object properties information.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe readonly struct DrmModeObjectProperties
+public readonly unsafe struct DrmModeObjectProperties
 {
     /// <summary>
     /// Number of properties.
