@@ -7,7 +7,7 @@ namespace SharpVideo.Linux.Native;
 /// Contains DRM mode property information.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]
-public readonly unsafe struct DrmModePropertyRes
+public unsafe struct DrmModePropertyRes
 {
     /// <summary>
     /// Property ID.
@@ -22,8 +22,7 @@ public readonly unsafe struct DrmModePropertyRes
     /// <summary>
     /// Property name (32 characters).
     /// </summary>
-    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)]
-    public readonly byte[] Name;
+    public fixed byte Name[32];
 
     /// <summary>
     /// Number of values.
@@ -58,7 +57,19 @@ public readonly unsafe struct DrmModePropertyRes
     /// <summary>
     /// Gets the property name as a string.
     /// </summary>
-    public string NameString => System.Text.Encoding.UTF8.GetString(Name).TrimEnd('\0');
+    public string NameString
+    {
+        get
+        {
+            fixed (byte* namePtr = Name)
+            {
+                // Find length up to first null terminator
+                int len = 0;
+                while (len < 32 && namePtr[len] != 0) len++;
+                return len == 0 ? string.Empty : System.Text.Encoding.UTF8.GetString(namePtr, len);
+            }
+        }
+    }
 
     /// <summary>
     /// Gets a span over the property values.

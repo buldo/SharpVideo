@@ -38,22 +38,22 @@ namespace SharpVideo.DrmDemo
             foreach (var connector in resources.Connectors)
             {
                 Console.WriteLine($"Connector {connector.ConnectorId}. ConnectorType {connector.ConnectorType}, MmWidth {connector.MmWidth}, MmHeight {connector.MmHeight}");
-                Console.WriteLine("Modes:");
+                Console.WriteLine("\tModes:");
                 foreach (var mode in connector.Modes)
                 {
-                    Console.WriteLine($"  {mode.Name}: {mode.HDisplay}x{mode.VDisplay} @ {mode.VRefresh}Hz. Flags {mode.Flags}, Type {mode.Type}");
+                    Console.WriteLine($"\t\t{mode.Name}: {mode.HDisplay}x{mode.VDisplay} @ {mode.VRefresh}Hz. Flags {mode.Flags}, Type {mode.Type}");
                 }
 
-                Console.WriteLine("Props:");
+                Console.WriteLine("\tProps:");
                 foreach (var prop in connector.Props)
                 {
-                    Console.WriteLine($"  Prop {prop.Id}: {prop.Name}");
+                    Console.WriteLine($"\t\tProp {prop.Id}: {prop.Name}");
                 }
             }
 
             foreach (var encoder in resources.Encoders)
             {
-                Console.WriteLine($"Encoder {encoder.EncoderId}: EncoderType {encoder.EncoderType}, Crtc {encoder.CrtcId}, PossibleClones {encoder.PossibleClones}, PossibleCrtcs {encoder.PossibleCrtcs}");
+                Console.WriteLine($"\tEncoder {encoder.EncoderId}: EncoderType {encoder.EncoderType}, Crtc {encoder.CrtcId}, PossibleClones {encoder.PossibleClones}, PossibleCrtcs {encoder.PossibleCrtcs}");
             }
         }
     }
