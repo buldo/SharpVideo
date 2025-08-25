@@ -18,6 +18,17 @@
             "stopAtEntry": false
         },
         {
+            "name": "DMA-DRM-Debug",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/SharpVideo.DrmDmaDemo/bin/Debug/net9.0/SharpVideo.DrmDmaDemo.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/SharpVideo.DrmDmaDemo",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        },
+        {
             "name": ".NET Core Attach",
             "type": "coreclr",
             "request": "attach"
