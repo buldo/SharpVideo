@@ -122,4 +122,38 @@ public static partial class Libc
         EntryPoint = "munmap",
         SetLastError = true)]
     public static partial int munmap(IntPtr addr, IntPtr length);
+
+    [Flags]
+    public enum MsyncFlags : int
+    {
+        MS_ASYNC = 1,
+        MS_SYNC = 4,
+        MS_INVALIDATE = 2
+    }
+
+    /// <summary>
+    /// Synchronizes a mapped region with the underlying file.
+    /// </summary>
+    /// <param name="addr">The starting address of the mapping to synchronize.</param>
+    /// <param name="length">The length of the mapping to synchronize.</param>
+    /// <param name="flags">Synchronization flags.</param>
+    /// <returns>0 on success, or -1 on error.</returns>
+    [LibraryImport(
+        LibraryName,
+        EntryPoint = "msync",
+        SetLastError = true)]
+    public static partial int msync(IntPtr addr, IntPtr length, MsyncFlags flags);
+
+    /// <summary>
+    /// Changes the memory protection of a mapped region.
+    /// </summary>
+    /// <param name="addr">The starting address of the mapping to protect.</param>
+    /// <param name="length">The length of the mapping to protect.</param>
+    /// <param name="prot">The new protection flags.</param>
+    /// <returns>0 on success, or -1 on error.</returns>
+    [LibraryImport(
+        LibraryName,
+        EntryPoint = "mprotect",
+        SetLastError = true)]
+    public static partial int mprotect(IntPtr addr, IntPtr length, ProtFlags prot);
 }

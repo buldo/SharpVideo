@@ -25,7 +25,7 @@ public static class TestPattern
         {
             for (var x = 0; x < width; x += 2)
             {
-                var barIndex = x / barWidth;
+                var barIndex = Math.Min(x / barWidth, ColorBars.Length - 1);
                 var color = ColorBars[barIndex];
 
                 var baseIndex = (y * width + x) * 2;

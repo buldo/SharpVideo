@@ -12,72 +12,72 @@ public unsafe struct DrmModeModeInfo
     /// <summary>
     /// Pixel clock in kHz.
     /// </summary>
-    public readonly uint Clock;
+    public uint Clock;
 
     /// <summary>
     /// Horizontal display size.
     /// </summary>
-    public readonly ushort HDisplay;
+    public ushort HDisplay;
 
     /// <summary>
     /// Horizontal sync start.
     /// </summary>
-    public readonly ushort HSyncStart;
+    public ushort HSyncStart;
 
     /// <summary>
     /// Horizontal sync end.
     /// </summary>
-    public readonly ushort HSyncEnd;
+    public ushort HSyncEnd;
 
     /// <summary>
     /// Horizontal total.
     /// </summary>
-    public readonly ushort HTotal;
+    public ushort HTotal;
 
     /// <summary>
     /// Horizontal skew.
     /// </summary>
-    public readonly ushort HSkew;
+    public ushort HSkew;
 
     /// <summary>
     /// Vertical display size.
     /// </summary>
-    public readonly ushort VDisplay;
+    public ushort VDisplay;
 
     /// <summary>
     /// Vertical sync start.
     /// </summary>
-    public readonly ushort VSyncStart;
+    public ushort VSyncStart;
 
     /// <summary>
     /// Vertical sync end.
     /// </summary>
-    public readonly ushort VSyncEnd;
+    public ushort VSyncEnd;
 
     /// <summary>
     /// Vertical total.
     /// </summary>
-    public readonly ushort VTotal;
+    public ushort VTotal;
 
     /// <summary>
     /// Vertical scan.
     /// </summary>
-    public readonly ushort VScan;
+    public ushort VScan;
 
     /// <summary>
     /// Vertical refresh rate in Hz.
     /// </summary>
-    public readonly uint VRefresh;
+    public uint VRefresh;
 
     /// <summary>
     /// Mode flags.
     /// </summary>
-    public readonly DrmModeFlag Flags;
+    public DrmModeFlag Flags;
 
     /// <summary>
     /// Mode type.
     /// </summary>
-    public readonly DrmModeType Type;
+    public DrmModeType Type;
 
     /// <summary>
     /// Mode name (32 characters).

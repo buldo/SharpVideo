@@ -191,6 +191,55 @@ public static unsafe partial class LibDrm
     [LibraryImport(LibraryName, EntryPoint = "drmModeFreeObjectProperties")]
     public static partial void drmModeFreeObjectProperties(DrmModeObjectProperties* properties);
 
+    /// <summary>
+    /// Add a framebuffer to the DRM device using a DMA buffer file descriptor.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="width">Framebuffer width in pixels</param>
+    /// <param name="height">Framebuffer height in pixels</param>
+    /// <param name="depth">Color depth</param>
+    /// <param name="bpp">Bits per pixel</param>
+    /// <param name="pitch">Bytes per row</param>
+    /// <param name="bo_handle">Buffer object handle</param>
+    /// <param name="buf_id">Returned framebuffer ID</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeAddFB")]
+    public static partial int drmModeAddFB(int fd, uint width, uint height, byte depth, byte bpp, uint pitch, uint bo_handle, out uint buf_id);
+
+    /// <summary>
+    /// Set the CRTC configuration.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="crtc_id">CRTC ID</param>
+    /// <param name="buffer_id">Framebuffer ID to display</param>
+    /// <param name="x">X offset in framebuffer</param>
+    /// <param name="y">Y offset in framebuffer</param>
+    /// <param name="connectors">Array of connector IDs</param>
+    /// <param name="count">Number of connectors</param>
+    /// <param name="mode">Display mode to set</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeSetCrtc")]
+    public static partial int drmModeSetCrtc(int fd, uint crtc_id, uint buffer_id, uint x, uint y, uint* connectors, int count, DrmModeModeInfo* mode);
+
+    /// <summary>
+    /// Remove a framebuffer from the DRM device.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="buffer_id">Framebuffer ID to remove</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeRmFB")]
+    public static partial int drmModeRmFB(int fd, uint buffer_id);
+
+    /// <summary>
+    /// Convert a DMA buffer file descriptor to a DRM buffer object handle.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="prime_fd">DMA buffer file descriptor</param>
+    /// <param name="handle">Returned buffer object handle</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmPrimeFDToHandle")]
+    public static partial int drmPrimeFDToHandle(int fd, int prime_fd, out uint handle);
+
     // ------------------- Managed helpers ------------------------
 
     /// <summary>

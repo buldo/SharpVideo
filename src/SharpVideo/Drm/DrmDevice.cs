@@ -8,6 +8,11 @@ public class DrmDevice
 {
     private int _deviceFd;
 
+    /// <summary>
+    /// Gets the device file descriptor.
+    /// </summary>
+    public int DeviceFd => _deviceFd;
+
     public DrmDevice(int deviceFd)
     {
         _deviceFd = deviceFd;
