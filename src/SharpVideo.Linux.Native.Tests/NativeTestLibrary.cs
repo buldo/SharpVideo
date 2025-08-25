@@ -64,4 +64,12 @@ public static unsafe partial class NativeTestLibrary
     // Function to get drmModeFB structure size for verification
     [LibraryImport(LibraryName, EntryPoint = "get_native_drm_mode_fb_size")]
     public static partial int GetNativeDrmModeFBSize();
+
+    // Function to fill dma_heap_allocation_data structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_dma_heap_allocation_data")]
+    public static partial void FillNativeDmaHeapAllocationData(DmaHeapAllocationData* structure);
+
+    // Function to get dma_heap_allocation_data structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_dma_heap_allocation_data_size")]
+    public static partial int GetNativeDmaHeapAllocationDataSize();
 }

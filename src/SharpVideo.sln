@@ -13,6 +13,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.Linux.Native.Tes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.DrmDmaDemo", "SharpVideo.DrmDmaDemo\SharpVideo.DrmDmaDemo.csproj", "{8E0A3004-B598-48DE-9A08-28898E016541}"
 EndProject
+
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU

@@ -234,4 +234,30 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal(24u, nativeFilledStruct.Depth);
         Assert.Equal(800u, nativeFilledStruct.Handle);
     }
+
+    [Fact]
+    public void TestDmaHeapAllocationData_NativeSizeCompatibility()
+    {
+        // Test that our DmaHeapAllocationData structure has the same size as the native dma_heap_allocation_data structure
+        int csharpSize = Marshal.SizeOf<DmaHeapAllocationData>();
+        int nativeSize = NativeTestLibrary.GetNativeDmaHeapAllocationDataSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestDmaHeapAllocationData_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new DmaHeapAllocationData();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeDmaHeapAllocationData(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal(4096ul, nativeFilledStruct.len);
+        Assert.Equal(42u, nativeFilledStruct.fd);
+        Assert.Equal(0x80002u, nativeFilledStruct.fd_flags); // O_RDWR | O_CLOEXEC
+        Assert.Equal(0ul, nativeFilledStruct.heap_flags); // No heap flags defined yet
+    }
 }

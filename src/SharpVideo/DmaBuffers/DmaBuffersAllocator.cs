@@ -1,4 +1,5 @@
 ﻿using SharpVideo.Linux.Native;
+using static SharpVideo.Linux.Native.DmaHeapIoctl;
 
 namespace SharpVideo.DmaBuffers;
 
@@ -39,30 +40,20 @@ public class DmaBuffersAllocator
 
     public DmaBuffer? Allocate(ulong size)
     {
-        var allocationData = new dma_heap_allocation_data
+        // Use the new ioctl system for allocation
+        var nativeBuffer = TryAllocateBuffer(_fd, size);
+        
+        if (nativeBuffer != null)
         {
-            len = size,
-            fd_flags = (uint)(OpenFlags.O_RDWR | OpenFlags.O_CLOEXEC),
-            heap_flags = 0 // Нет специальных флагов
-        };
-
-        unsafe
-        {
-            if (Libc.ioctl(_fd, DMA_HEAP_IOCTL_ALLOC, (IntPtr)(&allocationData)) != 0)
+            var buffer = new DmaBuffer
             {
-                //Console.WriteLine($"❌ DMA-BUF allocation failed, errno: {Marshal.GetLastWin32Error()}");
-                return null;
-            }
+                Fd = nativeBuffer.Value.Fd,
+                Size = nativeBuffer.Value.Size
+            };
+            _allocatedBuffers.Add(buffer.Fd, buffer);
+            return buffer;
         }
 
-        var bufInfo = new DmaBuffer
-        {
-            Fd = (int)allocationData.fd,
-            Size = size
-        };
-
-        _allocatedBuffers.Add(bufInfo.Fd, bufInfo);
-
-        return bufInfo;
+        return null;
     }
 }

@@ -46,4 +46,30 @@ public static partial class Libc
         EntryPoint = "close", 
         SetLastError = true)]
     public static partial int close(int fd);
+
+    /// <summary>
+    /// Performs device-specific input/output operations on a file descriptor.
+    /// </summary>
+    /// <param name="fd">The file descriptor.</param>
+    /// <param name="request">The device-specific request code.</param>
+    /// <param name="argp">Pointer to the argument data.</param>
+    /// <returns>0 on success, or -1 on error.</returns>
+    [LibraryImport(
+        LibraryName, 
+        EntryPoint = "ioctl", 
+        SetLastError = true)]
+    public static partial int ioctl(int fd, uint request, nint argp);
+
+    /// <summary>
+    /// Performs device-specific input/output operations on a file descriptor.
+    /// </summary>
+    /// <param name="fd">The file descriptor.</param>
+    /// <param name="request">The device-specific request code.</param>
+    /// <param name="argp">Pointer to the argument data.</param>
+    /// <returns>0 on success, or -1 on error.</returns>
+    [LibraryImport(
+        LibraryName, 
+        EntryPoint = "ioctl", 
+        SetLastError = true)]
+    public static partial int ioctl(int fd, ulong request, nint argp);
 }

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <xf86drmMode.h>
+#include <linux/dma-heap.h>
 
 // We use the real DRM structures from libdrm headers
 
@@ -120,8 +121,8 @@ void fill_native_drm_mode_mode_info(drmModeModeInfo* s) {
     s->vtotal = 1125;
     s->vscan = 0;
     s->vrefresh = 60;
-    s->flags = 0x5; // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
-    s->type = 0x40; // DRM_MODE_TYPE_PREFERRED
+    s->flags = 0xA; // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
+    s->type = 0x8; // DRM_MODE_TYPE_PREFERRED
     strcpy(s->name, "1920x1080");
 }
 
@@ -168,4 +169,19 @@ void fill_native_drm_mode_fb(drmModeFB* s) {
 // Function to get drmModeFB structure size for verification
 int get_native_drm_mode_fb_size(void) {
     return sizeof(drmModeFB);
+}
+
+// Function to fill dma_heap_allocation_data structure with test data
+void fill_native_dma_heap_allocation_data(struct dma_heap_allocation_data* s) {
+    if (!s) return;
+    
+    s->len = 4096; // 4KB allocation
+    s->fd = 42; // Test file descriptor
+    s->fd_flags = 0x80002; // O_RDWR | O_CLOEXEC
+    s->heap_flags = 0; // No heap flags defined yet
+}
+
+// Function to get dma_heap_allocation_data structure size for verification
+int get_native_dma_heap_allocation_data_size(void) {
+    return sizeof(struct dma_heap_allocation_data);
 }
