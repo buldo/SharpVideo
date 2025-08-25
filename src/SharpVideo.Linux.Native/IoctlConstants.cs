@@ -82,7 +82,7 @@ public static class IoctlConstants
 
     // DMA Heap ioctl constants
     public const uint DMA_HEAP_IOC_MAGIC = (uint)'H';
-    public static readonly uint DMA_HEAP_IOCTL_ALLOC = IOWR(DMA_HEAP_IOC_MAGIC, 0, 32); // sizeof(DmaHeapAllocationData)
+    public static readonly uint DMA_HEAP_IOCTL_ALLOC = IOWR(DMA_HEAP_IOC_MAGIC, 0, 24); // sizeof(DmaHeapAllocationData)
 
     // DRM ioctl constants
     public const uint DRM_IOCTL_BASE = (uint)'d';

@@ -72,4 +72,8 @@ public static unsafe partial class NativeTestLibrary
     // Function to get dma_heap_allocation_data structure size for verification
     [LibraryImport(LibraryName, EntryPoint = "get_native_dma_heap_allocation_data_size")]
     public static partial int GetNativeDmaHeapAllocationDataSize();
+
+    // Function to get the real DMA_HEAP_IOCTL_ALLOC constant value from Linux headers
+    [LibraryImport(LibraryName, EntryPoint = "get_native_dma_heap_ioctl_alloc")]
+    public static partial uint GetNativeDmaHeapIoctlAlloc();
 }

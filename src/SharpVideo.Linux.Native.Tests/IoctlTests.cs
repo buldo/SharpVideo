@@ -41,6 +41,31 @@ public class IoctlTests
     }
 
     [Fact]
+    public void TestIoctlConstants_DmaHeapConstantMatchesNative()
+    {
+        // Test that C# DMA_HEAP_IOCTL_ALLOC constant matches the real Linux kernel constant
+        uint csharpConstant = IoctlConstants.DMA_HEAP_IOCTL_ALLOC;
+        uint nativeConstant = NativeTestLibrary.GetNativeDmaHeapIoctlAlloc();
+        
+        // Debug information to help understand the mismatch
+        int nativeSize = NativeTestLibrary.GetNativeDmaHeapAllocationDataSize();
+        uint expectedConstant = IoctlConstants.IOWR(IoctlConstants.DMA_HEAP_IOC_MAGIC, 0, (uint)nativeSize);
+        
+        // Provide helpful error message with debug information
+        if (csharpConstant != nativeConstant)
+        {
+            string errorMessage = $"DMA_HEAP_IOCTL_ALLOC constant mismatch!\n" +
+                                 $"C# constant: 0x{csharpConstant:X8} (using size 32)\n" +
+                                 $"Native constant: 0x{nativeConstant:X8}\n" +
+                                 $"Native structure size: {nativeSize}\n" +
+                                 $"Expected constant with correct size: 0x{expectedConstant:X8}";
+            Assert.Fail(errorMessage);
+        }
+        
+        Assert.Equal(nativeConstant, csharpConstant);
+    }
+
+    [Fact]
     public void TestBasicIoctl_WithDevNull()
     {
         // Test with /dev/null (should always be available)

@@ -185,3 +185,8 @@ void fill_native_dma_heap_allocation_data(struct dma_heap_allocation_data* s) {
 int get_native_dma_heap_allocation_data_size(void) {
     return sizeof(struct dma_heap_allocation_data);
 }
+
+// Function to get the real DMA_HEAP_IOCTL_ALLOC constant value from Linux headers
+uint32_t get_native_dma_heap_ioctl_alloc(void) {
+    return DMA_HEAP_IOCTL_ALLOC;
+}
