@@ -154,6 +154,22 @@ public class DrmDevice
                     LibDrm.drmModeFreeConnector(connector);
                 }
 
+                var planeResources = LibDrm.GetPlaneResources(_deviceFd);
+                var planes = new List<DrmPlane>();
+                if (planeResources != null)
+                {
+                    try
+                    {
+                        foreach (var planeId in planeResources->Planes)
+                        {
+                            planes.Add(new DrmPlane(_deviceFd, planeId));
+                        }
+                    }
+                    finally
+                    {
+                        LibDrm.FreePlaneResources(planeResources);
+                    }
+                }
 
                 return new DrmDeviceResources
                 {
@@ -161,6 +177,7 @@ public class DrmDevice
                     Crtcs = resources->CrtcIds.ToArray(),
                     Connectors = connectors,
                     Encoders = encoders,
+                    Planes = planes,
                     MinWidth = resources->MinWidth,
                     MaxWidth = resources->MaxWidth,
                     MinHeight = resources->MinHeight,

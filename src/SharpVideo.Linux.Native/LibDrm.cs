@@ -108,9 +108,7 @@ public static unsafe partial class LibDrm
     /// Free a structure obtained from <see cref="drmModeGetPlane" />.
     /// </summary>
     [LibraryImport(LibraryName, EntryPoint = "drmModeFreePlane")]
-    public static partial void drmModeFreePlane(DrmModePlane* plane);
-
-    /// <summary>
+    public static partial void drmModeFreePlane(DrmModePlane* plane);    /// <summary>
     /// Retrieve framebuffer information for a given framebuffer ID.
     /// The returned pointer must be freed with <see cref="drmModeFreeFB" />.
     /// </summary>
@@ -207,6 +205,23 @@ public static unsafe partial class LibDrm
     public static partial int drmModeAddFB(int fd, uint width, uint height, byte depth, byte bpp, uint pitch, uint bo_handle, out uint buf_id);
 
     /// <summary>
+    /// Add a framebuffer to the DRM device using multiple DMA buffer file descriptors (version 2).
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="width">Framebuffer width in pixels</param>
+    /// <param name="height">Framebuffer height in pixels</param>
+    /// <param name="pixel_format">Pixel format identifier</param>
+    /// <param name="bo_handles">Array of buffer object handles</param>
+    /// <param name="pitches">Array of pitches (bytes per row)</param>
+    /// <param name="offsets">Array of offsets for each plane</param>
+    /// <param name="buf_id">Returned framebuffer ID</param>
+    /// <param name="flags">Framebuffer configuration flags</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeAddFB2")]
+    public static partial int drmModeAddFB2(int fd, uint width, uint height, uint pixel_format, uint* bo_handles,
+        uint* pitches, uint* offsets, out uint buf_id, uint flags);
+
+    /// <summary>
     /// Set the CRTC configuration.
     /// </summary>
     /// <param name="fd">Open DRM device file descriptor</param>
@@ -239,6 +254,32 @@ public static unsafe partial class LibDrm
     /// <returns>0 on success, negative error code on failure</returns>
     [LibraryImport(LibraryName, EntryPoint = "drmPrimeFDToHandle")]
     public static partial int drmPrimeFDToHandle(int fd, int prime_fd, out uint handle);
+
+    /// <summary>
+    /// Configure a plane to display a framebuffer.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="plane_id">Plane ID</param>
+    /// <param name="crtc_id">CRTC ID to associate with the plane</param>
+    /// <param name="fb_id">Framebuffer ID to display</param>
+    /// <param name="flags">Plane configuration flags</param>
+    /// <param name="crtc_x">X position on CRTC</param>
+    /// <param name="crtc_y">Y position on CRTC</param>
+    /// <param name="crtc_w">Width on CRTC</param>
+    /// <param name="crtc_h">Height on CRTC</param>
+    /// <param name="src_x">X position in source framebuffer (in 16.16 fixed point)</param>
+    /// <param name="src_y">Y position in source framebuffer (in 16.16 fixed point)</param>
+    /// <param name="src_w">Width in source framebuffer (in 16.16 fixed point)</param>
+    /// <param name="src_h">Height in source framebuffer (in 16.16 fixed point)</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeSetPlane")]
+    public static partial int drmModeSetPlane(int fd, uint plane_id, uint crtc_id, uint fb_id, uint flags,
+        int crtc_x, int crtc_y, uint crtc_w, uint crtc_h,
+        uint src_x, uint src_y, uint src_w, uint src_h);
+
+    [LibraryImport(LibraryName, EntryPoint = "drmModeObjectSetProperty")]
+    public static partial int drmModeObjectSetProperty(int fd, uint object_id, uint object_type, uint property_id,
+        ulong property_value);
 
     // ------------------- Managed helpers ------------------------
 

@@ -38,4 +38,34 @@ public static class TestPattern
             }
         }
     }
+
+    public static unsafe void FillXR24(byte* buffer, int width, int height)
+    {
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                // Simple color bar pattern
+                byte r = 0, g = 0, b = 0;
+                if (x < width / 3)
+                {
+                    r = 255;
+                }
+                else if (x < width * 2 / 3)
+                {
+                    g = 255;
+                }
+                else
+                {
+                    b = 255;
+                }
+
+                int pos = (y * width + x) * 4;
+                buffer[pos] = b;     // Blue
+                buffer[pos + 1] = g; // Green
+                buffer[pos + 2] = r; // Red
+                buffer[pos + 3] = 0; // X (unused)
+            }
+        }
+    }
 }

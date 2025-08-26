@@ -41,7 +41,7 @@ namespace SharpVideo.DrmDmaDemo
             // Use 1080p resolution for the buffer
             const int width = 1920;
             const int height = 1080;
-            const int bpp = 2; // YUV422 has 2 bytes per pixel
+            const int bpp = 4; // XR24 has 4 bytes per pixel
             ulong bufferSize = (ulong)(width * height * bpp);
 
             var dmaBuf = allocator.Allocate(bufferSize);
@@ -70,10 +70,10 @@ namespace SharpVideo.DrmDmaDemo
             // Fill with test pattern
             unsafe
             {
-                TestPattern.FillYuv422((byte*)map, width, height);
+                TestPattern.FillXR24((byte*)map, width, height);
             }
 
-            Console.WriteLine("Filled DMA buffer with YUV422 test pattern.");
+            Console.WriteLine("Filled DMA buffer with XR24 test pattern.");
 
             // Sync the buffer to ensure writes are committed
             Libc.msync(map, (IntPtr)dmaBuf.Size, Libc.MsyncFlags.MS_SYNC);
@@ -113,6 +113,27 @@ namespace SharpVideo.DrmDmaDemo
             // or you can dispose it manually if you are done with it.
             // dmaBuf.Dispose();
         }
+
+        private static string FourCCToString(uint fourcc)
+        {
+            var chars = new char[4];
+            chars[0] = (char)(fourcc & 0xFF);
+            chars[1] = (char)((fourcc >> 8) & 0xFF);
+            chars[2] = (char)((fourcc >> 16) & 0xFF);
+            chars[3] = (char)((fourcc >> 24) & 0xFF);
+            // Check for non-printable characters
+            for (var i = 0; i < 4; i++)
+            {
+                if (char.IsControl(chars[i]))
+                {
+                    return "N/A";
+                }
+            }
+            return new string(chars);
+        }
+
+        private static uint FourCC(char a, char b, char c, char d) =>
+            ((uint)a) | ((uint)b << 8) | ((uint)c << 16) | ((uint)d << 24);
 
         [SupportedOSPlatform("linux")]
         private static bool PresentBuffer(DrmDevice drmDevice, DmaBuffers.DmaBuffer dmaBuffer, int width, int height)
@@ -190,6 +211,20 @@ namespace SharpVideo.DrmDmaDemo
                 return false;
             }
 
+            var plane = resources.Planes.FirstOrDefault(p => (p.PossibleCrtcs & (1u << (int)resources.Crtcs.ToList().IndexOf(crtcId))) != 0);
+            if (plane == null)
+            {
+                Console.WriteLine("No suitable plane found for the selected CRTC.");
+                return false;
+            }
+
+            Console.WriteLine($"Found suitable plane with ID: {plane.Id}");
+            Console.WriteLine("Plane supports the following formats:");
+            foreach (var format in plane.Formats)
+            {
+                Console.WriteLine($"  - {FourCCToString(format)} (0x{format:X})");
+            }
+
             Console.WriteLine($"Using CRTC ID: {crtcId}");
 
             unsafe
@@ -205,15 +240,28 @@ namespace SharpVideo.DrmDmaDemo
                 Console.WriteLine($"Converted DMA FD {dmaBuffer.Fd} to handle {handle}");
 
                 // Create framebuffer
-                uint pitch = (uint)(width * 2); // YUV422 has 2 bytes per pixel
-                result = LibDrm.drmModeAddFB(drmDevice.DeviceFd, (uint)width, (uint)height, 16, 16, pitch, handle, out uint fbId);
-                if (result != 0)
+                uint pitch = (uint)(width * 4); // XR24 has 4 bytes per pixel
+                uint* handles = stackalloc uint[4] { handle, 0, 0, 0 };
+                uint* pitches = stackalloc uint[4] { pitch, 0, 0, 0 };
+                uint* offsets = stackalloc uint[4] { 0, 0, 0, 0 };
+                var format = FourCC('X', 'R', '2', '4');
+                var resultAddFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, format, handles, pitches, offsets, out var fbId, 0);
+                if (resultAddFb != 0)
                 {
-                    Console.WriteLine($"Failed to create framebuffer: {result}");
+                    Console.WriteLine($"Failed to create framebuffer: {resultAddFb}");
                     return false;
                 }
 
                 Console.WriteLine($"Created framebuffer with ID: {fbId}");
+
+                // Set plane
+                result = LibDrm.drmModeSetPlane(drmDevice.DeviceFd, plane.Id, crtcId, fbId, 0, 0, 0, (uint)width, (uint)height, 0, 0, (uint)width << 16, (uint)height << 16);
+                if (result != 0)
+                {
+                    Console.WriteLine($"Failed to set plane: {result}");
+                    LibDrm.drmModeRmFB(drmDevice.DeviceFd, fbId);
+                    return false;
+                }
 
                 // Convert managed mode to native mode using normal initialization
                 var nativeMode = new DrmModeModeInfo

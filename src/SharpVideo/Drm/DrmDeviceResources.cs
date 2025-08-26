@@ -27,6 +27,12 @@ public class DrmDeviceResources
     /// </summary>
     public required IReadOnlyCollection<DrmEncoder> Encoders { get; init; }
 
+    /// <summary>
+    /// List the available planes on the device.
+    /// Planes are used to display images on the screen and can be hardware-accelerated.
+    /// </summary>
+    public required IReadOnlyCollection<DrmPlane> Planes { get; init; }
+
     public required int MinWidth { get; init; }
 
     public required int MaxWidth { get; init; }
