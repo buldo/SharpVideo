@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
@@ -26,11 +26,9 @@
     <ProjectReference Include="..\SharpVideo.Linux.Native\SharpVideo.Linux.Native.csproj" />
   </ItemGroup>
 
-  <Target Name="BuildNativeTestLibrary" BeforeTargets="Build">
+  <Target Name="BuildNativeTestLibrary" BeforeTargets="Build" Condition="$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::Linux)))">
     <Message Text="Building native test library..." Importance="high" />
-    <Exec Command="gcc -shared -fPIC -I/usr/include/drm -o $(OutputPath)libtest_structures.so test_structures.c $(shell pkg-config --cflags --libs libdrm)" 
-          WorkingDirectory="$(ProjectDir)" 
-          ContinueOnError="false" />
+    <Exec Command="gcc -shared -fPIC -I/usr/include/drm -o $(OutputPath)libtest_structures.so test_structures.c $(shell pkg-config --cflags --libs libdrm)" WorkingDirectory="$(ProjectDir)" ContinueOnError="false" />
   </Target>
 
 </Project>
