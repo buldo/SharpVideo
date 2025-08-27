@@ -8,7 +8,7 @@
 // Function to fill drmModeRes structure with test data
 void fill_native_drm_mode_res(drmModeRes* s) {
     if (!s) return;
-    
+
     s->count_fbs = 2;
     s->fbs = NULL; // We'll handle pointer arrays separately in tests
     s->count_crtcs = 3;
@@ -31,7 +31,7 @@ int get_native_drm_mode_res_size(void) {
 // Function to fill drmModeEncoder structure with test data
 void fill_native_drm_mode_encoder(drmModeEncoder* s) {
     if (!s) return;
-    
+
     s->encoder_id = 100;
     s->encoder_type = 1; // DRM_MODE_ENCODER_DAC
     s->crtc_id = 200;
@@ -47,7 +47,7 @@ int get_native_drm_mode_encoder_size(void) {
 // Function to fill drmModeConnector structure with test data
 void fill_native_drm_mode_connector(drmModeConnector* s) {
     if (!s) return;
-    
+
     s->connector_id = 300;
     s->encoder_id = 100;
     s->connector_type = 11; // DRM_MODE_CONNECTOR_HDMIA
@@ -73,7 +73,7 @@ int get_native_drm_mode_connector_size(void) {
 // Function to fill drmModeCrtc structure with test data
 void fill_native_drm_mode_crtc(drmModeCrtc* s) {
     if (!s) return;
-    
+
     s->crtc_id = 400;
     s->buffer_id = 500;
     s->x = 0;
@@ -108,7 +108,7 @@ int get_native_drm_mode_crtc_size(void) {
 // Function to fill drmModeModeInfo structure with test data
 void fill_native_drm_mode_mode_info(drmModeModeInfo* s) {
     if (!s) return;
-    
+
     s->clock = 148500;
     s->hdisplay = 1920;
     s->hsync_start = 2008;
@@ -127,6 +127,10 @@ void fill_native_drm_mode_mode_info(drmModeModeInfo* s) {
 }
 
 // Function to get drmModeModeInfo structure size for verification
+int get_off_t_size() {
+    return sizeof(__off_t);
+}
+
 int get_native_drm_mode_mode_info_size(void) {
     return sizeof(drmModeModeInfo);
 }
@@ -134,7 +138,7 @@ int get_native_drm_mode_mode_info_size(void) {
 // Function to fill drmModePlane structure with test data
 void fill_native_drm_mode_plane(drmModePlane* s) {
     if (!s) return;
-    
+
     s->count_formats = 0;
     s->formats = NULL;
     s->plane_id = 600;
@@ -156,7 +160,7 @@ int get_native_drm_mode_plane_size(void) {
 // Function to fill drmModeFB structure with test data
 void fill_native_drm_mode_fb(drmModeFB* s) {
     if (!s) return;
-    
+
     s->fb_id = 700;
     s->width = 1920;
     s->height = 1080;
@@ -174,7 +178,7 @@ int get_native_drm_mode_fb_size(void) {
 // Function to fill dma_heap_allocation_data structure with test data
 void fill_native_dma_heap_allocation_data(struct dma_heap_allocation_data* s) {
     if (!s) return;
-    
+
     s->len = 4096; // 4KB allocation
     s->fd = 42; // Test file descriptor
     s->fd_flags = 0x80002; // O_RDWR | O_CLOEXEC

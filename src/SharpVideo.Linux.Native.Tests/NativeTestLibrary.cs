@@ -76,4 +76,8 @@ public static unsafe partial class NativeTestLibrary
     // Function to get the real DMA_HEAP_IOCTL_ALLOC constant value from Linux headers
     [LibraryImport(LibraryName, EntryPoint = "get_native_dma_heap_ioctl_alloc")]
     public static partial uint GetNativeDmaHeapIoctlAlloc();
+
+    // Function to get __off_t size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_off_t_size")]
+    public static partial int GetOffTSize();
 }

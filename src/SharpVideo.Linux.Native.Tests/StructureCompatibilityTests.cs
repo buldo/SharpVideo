@@ -260,4 +260,15 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal(0x80002u, nativeFilledStruct.fd_flags); // O_RDWR | O_CLOEXEC
         Assert.Equal(0ul, nativeFilledStruct.heap_flags); // No heap flags defined yet
     }
+
+    [Fact]
+    public void TestOffT_NativeSizeCompatibility()
+    {
+        // Test that our IntPtr has the same size as the native __off_t type
+        int csharpSize = Marshal.SizeOf<nint>();
+        int nativeSize = NativeTestLibrary.GetOffTSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
 }
+
