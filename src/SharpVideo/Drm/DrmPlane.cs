@@ -19,7 +19,7 @@ public class DrmPlane
         _drmFd = drmFd;
         Id = planeId;
 
-        var planePtr = LibDrm.GetPlane(_drmFd, planeId);
+        var planePtr = LibDrm.drmModeGetPlane(_drmFd, planeId);
         if (planePtr == null)
         {
             throw new InvalidOperationException($"Failed to get plane {planeId}");
@@ -41,7 +41,7 @@ public class DrmPlane
         }
         finally
         {
-            LibDrm.FreePlane(planePtr);
+            LibDrm.drmModeFreePlane(planePtr);
         }
     }
 }

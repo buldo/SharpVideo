@@ -73,28 +73,19 @@ public static partial class Libc
         SetLastError = true)]
     public static partial int ioctl(int fd, ulong request, nint argp);
 
-    [Flags]
-    public enum ProtFlags
-    {
-        PROT_NONE = 0x0,
-        PROT_READ = 0x1,
-        PROT_WRITE = 0x2,
-        PROT_EXEC = 0x4
-    }
-
-    [Flags]
-    public enum MapFlags
-    {
-        MAP_SHARED = 0x01,
-        MAP_PRIVATE = 0x02,
-        MAP_FIXED = 0x10
-    }
-
     public static readonly IntPtr MAP_FAILED = new IntPtr(-1);
 
     /// <summary>
-    /// Maps files or devices into memory; it is used to map the file descriptor `fd` into the address space of the calling process.
+    /// Map addresses starting near ADDR and extending for LEN bytes.
+    /// From OFFSET into the file FD describes according to PROT and FLAGS.
+    /// If ADDR is nonzero, it is the desired mapping address.
+    /// If the MAP_FIXED bit is set in FLAGS, the mapping will be at ADDR exactly (which must be page-aligned); otherwise the system chooses a convenient nearby address.
+    /// The return value is the actual mapping address chosen or MAP_FAILED for errors (in which case `errno' is set).
+    /// A successful `mmap' call deallocates any previous mapping for the affected region.
     /// </summary>
+    /// <remarks>
+    /// extern void *mmap (void *__addr, size_t __len, int __prot,int __flags, int __fd, __off_t __offset) __THROW;
+    /// </remarks>
     /// <param name="addr">The starting address for the mapping (usually IntPtr.Zero).</param>
     /// <param name="length">The length of the mapping.</param>
     /// <param name="prot">The desired memory protection of the mapping.</param>
@@ -109,7 +100,7 @@ public static partial class Libc
         LibraryName,
         EntryPoint = "mmap",
         SetLastError = true)]
-    public static partial IntPtr mmap(IntPtr addr, IntPtr length, ProtFlags prot, MapFlags flags, int fd, IntPtr offset);
+    public static partial IntPtr mmap(IntPtr addr, nuint length, ProtFlags prot, MapFlags flags, int fd, nint offset);
 
     /// <summary>
     /// Unmaps a mapped region of memory, reverting it back to being unallocated.
@@ -122,14 +113,6 @@ public static partial class Libc
         EntryPoint = "munmap",
         SetLastError = true)]
     public static partial int munmap(IntPtr addr, IntPtr length);
-
-    [Flags]
-    public enum MsyncFlags : int
-    {
-        MS_ASYNC = 1,
-        MS_SYNC = 4,
-        MS_INVALIDATE = 2
-    }
 
     /// <summary>
     /// Synchronizes a mapped region with the underlying file.

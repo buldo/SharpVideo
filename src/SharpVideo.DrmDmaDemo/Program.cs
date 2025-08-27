@@ -53,61 +53,58 @@ namespace SharpVideo.DrmDmaDemo
 
             Console.WriteLine($"Allocated DMA buffer of size {dmaBuf.Size} with fd {dmaBuf.Fd}");
 
-            // Map the buffer to fill it
-            var map = Libc.mmap(IntPtr.Zero, (IntPtr)dmaBuf.Size,
-                Libc.ProtFlags.PROT_READ | Libc.ProtFlags.PROT_WRITE,
-                Libc.MapFlags.MAP_SHARED, dmaBuf.Fd, 0);
+            dmaBuf.MapBuffer();
 
-            if (map == Libc.MAP_FAILED)
+            if (dmaBuf.MapStatus == MapStatus.FailedToMap)
             {
                 Console.WriteLine("Failed to mmap DMA buffer.");
                 dmaBuf.Dispose();
                 return;
             }
 
-            Console.WriteLine($"DMA buffer mapped at {map:X}");
+            //Console.WriteLine($"DMA buffer mapped at {map:X}");
 
-            // Fill with test pattern
-            unsafe
-            {
-                TestPattern.FillXR24((byte*)map, width, height);
-            }
+            //// Fill with test pattern
+            //unsafe
+            //{
+            //    TestPattern.FillXR24((byte*)map, width, height);
+            //}
 
-            Console.WriteLine("Filled DMA buffer with XR24 test pattern.");
+            //Console.WriteLine("Filled DMA buffer with XR24 test pattern.");
 
-            // Sync the buffer to ensure writes are committed
-            Libc.msync(map, (IntPtr)dmaBuf.Size, Libc.MsyncFlags.MS_SYNC);
-            Console.WriteLine("Synced DMA buffer.");
+            //// Sync the buffer to ensure writes are committed
+            //Libc.msync(map, (IntPtr)dmaBuf.Size, MsyncFlags.MS_SYNC);
+            //Console.WriteLine("Synced DMA buffer.");
 
-            // Make the buffer read-only to prevent accidental modification
-            if (Libc.mprotect(map, (IntPtr)dmaBuf.Size, Libc.ProtFlags.PROT_READ) != 0)
-            {
-                Console.WriteLine("Warning: Failed to make buffer read-only, continuing anyway.");
-            }
-            else
-            {
-                Console.WriteLine("Made buffer read-only to prevent modification.");
-            }
+            //// Make the buffer read-only to prevent accidental modification
+            //if (Libc.mprotect(map, (IntPtr)dmaBuf.Size, ProtFlags.PROT_READ) != 0)
+            //{
+            //    Console.WriteLine("Warning: Failed to make buffer read-only, continuing anyway.");
+            //}
+            //else
+            //{
+            //    Console.WriteLine("Made buffer read-only to prevent modification.");
+            //}
 
-            // Present the buffer on the display
-            if (PresentBuffer(drmDevice, dmaBuf, width, height))
-            {
-                Console.WriteLine("Successfully presented buffer on display.");
+            //// Present the buffer on the display
+            //if (PresentBuffer(drmDevice, dmaBuf, width, height))
+            //{
+            //    Console.WriteLine("Successfully presented buffer on display.");
 
-                // Keep the display active and the buffer mapped for the entire duration
-                Console.WriteLine("Displaying pattern for 10 seconds...");
-                Thread.Sleep(10000);
+            //    // Keep the display active and the buffer mapped for the entire duration
+            //    Console.WriteLine("Displaying pattern for 10 seconds...");
+            //    Thread.Sleep(10000);
 
-                // Now unmap the buffer
-                Libc.munmap(map, (IntPtr)dmaBuf.Size);
-                Console.WriteLine("Unmapped DMA buffer.");
-            }
-            else
-            {
-                Console.WriteLine("Failed to present buffer on display.");
-                // Unmap on failure
-                Libc.munmap(map, (IntPtr)dmaBuf.Size);
-            }
+            //    // Now unmap the buffer
+            //    Libc.munmap(map, (IntPtr)dmaBuf.Size);
+            //    Console.WriteLine("Unmapped DMA buffer.");
+            //}
+            //else
+            //{
+            //    Console.WriteLine("Failed to present buffer on display.");
+            //    // Unmap on failure
+            //    Libc.munmap(map, (IntPtr)dmaBuf.Size);
+            //}
 
             // The buffer will be disposed automatically when the allocator is disposed
             // or you can dispose it manually if you are done with it.

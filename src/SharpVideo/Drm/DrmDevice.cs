@@ -28,14 +28,14 @@ public class DrmDevice
 
         unsafe
         {
-            var resources = LibDrm.GetResources(deviceFd);
+            var resources = LibDrm.drmModeGetResources(deviceFd);
             if(resources == null)
             {
                 Libc.close(deviceFd);
                 return null;
             }
 
-            LibDrm.FreeResources(resources);
+            LibDrm.drmModeFreeResources(resources);
         }
 
         return new DrmDevice(deviceFd);
@@ -45,7 +45,7 @@ public class DrmDevice
     {
         unsafe
         {
-            var resources = LibDrm.GetResources(_deviceFd);
+            var resources = LibDrm.drmModeGetResources(_deviceFd);
             if (resources == null)
             {
                 return null;
@@ -123,7 +123,7 @@ public class DrmDevice
                     var origValues = connector->PropValues;
                     for (int i = 0; i < connector->CountProps; i++)
                     {
-                        var prop = LibDrm.GetProperty(_deviceFd, origProps[i]);
+                        var prop = LibDrm.drmModeGetProperty(_deviceFd, origProps[i]);
                         if (prop == null)
                         {
                             continue;
@@ -134,7 +134,7 @@ public class DrmDevice
                             Name = prop->NameString,
                         });
 
-                        LibDrm.FreeProperty(prop);
+                        LibDrm.drmModeFreeProperty(prop);
                     }
 
                     connectors.Add(new DrmConnector
@@ -154,7 +154,7 @@ public class DrmDevice
                     LibDrm.drmModeFreeConnector(connector);
                 }
 
-                var planeResources = LibDrm.GetPlaneResources(_deviceFd);
+                var planeResources = LibDrm.drmModeGetPlaneResources(_deviceFd);
                 var planes = new List<DrmPlane>();
                 if (planeResources != null)
                 {
@@ -167,7 +167,7 @@ public class DrmDevice
                     }
                     finally
                     {
-                        LibDrm.FreePlaneResources(planeResources);
+                        LibDrm.drmModeFreePlaneResources(planeResources);
                     }
                 }
 
@@ -186,7 +186,7 @@ public class DrmDevice
             }
             finally
             {
-                LibDrm.FreeResources(resources);
+                LibDrm.drmModeFreeResources(resources);
             }
         }
     }

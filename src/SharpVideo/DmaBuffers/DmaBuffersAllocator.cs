@@ -1,8 +1,12 @@
-﻿using SharpVideo.Linux.Native;
+﻿using System.Runtime.Versioning;
+
+using SharpVideo.Linux.Native;
+
 using static SharpVideo.Linux.Native.DmaHeapIoctl;
 
 namespace SharpVideo.DmaBuffers;
 
+[SupportedOSPlatform("linux")]
 public class DmaBuffersAllocator
 {
     private readonly int _fd;
@@ -42,13 +46,13 @@ public class DmaBuffersAllocator
     {
         // Use the new ioctl system for allocation
         var nativeBuffer = TryAllocateBuffer(_fd, size);
-        
+
         if (nativeBuffer != null)
         {
             var buffer = new DmaBuffer
             {
                 Fd = nativeBuffer.Value.Fd,
-                Size = nativeBuffer.Value.Size
+                Size = (UIntPtr)nativeBuffer.Value.Size
             };
             _allocatedBuffers.Add(buffer.Fd, buffer);
             return buffer;
