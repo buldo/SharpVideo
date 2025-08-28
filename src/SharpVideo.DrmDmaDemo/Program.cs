@@ -62,53 +62,42 @@ namespace SharpVideo.DrmDmaDemo
                 return;
             }
 
-            //Console.WriteLine($"DMA buffer mapped at {map:X}");
+            Console.WriteLine($"DMA buffer mapped");
 
-            //// Fill with test pattern
-            //unsafe
-            //{
-            //    TestPattern.FillXR24((byte*)map, width, height);
-            //}
+            // Fill with test pattern
+            TestPattern.FillXR24(dmaBuf.GetMappedSpan(), width, height);
 
-            //Console.WriteLine("Filled DMA buffer with XR24 test pattern.");
+            Console.WriteLine("Filled DMA buffer with XR24 test pattern.");
 
-            //// Sync the buffer to ensure writes are committed
-            //Libc.msync(map, (IntPtr)dmaBuf.Size, MsyncFlags.MS_SYNC);
-            //Console.WriteLine("Synced DMA buffer.");
+            dmaBuf.SyncMap();
+            Console.WriteLine("Synced DMA buffer.");
 
-            //// Make the buffer read-only to prevent accidental modification
-            //if (Libc.mprotect(map, (IntPtr)dmaBuf.Size, ProtFlags.PROT_READ) != 0)
-            //{
-            //    Console.WriteLine("Warning: Failed to make buffer read-only, continuing anyway.");
-            //}
-            //else
-            //{
-            //    Console.WriteLine("Made buffer read-only to prevent modification.");
-            //}
+            // Make the buffer read-only to prevent accidental modification
+            var roResult = dmaBuf.MakeMapReadOnly();
+            Console.WriteLine(roResult
+                ? "Made buffer read-only to prevent modification."
+                : "Warning: Failed to make buffer read-only, continuing anyway.");
 
-            //// Present the buffer on the display
-            //if (PresentBuffer(drmDevice, dmaBuf, width, height))
-            //{
-            //    Console.WriteLine("Successfully presented buffer on display.");
+            // Present the buffer on the display
+            if (PresentBuffer(drmDevice, dmaBuf, width, height))
+            {
+                Console.WriteLine("Successfully presented buffer on display.");
 
-            //    // Keep the display active and the buffer mapped for the entire duration
-            //    Console.WriteLine("Displaying pattern for 10 seconds...");
-            //    Thread.Sleep(10000);
+                // Keep the display active and the buffer mapped for the entire duration
+                Console.WriteLine("Displaying pattern for 10 seconds...");
+                Thread.Sleep(10000);
 
-            //    // Now unmap the buffer
-            //    Libc.munmap(map, (IntPtr)dmaBuf.Size);
-            //    Console.WriteLine("Unmapped DMA buffer.");
-            //}
-            //else
-            //{
-            //    Console.WriteLine("Failed to present buffer on display.");
-            //    // Unmap on failure
-            //    Libc.munmap(map, (IntPtr)dmaBuf.Size);
-            //}
+                dmaBuf.UnmapBuffer();
+                Console.WriteLine("Unmapped DMA buffer.");
+            }
+            else
+            {
+                Console.WriteLine("Failed to present buffer on display.");
+                // Unmap on failure
+                dmaBuf.UnmapBuffer();
+            }
 
-            // The buffer will be disposed automatically when the allocator is disposed
-            // or you can dispose it manually if you are done with it.
-            // dmaBuf.Dispose();
+            dmaBuf.Dispose();
         }
 
         private static string FourCCToString(uint fourcc)

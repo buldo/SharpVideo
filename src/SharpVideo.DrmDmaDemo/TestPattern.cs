@@ -17,7 +17,7 @@ public static class TestPattern
         (16, 128, 128)   // Black
     };
 
-    public static unsafe void FillYuv422(byte* buffer, int width, int height)
+    public static void FillYuv422(Span<byte> buffer, int width, int height)
     {
         var barWidth = width / ColorBars.Length;
 
@@ -39,7 +39,7 @@ public static class TestPattern
         }
     }
 
-    public static unsafe void FillXR24(byte* buffer, int width, int height)
+    public static void FillXR24(Span<byte> buffer, int width, int height)
     {
         for (int y = 0; y < height; y++)
         {

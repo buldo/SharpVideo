@@ -10,6 +10,8 @@ namespace SharpVideo.DmaBuffers;
 [SupportedOSPlatform("linux")]
 public class DmaBuffer
 {
+    private unsafe void* _mapAddr = null;
+
     /// <summary>
     /// File descriptor for the DMA buffer.
     /// </summary>
@@ -44,6 +46,54 @@ public class DmaBuffer
             MapStatus = MapStatus.FailedToMap;
             return;
         }
+
+        unsafe
+        {
+            _mapAddr = (void*)map;
+        }
+
+        MapStatus = MapStatus.Mapped;
+    }
+
+    public void UnmapBuffer()
+    {
+        if (MapStatus == MapStatus.Mapped)
+        {
+            unsafe
+            {
+                var result = Libc.munmap(_mapAddr, Size);
+                MapStatus = result == 0 ? MapStatus.NotMapped : MapStatus.FailedToUnmap;
+            }
+        }
+    }
+
+    public Span<byte> GetMappedSpan()
+    {
+        if (MapStatus != MapStatus.Mapped)
+        {
+            return Span<byte>.Empty;
+        }
+
+        unsafe
+        {
+            return new Span<byte>(_mapAddr, (int)Size);
+        }
+    }
+
+    public void SyncMap()
+    {
+        unsafe
+        {
+            Libc.msync(_mapAddr, Size, MsyncFlags.MS_SYNC);
+        }
+    }
+
+    public bool MakeMapReadOnly()
+    {
+        unsafe
+        {
+            return Libc.mprotect(_mapAddr, Size, ProtFlags.PROT_READ) != 0;
+        }
     }
 
     /// <summary>
@@ -71,5 +121,6 @@ public enum MapStatus
 {
     NotMapped,
     FailedToMap,
-    Mapped
+    Mapped,
+    FailedToUnmap
 }

@@ -103,8 +103,12 @@ public static partial class Libc
     public static partial IntPtr mmap(IntPtr addr, nuint length, ProtFlags prot, MapFlags flags, int fd, nint offset);
 
     /// <summary>
-    /// Unmaps a mapped region of memory, reverting it back to being unallocated.
+    /// Deallocate any mapping for the region starting at ADDR and extending LEN bytes.
+    /// Returns 0 if successful, -1 for errors (and sets errno).
     /// </summary>
+    /// <remarks>
+    /// extern int munmap (void *__addr, size_t __len) __THROW;
+    /// </remarks>
     /// <param name="addr">The starting address of the mapping to be removed.</param>
     /// <param name="length">The length of the mapping to be removed.</param>
     /// <returns>0 on success, or -1 on error.</returns>
@@ -112,11 +116,17 @@ public static partial class Libc
         LibraryName,
         EntryPoint = "munmap",
         SetLastError = true)]
-    public static partial int munmap(IntPtr addr, IntPtr length);
+    public static unsafe partial int munmap(void* addr, nuint length);
 
     /// <summary>
-    /// Synchronizes a mapped region with the underlying file.
+    /// Synchronize the region starting at ADDR and extending LEN bytes with the file it maps.
+    /// Filesystem operations on a file being mapped are unpredictable before this is done.
+    /// Flags are from the MS_* set.
+    /// This function is a cancellation point and therefore not marked with __THROW.
     /// </summary>
+    /// <remarks>
+    /// extern int msync (void *__addr, size_t __len, int __flags);
+    /// </remarks>
     /// <param name="addr">The starting address of the mapping to synchronize.</param>
     /// <param name="length">The length of the mapping to synchronize.</param>
     /// <param name="flags">Synchronization flags.</param>
@@ -125,7 +135,7 @@ public static partial class Libc
         LibraryName,
         EntryPoint = "msync",
         SetLastError = true)]
-    public static partial int msync(IntPtr addr, IntPtr length, MsyncFlags flags);
+    public static unsafe partial int msync(void* addr, nuint length, MsyncFlags flags);
 
     /// <summary>
     /// Changes the memory protection of a mapped region.
@@ -138,5 +148,5 @@ public static partial class Libc
         LibraryName,
         EntryPoint = "mprotect",
         SetLastError = true)]
-    public static partial int mprotect(IntPtr addr, IntPtr length, ProtFlags prot);
+    public static unsafe partial int mprotect(void* addr, nuint length, ProtFlags prot);
 }
