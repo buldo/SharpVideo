@@ -100,27 +100,6 @@ namespace SharpVideo.DrmDmaDemo
             dmaBuf.Dispose();
         }
 
-        private static string FourCCToString(uint fourcc)
-        {
-            var chars = new char[4];
-            chars[0] = (char)(fourcc & 0xFF);
-            chars[1] = (char)((fourcc >> 8) & 0xFF);
-            chars[2] = (char)((fourcc >> 16) & 0xFF);
-            chars[3] = (char)((fourcc >> 24) & 0xFF);
-            // Check for non-printable characters
-            for (var i = 0; i < 4; i++)
-            {
-                if (char.IsControl(chars[i]))
-                {
-                    return "N/A";
-                }
-            }
-            return new string(chars);
-        }
-
-        private static uint FourCC(char a, char b, char c, char d) =>
-            ((uint)a) | ((uint)b << 8) | ((uint)c << 16) | ((uint)d << 24);
-
         [SupportedOSPlatform("linux")]
         private static bool PresentBuffer(DrmDevice drmDevice, DmaBuffers.DmaBuffer dmaBuffer, int width, int height)
         {
@@ -208,7 +187,7 @@ namespace SharpVideo.DrmDmaDemo
             Console.WriteLine("Plane supports the following formats:");
             foreach (var format in plane.Formats)
             {
-                Console.WriteLine($"  - {FourCCToString(format)} (0x{format:X})");
+                Console.WriteLine($"  - {KnownPixelFormats.GetName(new(format))} (0x{format:X})");
             }
 
             Console.WriteLine($"Using CRTC ID: {crtcId}");
@@ -230,8 +209,8 @@ namespace SharpVideo.DrmDmaDemo
                 uint* handles = stackalloc uint[4] { handle, 0, 0, 0 };
                 uint* pitches = stackalloc uint[4] { pitch, 0, 0, 0 };
                 uint* offsets = stackalloc uint[4] { 0, 0, 0, 0 };
-                var format = FourCC('X', 'R', '2', '4');
-                var resultAddFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, format, handles, pitches, offsets, out var fbId, 0);
+                var format = KnownPixelFormats.DRM_FORMAT_XRGB8888;
+                var resultAddFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, format.Fourcc, handles, pitches, offsets, out var fbId, 0);
                 if (resultAddFb != 0)
                 {
                     Console.WriteLine($"Failed to create framebuffer: {resultAddFb}");
