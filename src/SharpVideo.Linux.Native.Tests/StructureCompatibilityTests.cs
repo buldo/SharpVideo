@@ -270,5 +270,204 @@ public unsafe class StructureCompatibilityTests
 
         Assert.Equal(nativeSize, csharpSize);
     }
+
+    // V4L2 Structure Compatibility Tests
+
+    [Fact]
+    public void TestV4L2Capability_NativeSizeCompatibility()
+    {
+        // Test that our V4L2Capability structure has the same size as the native v4l2_capability structure
+        int csharpSize = Marshal.SizeOf<V4L2Capability>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2CapabilitySize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2Capability_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2Capability();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2Capability(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal("test_driver", nativeFilledStruct.DriverString);
+        Assert.Equal("Test Video Device", nativeFilledStruct.CardString);
+        Assert.Equal("platform:test-video", nativeFilledStruct.BusInfoString);
+        Assert.Equal(0x050C00u, nativeFilledStruct.Version); // Kernel version 5.12.0
+        Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.VIDEO_CAPTURE) != 0);
+        Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0);
+        Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.STREAMING) != 0);
+        Assert.True((nativeFilledStruct.DeviceCaps & (uint)V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0);
+        Assert.True((nativeFilledStruct.DeviceCaps & (uint)V4L2Capabilities.STREAMING) != 0);
+    }
+
+    [Fact]
+    public void TestV4L2PixFormatMplane_NativeSizeCompatibility()
+    {
+        // Test that our V4L2PixFormatMplane structure has the same size as the native v4l2_pix_format_mplane structure
+        int csharpSize = Marshal.SizeOf<V4L2PixFormatMplane>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2PixFormatMplaneSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2PixFormatMplane_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2PixFormatMplane();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2PixFormatMplane(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal(1920u, nativeFilledStruct.Width);
+        Assert.Equal(1080u, nativeFilledStruct.Height);
+        Assert.Equal(V4L2PixelFormats.NV12M, nativeFilledStruct.PixelFormat);
+        Assert.Equal((uint)V4L2Field.NONE, nativeFilledStruct.Field);
+        Assert.Equal(2, nativeFilledStruct.NumPlanes);
+
+        // Check plane format information
+        var planeFormats = nativeFilledStruct.PlaneFormats;
+        Assert.Equal(1920u * 1080u, planeFormats[0].SizeImage);
+        Assert.Equal(1920u, planeFormats[0].BytesPerLine);
+        Assert.Equal(1920u * 1080u / 2u, planeFormats[1].SizeImage);
+        Assert.Equal(1920u, planeFormats[1].BytesPerLine);
+    }
+
+    [Fact]
+    public void TestV4L2Format_NativeSizeCompatibility()
+    {
+        // Test that our V4L2Format structure has the same size as the native v4l2_format structure
+        int csharpSize = Marshal.SizeOf<V4L2Format>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2FormatSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2Format_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2Format();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2Format(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
+        Assert.Equal(1920u, nativeFilledStruct.Pix_mp.Width);
+        Assert.Equal(1080u, nativeFilledStruct.Pix_mp.Height);
+        Assert.Equal(V4L2PixelFormats.NV12M, nativeFilledStruct.Pix_mp.PixelFormat);
+        Assert.Equal(2, nativeFilledStruct.Pix_mp.NumPlanes);
+    }
+
+    [Fact]
+    public void TestV4L2RequestBuffers_NativeSizeCompatibility()
+    {
+        // Test that our V4L2RequestBuffers structure has the same size as the native v4l2_requestbuffers structure
+        int csharpSize = Marshal.SizeOf<V4L2RequestBuffers>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2RequestBuffersSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2RequestBuffers_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2RequestBuffers();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2RequestBuffers(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal(4u, nativeFilledStruct.Count);
+        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
+        Assert.Equal(V4L2Constants.V4L2_MEMORY_DMABUF, nativeFilledStruct.Memory);
+    }
+
+    [Fact]
+    public void TestV4L2Buffer_NativeSizeCompatibility()
+    {
+        // Test that our V4L2Buffer structure has the same size as the native v4l2_buffer structure
+        int csharpSize = Marshal.SizeOf<V4L2Buffer>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2BufferSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2Buffer_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2Buffer();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2Buffer(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal(0u, nativeFilledStruct.Index);
+        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
+        Assert.Equal((uint)V4L2Field.NONE, nativeFilledStruct.Field);
+        Assert.Equal(12345L, nativeFilledStruct.TimestampSec);
+        Assert.Equal(67890L, nativeFilledStruct.TimestampUsec);
+        Assert.Equal(123u, nativeFilledStruct.Sequence);
+        Assert.Equal(V4L2Constants.V4L2_MEMORY_DMABUF, nativeFilledStruct.Memory);
+        Assert.Equal(2u, nativeFilledStruct.Length); // Number of planes
+    }
+
+    [Fact]
+    public void TestV4L2ExportBuffer_NativeSizeCompatibility()
+    {
+        // Test that our V4L2ExportBuffer structure has the same size as the native v4l2_exportbuffer structure
+        int csharpSize = Marshal.SizeOf<V4L2ExportBuffer>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2ExportBufferSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2ExportBuffer_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2ExportBuffer();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2ExportBuffer(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
+        Assert.Equal(0u, nativeFilledStruct.Index);
+        Assert.Equal(0u, nativeFilledStruct.Plane);
+        Assert.Equal(42, nativeFilledStruct.Fd);
+    }
+
+    [Fact]
+    public void TestV4L2DecoderCmd_NativeSizeCompatibility()
+    {
+        // Test that our V4L2DecoderCmd structure has the same size as the native v4l2_decoder_cmd structure
+        int csharpSize = Marshal.SizeOf<V4L2DecoderCmd>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2DecoderCmdSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2DecoderCmd_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2DecoderCmd();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2DecoderCmd(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected values
+        Assert.Equal((uint)V4L2DecoderCommand.START, nativeFilledStruct.Cmd);
+        Assert.Equal(0u, nativeFilledStruct.Flags);
+    }
 }
 

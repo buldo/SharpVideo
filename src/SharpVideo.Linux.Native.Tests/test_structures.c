@@ -1,7 +1,9 @@
 #include <stdint.h>
 #include <string.h>
+#include <fcntl.h>
 #include <xf86drmMode.h>
 #include <linux/dma-heap.h>
+#include <linux/videodev2.h>
 
 // We use the real DRM structures from libdrm headers
 
@@ -193,4 +195,162 @@ int get_native_dma_heap_allocation_data_size(void) {
 // Function to get the real DMA_HEAP_IOCTL_ALLOC constant value from Linux headers
 uint32_t get_native_dma_heap_ioctl_alloc(void) {
     return DMA_HEAP_IOCTL_ALLOC;
+}
+
+// V4L2 structure testing functions
+
+// Function to fill v4l2_capability structure with test data
+void fill_native_v4l2_capability(struct v4l2_capability* s) {
+    if (!s) return;
+
+    strcpy((char*)s->driver, "test_driver");
+    strcpy((char*)s->card, "Test Video Device");
+    strcpy((char*)s->bus_info, "platform:test-video");
+    s->version = 0x050C00; // Kernel version 5.12.0
+    s->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_STREAMING;
+    s->device_caps = V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_STREAMING;
+    s->reserved[0] = 0;
+    s->reserved[1] = 0;
+    s->reserved[2] = 0;
+}
+
+// Function to get v4l2_capability structure size for verification
+int get_native_v4l2_capability_size(void) {
+    return sizeof(struct v4l2_capability);
+}
+
+// Function to fill v4l2_pix_format_mplane structure with test data
+void fill_native_v4l2_pix_format_mplane(struct v4l2_pix_format_mplane* s) {
+    if (!s) return;
+
+    s->width = 1920;
+    s->height = 1080;
+    s->pixelformat = V4L2_PIX_FMT_NV12M;
+    s->field = V4L2_FIELD_NONE;
+    s->colorspace = V4L2_COLORSPACE_REC709;
+    s->num_planes = 2;
+    s->flags = 0;
+    s->ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
+    s->quantization = V4L2_QUANTIZATION_DEFAULT;
+    s->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+
+    // Fill plane format info
+    s->plane_fmt[0].sizeimage = 1920 * 1080;
+    s->plane_fmt[0].bytesperline = 1920;
+    s->plane_fmt[1].sizeimage = 1920 * 1080 / 2;
+    s->plane_fmt[1].bytesperline = 1920;
+
+    // Reserved fields
+    for (int i = 0; i < 7; i++) {
+        s->reserved[i] = 0;
+    }
+}
+
+// Function to get v4l2_pix_format_mplane structure size for verification
+int get_native_v4l2_pix_format_mplane_size(void) {
+    return sizeof(struct v4l2_pix_format_mplane);
+}
+
+// Function to fill v4l2_format structure with test data
+void fill_native_v4l2_format(struct v4l2_format* s) {
+    if (!s) return;
+
+    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    fill_native_v4l2_pix_format_mplane(&s->fmt.pix_mp);
+}
+
+// Function to get v4l2_format structure size for verification
+int get_native_v4l2_format_size(void) {
+    return sizeof(struct v4l2_format);
+}
+
+// Function to fill v4l2_requestbuffers structure with test data
+void fill_native_v4l2_requestbuffers(struct v4l2_requestbuffers* s) {
+    if (!s) return;
+
+    s->count = 4;
+    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    s->memory = V4L2_MEMORY_DMABUF;
+    s->capabilities = 0; // Don't use V4L2_BUF_CAP_SUPPORTS_DMABUF as it might not be available
+    s->flags = 0;
+    s->reserved[0] = 0;
+    s->reserved[1] = 0;
+    s->reserved[2] = 0;
+}
+
+// Function to get v4l2_requestbuffers structure size for verification
+int get_native_v4l2_requestbuffers_size(void) {
+    return sizeof(struct v4l2_requestbuffers);
+}
+
+// Function to fill v4l2_buffer structure with test data
+void fill_native_v4l2_buffer(struct v4l2_buffer* s) {
+    if (!s) return;
+
+    s->index = 0;
+    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    s->bytesused = 0; // Not used for multiplanar
+    s->flags = V4L2_BUF_FLAG_MAPPED | V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+    s->field = V4L2_FIELD_NONE;
+    s->timestamp.tv_sec = 12345;
+    s->timestamp.tv_usec = 67890;
+    s->timecode.type = 0;
+    s->timecode.flags = 0;
+    s->timecode.frames = 0;
+    s->timecode.seconds = 0;
+    s->timecode.minutes = 0;
+    s->timecode.hours = 0;
+    s->timecode.userbits[0] = 0;
+    s->timecode.userbits[1] = 0;
+    s->timecode.userbits[2] = 0;
+    s->timecode.userbits[3] = 0;
+    s->sequence = 123;
+    s->memory = V4L2_MEMORY_DMABUF;
+    s->length = 2; // Number of planes
+    s->reserved2 = 0;
+    s->request_fd = -1;
+
+    // Note: planes pointer would be set separately in real usage
+    s->m.planes = NULL;
+}
+
+// Function to get v4l2_buffer structure size for verification
+int get_native_v4l2_buffer_size(void) {
+    return sizeof(struct v4l2_buffer);
+}
+
+// Function to fill v4l2_exportbuffer structure with test data
+void fill_native_v4l2_exportbuffer(struct v4l2_exportbuffer* s) {
+    if (!s) return;
+
+    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    s->index = 0;
+    s->plane = 0;
+    s->flags = O_RDWR | O_CLOEXEC;
+    s->fd = 42; // Test file descriptor
+
+    for (int i = 0; i < 11; i++) {
+        s->reserved[i] = 0;
+    }
+}
+
+// Function to get v4l2_exportbuffer structure size for verification
+int get_native_v4l2_exportbuffer_size(void) {
+    return sizeof(struct v4l2_exportbuffer);
+}
+
+// Function to fill v4l2_decoder_cmd structure with test data
+void fill_native_v4l2_decoder_cmd(struct v4l2_decoder_cmd* s) {
+    if (!s) return;
+
+    s->cmd = V4L2_DEC_CMD_START;
+    s->flags = 0;
+
+    // Initialize the union data
+    memset(&s->start, 0, sizeof(s->start));
+}
+
+// Function to get v4l2_decoder_cmd structure size for verification
+int get_native_v4l2_decoder_cmd_size(void) {
+    return sizeof(struct v4l2_decoder_cmd);
 }

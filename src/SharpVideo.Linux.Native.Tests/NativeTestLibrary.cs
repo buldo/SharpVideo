@@ -80,4 +80,62 @@ public static unsafe partial class NativeTestLibrary
     // Function to get __off_t size for verification
     [LibraryImport(LibraryName, EntryPoint = "get_off_t_size")]
     public static partial int GetOffTSize();
+
+    // V4L2 structure testing functions
+
+    // Function to fill v4l2_capability structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_capability")]
+    public static partial void FillNativeV4L2Capability(V4L2Capability* structure);
+
+    // Function to get v4l2_capability structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_capability_size")]
+    public static partial int GetNativeV4L2CapabilitySize();
+
+    // Function to fill v4l2_pix_format_mplane structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_pix_format_mplane")]
+    public static partial void FillNativeV4L2PixFormatMplane(V4L2PixFormatMplane* structure);
+
+    // Function to get v4l2_pix_format_mplane structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_pix_format_mplane_size")]
+    public static partial int GetNativeV4L2PixFormatMplaneSize();
+
+    // Function to fill v4l2_format structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_format")]
+    public static partial void FillNativeV4L2Format(V4L2Format* structure);
+
+    // Function to get v4l2_format structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_format_size")]
+    public static partial int GetNativeV4L2FormatSize();
+
+    // Function to fill v4l2_requestbuffers structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_requestbuffers")]
+    public static partial void FillNativeV4L2RequestBuffers(V4L2RequestBuffers* structure);
+
+    // Function to get v4l2_requestbuffers structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_requestbuffers_size")]
+    public static partial int GetNativeV4L2RequestBuffersSize();
+
+    // Function to fill v4l2_buffer structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_buffer")]
+    public static partial void FillNativeV4L2Buffer(V4L2Buffer* structure);
+
+    // Function to get v4l2_buffer structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_buffer_size")]
+    public static partial int GetNativeV4L2BufferSize();
+
+    // Function to fill v4l2_exportbuffer structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_exportbuffer")]
+    public static partial void FillNativeV4L2ExportBuffer(V4L2ExportBuffer* structure);
+
+    // Function to get v4l2_exportbuffer structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_exportbuffer_size")]
+    public static partial int GetNativeV4L2ExportBufferSize();
+
+    // Function to fill v4l2_decoder_cmd structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_decoder_cmd")]
+    public static partial void FillNativeV4L2DecoderCmd(V4L2DecoderCmd* structure);
+
+    // Function to get v4l2_decoder_cmd structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_decoder_cmd_size")]
+    public static partial int GetNativeV4L2DecoderCmdSize();
 }
