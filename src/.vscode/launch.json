@@ -29,6 +29,17 @@
             "stopAtEntry": false
         },
         {
+            "name": "V4L2-PrintInfo-Debug",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/SharpVideo.V4L2PrintInfo/bin/Debug/net9.0/SharpVideo.V4L2PrintInfo.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/SharpVideo.V4L2PrintInfo",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        },
+        {
             "name": ".NET Core Attach",
             "type": "coreclr",
             "request": "attach"

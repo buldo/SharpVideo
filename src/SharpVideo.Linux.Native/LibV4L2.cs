@@ -179,6 +179,17 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
+    /// Enumerate supported formats for a given buffer type.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="fmtDesc">Format description structure with type and index set</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult EnumerateFormat(int fd, ref V4L2FmtDesc fmtDesc)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_ENUM_FMT, ref fmtDesc);
+    }
+
+    /// <summary>
     /// Send encoder command.
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>
