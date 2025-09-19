@@ -15,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.DrmDmaDemo", "Sh
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.V4L2PrintInfo", "SharpVideo.V4L2PrintInfo\SharpVideo.V4L2PrintInfo.csproj", "{F2EAF667-171F-4DC8-8AAB-F3C6FA319280}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SharpVideo.V4L2DecodeDemo", "SharpVideo.V4L2DecodeDemo\SharpVideo.V4L2DecodeDemo.csproj", "{CA43C971-ED07-4E54-9555-7889AFD7AE7D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -97,6 +99,18 @@ Global
 		{F2EAF667-171F-4DC8-8AAB-F3C6FA319280}.Release|x64.Build.0 = Release|Any CPU
 		{F2EAF667-171F-4DC8-8AAB-F3C6FA319280}.Release|x86.ActiveCfg = Release|Any CPU
 		{F2EAF667-171F-4DC8-8AAB-F3C6FA319280}.Release|x86.Build.0 = Release|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Debug|x64.Build.0 = Debug|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Debug|x86.Build.0 = Debug|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Release|x64.ActiveCfg = Release|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Release|x64.Build.0 = Release|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Release|x86.ActiveCfg = Release|Any CPU
+		{CA43C971-ED07-4E54-9555-7889AFD7AE7D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
