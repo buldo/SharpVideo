@@ -3,6 +3,22 @@ using System.Threading.Channels;
 
 namespace SharpVideo.H264;
 
+/// <summary>
+/// Specifies how NALU data should be formatted in the output
+/// </summary>
+public enum NaluOutputMode
+{
+    /// <summary>
+    /// Include the start code with each NALU (Annex-B format)
+    /// </summary>
+    WithStartCode,
+
+    /// <summary>
+    /// Exclude the start code from each NALU (raw NALU data only)
+    /// </summary>
+    WithoutStartCode
+}
+
 public class H264NaluProvider : IDisposable
 {
     private readonly Pipe _pipe = new Pipe();
@@ -11,9 +27,11 @@ public class H264NaluProvider : IDisposable
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly Task _processingTask;
+    private readonly NaluOutputMode _outputMode;
 
-    public H264NaluProvider()
+    public H264NaluProvider(NaluOutputMode outputMode = NaluOutputMode.WithStartCode)
     {
+        _outputMode = outputMode;
         _processingTask = ProcessNalusAsync(_cancellationTokenSource.Token);
     }
 
@@ -88,7 +106,7 @@ public class H264NaluProvider : IDisposable
     private async Task ProcessBytesAsync(byte[] data, List<byte> buffer, CancellationToken cancellationToken)
     {
         buffer.AddRange(data);
-        
+
         // Look for start codes and extract NALUs in Annex-B format
         await ExtractNalusFromBuffer(buffer, cancellationToken);
     }
@@ -96,13 +114,13 @@ public class H264NaluProvider : IDisposable
     private async Task ExtractNalusFromBuffer(List<byte> buffer, CancellationToken cancellationToken)
     {
         var startPositions = new List<int>();
-        
+
         // Find all start code positions
         for (int i = 0; i <= buffer.Count - 3; i++)
         {
             // Check for 4-byte start code: 0x00 0x00 0x00 0x01
             if (i <= buffer.Count - 4 &&
-                buffer[i] == 0x00 && buffer[i + 1] == 0x00 && 
+                buffer[i] == 0x00 && buffer[i + 1] == 0x00 &&
                 buffer[i + 2] == 0x00 && buffer[i + 3] == 0x01)
             {
                 startPositions.Add(i);
@@ -116,24 +134,47 @@ public class H264NaluProvider : IDisposable
             }
         }
 
-        // Extract complete NALUs in Annex-B format (we need at least 2 start codes to have a complete NALU)
+        // Extract complete NALUs based on output mode
         for (int i = 0; i < startPositions.Count - 1; i++)
         {
             var startPos = startPositions[i];
             var nextStartPos = startPositions[i + 1];
-            
-            // Include the start code in the NALU (Annex-B format)
-            var naluLength = nextStartPos - startPos;
-            
-            if (naluLength > 0)
+
+            byte[] naluData;
+
+            if (_outputMode == NaluOutputMode.WithStartCode)
             {
-                var naluData = new byte[naluLength];
-                for (int j = 0; j < naluLength; j++)
+                // Include the start code in the NALU (Annex-B format)
+                var naluLength = nextStartPos - startPos;
+
+                if (naluLength > 0)
                 {
-                    naluData[j] = buffer[startPos + j];
+                    naluData = new byte[naluLength];
+                    for (int j = 0; j < naluLength; j++)
+                    {
+                        naluData[j] = buffer[startPos + j];
+                    }
+
+                    await _channel.Writer.WriteAsync(naluData, cancellationToken);
                 }
-                
-                await _channel.Writer.WriteAsync(naluData, cancellationToken);
+            }
+            else // WithoutStartCode
+            {
+                // Skip the start code, only include NALU payload
+                var startCodeLength = GetStartCodeLength(buffer, startPos);
+                var naluDataStart = startPos + startCodeLength;
+                var naluDataLength = nextStartPos - naluDataStart;
+
+                if (naluDataLength > 0)
+                {
+                    naluData = new byte[naluDataLength];
+                    for (int j = 0; j < naluDataLength; j++)
+                    {
+                        naluData[j] = buffer[naluDataStart + j];
+                    }
+
+                    await _channel.Writer.WriteAsync(naluData, cancellationToken);
+                }
             }
         }
 
@@ -142,12 +183,12 @@ public class H264NaluProvider : IDisposable
         {
             var lastStartPos = startPositions[startPositions.Count - 1];
             var remainingData = new List<byte>();
-            
+
             for (int i = lastStartPos; i < buffer.Count; i++)
             {
                 remainingData.Add(buffer[i]);
             }
-            
+
             buffer.Clear();
             buffer.AddRange(remainingData);
         }
@@ -161,9 +202,9 @@ public class H264NaluProvider : IDisposable
         // Check if the buffer starts with a start code and has data after it
         bool startsWithStartCode = false;
         int startCodeLength = 0;
-        
+
         if (buffer.Count >= 4 &&
-            buffer[0] == 0x00 && buffer[1] == 0x00 && 
+            buffer[0] == 0x00 && buffer[1] == 0x00 &&
             buffer[2] == 0x00 && buffer[3] == 0x01)
         {
             startsWithStartCode = true;
@@ -181,34 +222,60 @@ public class H264NaluProvider : IDisposable
             // Only process if there's actual NALU data after the start code
             if (buffer.Count > startCodeLength)
             {
-                await _channel.Writer.WriteAsync(buffer.ToArray(), cancellationToken);
+                byte[] finalNalu;
+
+                if (_outputMode == NaluOutputMode.WithStartCode)
+                {
+                    // Include start code
+                    finalNalu = buffer.ToArray();
+                }
+                else // WithoutStartCode
+                {
+                    // Skip start code, only include NALU payload
+                    finalNalu = new byte[buffer.Count - startCodeLength];
+                    for (int i = 0; i < finalNalu.Length; i++)
+                    {
+                        finalNalu[i] = buffer[startCodeLength + i];
+                    }
+                }
+
+                await _channel.Writer.WriteAsync(finalNalu, cancellationToken);
             }
             // If buffer contains only a start code with no data, ignore it
         }
         else
         {
-            // No start codes found, add a start code to make it Annex-B format
-            var annexBNalu = new byte[4 + buffer.Count];
-            annexBNalu[0] = 0x00;
-            annexBNalu[1] = 0x00;
-            annexBNalu[2] = 0x00;
-            annexBNalu[3] = 0x01;
-            buffer.CopyTo(annexBNalu, 4);
-            
-            await _channel.Writer.WriteAsync(annexBNalu, cancellationToken);
+            // No start codes found
+            if (_outputMode == NaluOutputMode.WithStartCode)
+            {
+                // Add a start code to make it Annex-B format
+                var annexBNalu = new byte[4 + buffer.Count];
+                annexBNalu[0] = 0x00;
+                annexBNalu[1] = 0x00;
+                annexBNalu[2] = 0x00;
+                annexBNalu[3] = 0x01;
+                buffer.CopyTo(annexBNalu, 4);
+
+                await _channel.Writer.WriteAsync(annexBNalu, cancellationToken);
+            }
+            else // WithoutStartCode
+            {
+                // Just use the raw data as-is
+                await _channel.Writer.WriteAsync(buffer.ToArray(), cancellationToken);
+            }
         }
     }
 
     private static int GetStartCodeLength(List<byte> buffer, int position)
     {
         if (position + 3 < buffer.Count &&
-            buffer[position] == 0x00 && buffer[position + 1] == 0x00 && 
+            buffer[position] == 0x00 && buffer[position + 1] == 0x00 &&
             buffer[position + 2] == 0x00 && buffer[position + 3] == 0x01)
         {
             return 4;
         }
         if (position + 2 < buffer.Count &&
-            buffer[position] == 0x00 && buffer[position + 1] == 0x00 && 
+            buffer[position] == 0x00 && buffer[position + 1] == 0x00 &&
             buffer[position + 2] == 0x01)
         {
             return 3;

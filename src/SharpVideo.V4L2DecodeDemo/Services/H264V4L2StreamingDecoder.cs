@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
+using SharpVideo.H264;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2DecodeDemo.Interfaces;
 using SharpVideo.V4L2DecodeDemo.Models;
@@ -12,18 +13,28 @@ namespace SharpVideo.V4L2DecodeDemo.Services;
 /// <summary>
 /// High-performance streaming H.264 decoder using V4L2 hardware acceleration for stateless decoders.
 ///
+/// This implementation has been updated to use the well-tested SharpVideo.H264.H264NaluProvider
+/// for reliable NALU parsing and stream processing.
+///
 /// Stateless decoders require explicit parameter sets (SPS/PPS) with each frame decode request.
 /// This implementation:
-/// 1. Extracts SPS/PPS parameter sets from the beginning of the stream
-/// 2. Includes parameter sets with each frame sent to the decoder
-/// 3. Manages buffers optimized for stateless operation
-/// 4. Provides both chunk-based and NALU-by-NALU processing modes
+/// 1. Uses H264NaluProvider for robust NALU extraction from byte streams
+/// 2. Extracts SPS/PPS parameter sets from the beginning of the stream
+/// 3. Includes parameter sets with each frame sent to the decoder
+/// 4. Manages buffers optimized for stateless operation
+/// 5. Provides both chunk-based and NALU-by-NALU processing modes
 ///
 /// Key differences from stateful decoders:
 /// - Parameter sets are cached and sent with each frame
 /// - No decoder state is maintained between frames
 /// - Each decode request is completely self-contained
 /// - Better suited for hardware accelerated decoding on embedded systems
+///
+/// Key improvements in this version:
+/// - Replaced custom NALU parsing with proven H264NaluProvider
+/// - More reliable stream processing and error handling
+/// - Better performance through optimized NALU extraction
+/// - Legacy methods maintained for backward compatibility
 /// </summary>
 [SupportedOSPlatform("linux")]
 public class H264V4L2StreamingDecoder : IVideoDecoder
@@ -33,7 +44,6 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     private readonly ILogger<H264V4L2StreamingDecoder> _logger;
     private readonly IV4L2DeviceManager _deviceManager;
     private readonly DecoderConfiguration _configuration;
-    private readonly H264NaluParser _naluParser;
 
     private int _deviceFd = -1;
     private readonly List<MappedBuffer> _outputBuffers = new();
@@ -72,10 +82,6 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
         var deviceLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<V4L2DeviceManager>();
         _deviceManager = deviceManager ?? new V4L2DeviceManager(deviceLogger);
-
-        // Initialize NALU parser
-        var naluParserLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<H264NaluParser>();
-        _naluParser = new H264NaluParser(naluParserLogger);
     }
 
     #endregion
@@ -529,29 +535,39 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         _logger.LogInformation("Extracting H.264 parameter sets from {FilePath}", filePath);
 
         using var fileStream = File.OpenRead(filePath);
-        var nalus = new List<H264Nalu>();
+        using var naluProvider = new H264NaluProvider();
 
         // Extract first 1MB to find parameter sets
         int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
         var buffer = new byte[maxBytes];
         int bytesRead = await fileStream.ReadAsync(buffer, 0, maxBytes, cancellationToken);
 
-        // Parse NALUs from the beginning of the stream
-        var initialNalus = _naluParser.ParseNalus(buffer, 0, bytesRead);
+        // Feed data to NALU provider
+        await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
+        naluProvider.CompleteWriting();
 
-        foreach (var nalu in initialNalus)
+        // Read NALUs and look for SPS/PPS
+        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
-            if (nalu.Type == 7) // SPS
+            if (naluData.Length < 5) continue; // Need at least start code + NALU header
+
+            // Find NALU header after start code
+            int naluHeaderPos = GetNaluHeaderPosition(naluData);
+            if (naluHeaderPos >= naluData.Length) continue;
+
+            byte naluType = (byte)(naluData[naluHeaderPos] & 0x1F);
+
+            if (naluType == 7) // SPS
             {
-                _currentSps = nalu.Data;
-                _spsParameters[0] = nalu.Data; // Store with ID 0 for simplicity
-                _logger.LogInformation("Found SPS parameter set ({Size} bytes)", nalu.Data.Length);
+                _currentSps = naluData;
+                _spsParameters[0] = naluData; // Store with ID 0 for simplicity
+                _logger.LogInformation("Found SPS parameter set ({Size} bytes)", naluData.Length);
             }
-            else if (nalu.Type == 8) // PPS
+            else if (naluType == 8) // PPS
             {
-                _currentPps = nalu.Data;
-                _ppsParameters[0] = nalu.Data; // Store with ID 0 for simplicity
-                _logger.LogInformation("Found PPS parameter set ({Size} bytes)", nalu.Data.Length);
+                _currentPps = naluData;
+                _ppsParameters[0] = naluData; // Store with ID 0 for simplicity
+                _logger.LogInformation("Found PPS parameter set ({Size} bytes)", naluData.Length);
             }
 
             // Stop once we have both SPS and PPS
@@ -568,6 +584,30 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
         _hasValidParameterSets = true;
         _logger.LogInformation("Successfully extracted parameter sets for stateless decoding");
+    }
+
+    /// <summary>
+    /// Gets the position of the NALU header after the start code
+    /// </summary>
+    private static int GetNaluHeaderPosition(byte[] naluData)
+    {
+        // Check for 4-byte start code
+        if (naluData.Length >= 4 &&
+            naluData[0] == 0x00 && naluData[1] == 0x00 &&
+            naluData[2] == 0x00 && naluData[3] == 0x01)
+        {
+            return 4;
+        }
+
+        // Check for 3-byte start code
+        if (naluData.Length >= 3 &&
+            naluData[0] == 0x00 && naluData[1] == 0x00 && naluData[2] == 0x01)
+        {
+            return 3;
+        }
+
+        // No start code found, assume data starts immediately
+        return 0;
     }
 
     /// <summary>
@@ -588,44 +628,62 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         var stopwatch = Stopwatch.StartNew();
 
         using var fileStream = File.OpenRead(filePath);
+        using var naluProvider = new H264NaluProvider();
         uint outputBufferIndex = 0;
 
         _logger.LogInformation("Starting stateless decode loop...");
 
-        // Process file in chunks, identifying complete frames
-        await foreach (var nalu in _naluParser.ParseNalusFromStreamAsync(fileStream, cancellationToken: cancellationToken))
+        // Start a task to feed data to the NALU provider
+        var feedTask = Task.Run(async () =>
+        {
+            var buffer = new byte[_configuration.ChunkSize];
+            int bytesRead;
+
+            while ((bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+            {
+                await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
+                processedBytes += bytesRead;
+            }
+
+            naluProvider.CompleteWriting();
+        }, cancellationToken);
+
+        // Process NALUs as they become available
+        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
+            // Get NALU type
+            int naluHeaderPos = GetNaluHeaderPosition(naluData);
+            if (naluHeaderPos >= naluData.Length) continue;
+
+            byte naluType = (byte)(naluData[naluHeaderPos] & 0x1F);
+
             // Skip parameter sets as we'll include them with each frame
-            if (nalu.Type == 7 || nalu.Type == 8)
+            if (naluType == 7 || naluType == 8)
             {
-                processedBytes += nalu.Data.Length;
                 continue;
             }
 
             // Process frame NALUs (slices)
-            if (IsFrameNalu(nalu.Type))
+            if (IsFrameNalu(naluType))
             {
                 // For stateless decoder, send parameter sets + frame data together
-                await QueueStatelessFrameAsync(nalu, outputBufferIndex, cancellationToken);
+                await QueueStatelessFrameAsync(naluData, naluType, outputBufferIndex, cancellationToken);
                 outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
 
                 // Dequeue decoded frames
                 await DequeueDecodedFramesAsync(cancellationToken);
 
-                processedBytes += nalu.Data.Length;
                 ReportProgress(processedBytes, totalBytes, stopwatch.Elapsed);
-            }
-            else
-            {
-                // Handle other NALUs (SEI, AUD, etc.)
-                processedBytes += nalu.Data.Length;
             }
 
             // Small delay to prevent overwhelming the decoder
             await Task.Delay(1, cancellationToken);
         }
+
+        // Wait for feeding task to complete
+        await feedTask;
 
         // Flush remaining frames
         await FlushDecoderAsync(cancellationToken);
@@ -653,24 +711,46 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         _logger.LogInformation("Starting stateless NALU-by-NALU decode loop...");
 
         using var fileStream = File.OpenRead(filePath);
+        using var naluProvider = new H264NaluProvider();
 
         // Collect NALUs that belong to the same frame
-        var currentFrame = new List<H264Nalu>();
+        var currentFrame = new List<byte[]>();
 
-        await foreach (var nalu in _naluParser.ParseNalusFromStreamAsync(fileStream, cancellationToken: cancellationToken))
+        // Start a task to feed data to the NALU provider
+        var feedTask = Task.Run(async () =>
+        {
+            var buffer = new byte[_configuration.ChunkSize];
+            int bytesRead;
+
+            while ((bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+            {
+                await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
+                processedBytes += bytesRead;
+            }
+
+            naluProvider.CompleteWriting();
+        }, cancellationToken);
+
+        // Process NALUs as they become available
+        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             naluCount++;
 
+            // Get NALU type
+            int naluHeaderPos = GetNaluHeaderPosition(naluData);
+            if (naluHeaderPos >= naluData.Length) continue;
+
+            byte naluType = (byte)(naluData[naluHeaderPos] & 0x1F);
+
             // Skip parameter sets since we'll include them with each frame
-            if (nalu.Type == 7 || nalu.Type == 8)
+            if (naluType == 7 || naluType == 8)
             {
-                processedBytes += nalu.Data.Length;
                 continue;
             }
 
             // Check if this NALU starts a new frame
-            if (IsFrameStartNalu(nalu.Type))
+            if (IsFrameStartNalu(naluType))
             {
                 // Process previous frame if we have one
                 if (currentFrame.Count > 0)
@@ -683,12 +763,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             }
 
             // Add NALU to current frame if it's relevant
-            if (IsFrameNalu(nalu.Type))
+            if (IsFrameNalu(naluType))
             {
-                currentFrame.Add(nalu);
+                currentFrame.Add(naluData);
             }
 
-            processedBytes += nalu.Data.Length;
             ReportProgress(processedBytes, totalBytes, stopwatch.Elapsed);
 
             // Small delay periodically
@@ -697,6 +776,9 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                 await Task.Delay(1, cancellationToken);
             }
         }
+
+        // Wait for feeding task to complete
+        await feedTask;
 
         // Process final frame if any
         if (currentFrame.Count > 0)
@@ -714,7 +796,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     /// <summary>
     /// Queues a frame with parameter sets for stateless decoding
     /// </summary>
-    private async Task QueueStatelessFrameAsync(H264Nalu frameNalu, uint bufferIndex, CancellationToken cancellationToken)
+    private async Task QueueStatelessFrameAsync(byte[] frameNaluData, byte naluType, uint bufferIndex, CancellationToken cancellationToken)
     {
         if (!_hasValidParameterSets)
         {
@@ -730,21 +812,21 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         frameData.AddRange(_currentPps!);
 
         // Add frame NALU
-        frameData.AddRange(frameNalu.Data);
+        frameData.AddRange(frameNaluData);
 
         var combinedData = frameData.ToArray();
 
         _logger.LogDebug("Queuing stateless frame: SPS({SpsByteCount}) + PPS({PpsByteCount}) + Frame({FrameByteCount}) = {TotalByteCount} bytes",
-            _currentSps.Length, _currentPps.Length, frameNalu.Data.Length, combinedData.Length);
+            _currentSps!.Length, _currentPps!.Length, frameNaluData.Length, combinedData.Length);
 
         await QueueH264DataAsync(combinedData, combinedData.Length, bufferIndex, cancellationToken,
-            isKeyFrame: frameNalu.IsKeyFrame || frameNalu.Type == 5);
+            isKeyFrame: naluType == 5); // IDR slice is keyframe
     }
 
     /// <summary>
     /// Queues a set of NALUs that form a frame with parameter sets for stateless decoding
     /// </summary>
-    private async Task QueueStatelessFrameSetAsync(List<H264Nalu> frameNalus, uint bufferIndex, CancellationToken cancellationToken)
+    private async Task QueueStatelessFrameSetAsync(List<byte[]> frameNalus, uint bufferIndex, CancellationToken cancellationToken)
     {
         if (!_hasValidParameterSets || frameNalus.Count == 0)
         {
@@ -761,22 +843,27 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
         // Add all frame NALUs
         bool isKeyFrame = false;
-        foreach (var nalu in frameNalus)
+        foreach (var naluData in frameNalus)
         {
-            frameData.AddRange(nalu.Data);
-            if (nalu.IsKeyFrame || nalu.Type == 5)
-                isKeyFrame = true;
+            frameData.AddRange(naluData);
+
+            // Check if this is an IDR slice (keyframe)
+            int naluHeaderPos = GetNaluHeaderPosition(naluData);
+            if (naluHeaderPos < naluData.Length)
+            {
+                byte naluType = (byte)(naluData[naluHeaderPos] & 0x1F);
+                if (naluType == 5) // IDR slice
+                    isKeyFrame = true;
+            }
         }
 
         var combinedData = frameData.ToArray();
 
         _logger.LogDebug("Queuing stateless frame set: SPS({SpsByteCount}) + PPS({PpsByteCount}) + {NaluCount} NALUs = {TotalByteCount} bytes",
-            _currentSps.Length, _currentPps.Length, frameNalus.Count, combinedData.Length);
+            _currentSps!.Length, _currentPps!.Length, frameNalus.Count, combinedData.Length);
 
         await QueueH264DataAsync(combinedData, combinedData.Length, bufferIndex, cancellationToken, isKeyFrame: isKeyFrame);
-    }
-
-    /// <summary>
+    }    /// <summary>
     /// Determines if a NALU type represents frame data
     /// </summary>
     private static bool IsFrameNalu(byte naluType)
@@ -998,47 +1085,70 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         }
 
         _logger.LogInformation("Starting NALU-by-NALU decode loop...");
+        _logger.LogWarning("Using legacy NALU-by-NALU processing method. Consider using DecodeFileNaluByNaluAsync for better performance.");
 
+        // Legacy method - simplified implementation for compatibility
         using var fileStream = File.OpenRead(filePath);
+        using var naluProvider = new H264NaluProvider();
+
+        // Start a task to feed data to the NALU provider
+        var feedTask = Task.Run(async () =>
+        {
+            var buffer = new byte[_configuration.ChunkSize];
+            int bytesRead;
+
+            while ((bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+            {
+                await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
+            }
+
+            naluProvider.CompleteWriting();
+        }, cancellationToken);
 
         // Process NALUs one by one
-        await foreach (var nalu in _naluParser.ParseNalusFromStreamAsync(fileStream, cancellationToken: cancellationToken))
+        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             naluCount++;
 
+            // Get NALU type
+            int naluHeaderPos = GetNaluHeaderPosition(naluData);
+            if (naluHeaderPos >= naluData.Length) continue;
+
+            byte naluType = (byte)(naluData[naluHeaderPos] & 0x1F);
+
             // Log detailed information about important NALUs
-            if (nalu.Type == 7 || nalu.Type == 8 || nalu.Type == 5)
+            if (naluType == 7 || naluType == 8 || naluType == 5)
             {
-                _logger.LogDebug("Processing NALU {Count}: Type={Type} ({Description}), Size={Size} bytes, KeyFrame={IsKeyFrame}",
-                    naluCount, nalu.Type, nalu.TypeDescription, nalu.Data.Length, nalu.IsKeyFrame);
+                _logger.LogDebug("Processing NALU {Count}: Type={Type}, Size={Size} bytes, KeyFrame={IsKeyFrame}",
+                    naluCount, naluType, naluData.Length, naluType == 5);
             }
             else
             {
-                _logger.LogTrace("Processing NALU {Count}: Type={Type} ({Description}), Size={Size} bytes",
-                    naluCount, nalu.Type, nalu.TypeDescription, nalu.Data.Length);
+                _logger.LogTrace("Processing NALU {Count}: Type={Type}, Size={Size} bytes",
+                    naluCount, naluType, naluData.Length);
             }
 
-            // Validate the NALU before processing
-            if (!_naluParser.ValidateNalu(nalu))
+            // Basic validation - check if NALU has valid header
+            if (naluData.Length < 5) // At least start code + 1 byte
             {
-                _logger.LogWarning("Skipping invalid NALU {Count}", naluCount);
+                _logger.LogWarning("Skipping invalid NALU {Count} (too small)", naluCount);
                 continue;
             }
 
             // Queue the NALU to the decoder
             try
             {
-                await QueueNaluAsync(nalu, outputBufferIndex, cancellationToken);
+                await QueueNaluLegacyAsync(naluData, naluType, outputBufferIndex, cancellationToken);
                 outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to queue NALU {Count} (Type={Type})", naluCount, nalu.Type);
+                _logger.LogError(ex, "Failed to queue NALU {Count} (Type={Type})", naluCount, naluType);
 
                 // For critical NALUs (SPS, PPS, IDR), re-throw the exception
-                if (nalu.Type == 7 || nalu.Type == 8 || nalu.Type == 5)
+                if (naluType == 7 || naluType == 8 || naluType == 5)
                 {
                     throw;
                 }
@@ -1051,7 +1161,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             await DequeueDecodedFramesAsync(cancellationToken);
 
             // Update progress tracking
-            processedBytes += nalu.Data.Length;
+            processedBytes += naluData.Length;
             ReportProgress(processedBytes, totalBytes, stopwatch.Elapsed);
 
             // Small delay to prevent overwhelming the decoder
@@ -1060,6 +1170,9 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                 await Task.Delay(1, cancellationToken);
             }
         }
+
+        // Wait for feeding task to complete
+        await feedTask;
 
         _logger.LogInformation("Processed {NaluCount} NALUs from {FilePath}", naluCount, filePath);
 
@@ -1146,6 +1259,95 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
                 _logger.LogTrace("Queued NALU type {Type} ({Size} bytes) to buffer {BufferIndex}",
                     nalu.Type, nalu.Data.Length, bufferIndex);
+            }
+            catch (Exception ex) when (!(ex is InvalidOperationException))
+            {
+                _logger.LogError(ex, "Unexpected error queuing NALU buffer {BufferIndex}", bufferIndex);
+                throw new InvalidOperationException($"Failed to queue NALU buffer {bufferIndex}: {ex.Message}", ex);
+            }
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// LEGACY: Queues a single NALU to the hardware decoder (simplified for compatibility)
+    /// </summary>
+    [Obsolete("This method is for legacy compatibility. Use the stateless methods for better performance.")]
+    private async Task QueueNaluLegacyAsync(byte[] naluData, byte naluType, uint bufferIndex, CancellationToken cancellationToken)
+    {
+        await Task.Run(() =>
+        {
+            try
+            {
+                var mappedBuffer = _outputBuffers[(int)bufferIndex];
+
+                // Safety check for buffer size
+                if (naluData.Length > mappedBuffer.Size)
+                {
+                    _logger.LogWarning("NALU ({NaluSize} bytes) exceeds buffer size ({BufferSize} bytes), truncating",
+                        naluData.Length, mappedBuffer.Size);
+
+                    // For critical NALUs, this is an error
+                    if (naluType == 5) // IDR frame
+                    {
+                        throw new InvalidOperationException($"Critical NALU (type {naluType}) too large for buffer");
+                    }
+
+                    // For non-critical NALUs, skip them
+                    _logger.LogWarning("Skipping NALU type {Type} due to size constraints", naluType);
+                    return;
+                }
+
+                // Copy NALU data to mapped buffer
+                Marshal.Copy(naluData, 0, mappedBuffer.Pointer, naluData.Length);
+
+                // Setup buffer for queuing
+                mappedBuffer.Planes[0].BytesUsed = (uint)naluData.Length;
+
+                // Set appropriate flags
+                uint flags = 0x01; // V4L2_BUF_FLAG_MAPPED
+
+                if (naluType == 5) // IDR slice
+                {
+                    flags |= 0x00000008; // V4L2_BUF_FLAG_KEYFRAME
+                    _logger.LogDebug("Setting KEYFRAME flag for NALU type {Type}", naluType);
+                }
+
+                // Create buffer structure
+                var buffer = new V4L2Buffer
+                {
+                    Index = bufferIndex,
+                    Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = 1,
+                    Field = (uint)V4L2Field.NONE,
+                    BytesUsed = (uint)naluData.Length,
+                    Flags = flags,
+                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                    Sequence = 0
+                };
+
+                unsafe
+                {
+                    buffer.Planes = (V4L2Plane*)Unsafe.AsPointer(ref mappedBuffer.Planes[0]);
+                }
+
+                // Queue the buffer
+                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+                if (!result.Success)
+                {
+                    int errorCode = Marshal.GetLastWin32Error();
+                    string errorDescription = GetErrorDescription(errorCode);
+                    string v4l2Context = GetV4L2ErrorContext(errorCode) ?? string.Empty;
+
+                    _logger.LogError("Failed to queue NALU buffer {Index} (Type={NaluType}): {ErrorDesc} - {Context}",
+                        bufferIndex, naluType, errorDescription, v4l2Context);
+
+                    throw new InvalidOperationException(
+                        $"Failed to queue NALU buffer {bufferIndex} (Type={naluType}): {errorDescription}. {v4l2Context}");
+                }
+
+                _logger.LogTrace("Queued NALU type {Type} ({Size} bytes) to buffer {BufferIndex}",
+                    naluType, naluData.Length, bufferIndex);
             }
             catch (Exception ex) when (!(ex is InvalidOperationException))
             {
