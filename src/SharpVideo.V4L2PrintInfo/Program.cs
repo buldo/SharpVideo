@@ -3,6 +3,8 @@ using System.IO;
 using System.Runtime.Versioning;
 using System.Text;
 using SharpVideo.Linux.Native;
+using SharpVideo;
+using SharpVideo.V4L2;
 
 namespace SharpVideo.V4L2PrintInfo
 {
@@ -11,17 +13,14 @@ namespace SharpVideo.V4L2PrintInfo
     {
         static void Main(string[] args)
         {
-            Console.WriteLine("Searching for V4L2 M2M (codec) devices...");
-            var allEntries = Directory.GetFileSystemEntries("/dev/", "video*");
+            Console.WriteLine("Searching for V4L2 devices...");
+            var devices = V4L2DeviceManager.GetVideoDevices();
 
-            if (allEntries.Length == 0)
+            if (devices.Length == 0)
             {
                 Console.WriteLine("No V4L2 devices found in /dev/");
                 return;
             }
-
-            // Filter out symlinks that point to files in the same directory
-            var devices = FilterSymlinks(allEntries);
 
             // Sort devices for consistent output
             Array.Sort(devices);
@@ -39,55 +38,6 @@ namespace SharpVideo.V4L2PrintInfo
             {
                 Console.WriteLine("\nNo V4L2 M2M devices found in system.");
             }
-        }
-
-        private static string[] FilterSymlinks(string[] allEntries)
-        {
-            var result = new List<string>();
-            var devDirectory = "/dev/";
-
-            foreach (var entry in allEntries)
-            {
-                var fileInfo = new FileInfo(entry);
-
-                // If it's a regular file, add it
-                if (!fileInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
-                {
-                    result.Add(entry);
-                }
-                else
-                {
-                    // It's a symlink, check if target is in the same directory
-                    try
-                    {
-                        var linkTarget = fileInfo.ResolveLinkTarget(false);
-                        if (linkTarget != null)
-                        {
-                            var targetPath = linkTarget.FullName;
-                            var targetDirectory = Path.GetDirectoryName(targetPath);
-
-                            // If the target is not in the same directory, include the symlink
-                            if (!string.Equals(targetDirectory, devDirectory.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
-                            {
-                                result.Add(entry);
-                            }
-                            // If target is in same directory, skip the symlink (we'll process the original)
-                        }
-                        else
-                        {
-                            // If we can't resolve the target, include it anyway
-                            result.Add(entry);
-                        }
-                    }
-                    catch
-                    {
-                        // If there's any error resolving the symlink, include it anyway
-                        result.Add(entry);
-                    }
-                }
-            }
-
-            return result.ToArray();
         }
 
         private static bool PrintM2mDeviceInfo(string devicePath)

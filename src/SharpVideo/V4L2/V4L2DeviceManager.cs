@@ -2,7 +2,7 @@
 
 public static class V4L2DeviceManager
 {
-    private static string[] GetVideoDevices()
+    public static string[] GetVideoDevices()
     {
         return Directory.EnumerateFileSystemEntries("/dev", "video*")
             .Where(CheckForSymlink)
@@ -24,12 +24,17 @@ public static class V4L2DeviceManager
                 return true;
             }
 
-            return (fileInfo.Attributes) == 0;
+            if(target.FullName.StartsWith("/dev/video"))
+            {
+                return false;
+            }
+
+            return true;
         }
     }
 
-    public static List<string> FindByOutputPixelFormat()
-    {
+    // public static List<string> FindByOutputPixelFormat()
+    // {
 
-    }
+    // }
 }
