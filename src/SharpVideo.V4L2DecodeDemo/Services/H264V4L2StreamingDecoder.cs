@@ -111,7 +111,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         if (_deviceFd < 0)
         {
             var error = Marshal.GetLastWin32Error();
-            throw new InvalidOperationException($"Failed to open device {devicePath}. Error: {error}");
+            string errorDescription = GetErrorDescription(error);
+            _logger.LogError("Failed to open device {DevicePath}: {ErrorDesc} (Code: {ErrorCode})", 
+                devicePath, errorDescription, error);
+            throw new InvalidOperationException($"Failed to open device {devicePath}. {errorDescription}. " +
+                                               $"Check permissions and make sure the device is not already in use.");
         }
 
         _logger.LogInformation("Opened decoder device: {DevicePath} (fd: {FileDescriptor})", devicePath, _deviceFd);
@@ -151,20 +155,58 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE
         };
 
-        var outputPixMp = new V4L2PixFormatMplane
+        // Try multiple H.264 formats in order of likely compatibility
+        uint[] h264Formats = new uint[]
         {
-            Width = _configuration.InitialWidth,
-            Height = _configuration.InitialHeight,
-            PixelFormat = 0x34363253, // H264 Parsed Slice Data
-            NumPlanes = 1,
-            Field = (uint)V4L2Field.NONE
+            0x34363248, // H264 (standard)
+            0x30313748, // H710 - sometimes used for H.264 on embedded platforms
+            0x34363253, // S264 (H264 Parsed Slice Data)
+            0x31435641, // AVC1 
+            0x31637661, // avc1 (lowercase variant)
+            0x48323634, // H264 (alternate byte order)
+            0x30323134  // 2014 (RockChip specific H264 format)
         };
-        outputFormat.Pix_mp = outputPixMp;
 
-        var result = LibV4L2.SetFormat(_deviceFd, ref outputFormat);
-        if (!result.Success)
+        bool formatSet = false;
+        foreach (var format in h264Formats)
         {
-            throw new InvalidOperationException($"Failed to set output format: {result.ErrorMessage}");
+                var outputPixMp = new V4L2PixFormatMplane
+                {
+                    Width = _configuration.InitialWidth,
+                    Height = _configuration.InitialHeight,
+                    PixelFormat = format,
+                    NumPlanes = 1,
+                    Field = (uint)V4L2Field.NONE,
+                    // Some decoders require these fields to be properly set
+                    Colorspace = 5, // V4L2_COLORSPACE_REC709
+                    YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
+                    Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
+                    XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
+                };
+                outputFormat.Pix_mp = outputPixMp;            var formatResult = LibV4L2.SetFormat(_deviceFd, ref outputFormat);
+            if (formatResult.Success)
+            {
+                _logger.LogInformation("Successfully set H.264 format: 0x{Format:X8}", format);
+                formatSet = true;
+                break;
+            }
+            else
+            {
+                int errorCode = Marshal.GetLastWin32Error();
+                string errorDesc = GetErrorDescription(errorCode);
+                _logger.LogDebug("Format 0x{Format:X8} not supported: {Error} - {ErrorDesc}", 
+                    format, formatResult.ErrorMessage, errorDesc);
+            }
+        }
+        
+        // If we couldn't set a format, throw an exception
+        if (!formatSet)
+        {
+            _logger.LogError("Failed to set any supported H.264 format on the device");
+            throw new InvalidOperationException(
+                "Failed to set any supported H.264 format on the device. " +
+                "This may indicate that the hardware decoder doesn't support standard H.264 formats, " +
+                "or requires special configuration not currently implemented.");
         }
 
         _logger.LogInformation("Set output format: {Width}x{Height}, PixelFormat: 0x{PixelFormat:X8}",
@@ -452,6 +494,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         }
 
         _logger.LogInformation("Starting decode loop...");
+        
+        // For some V4L2 decoders, especially RockChip ones, we need to send smaller chunks
+        // with very clear NAL boundaries to avoid EBADR errors
+        int smallChunkSize = 1024; // Try smaller chunks
+        bool firstFrameSent = false;
 
         while (true)
         {
@@ -467,9 +514,87 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
             processedBytes += bytesRead;
 
-            // Queue H.264 data to decoder
-            await QueueH264DataAsync(buffer, bytesRead, outputBufferIndex, cancellationToken);
-            outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
+            // For the first buffer, try special handling
+            if (!firstFrameSent)
+            {
+                _logger.LogDebug("Processing first frame specially");
+                
+                // Look for SPS+PPS NAL units to send as first frame
+                // Process H.264 data to ensure proper NAL units
+                byte[] processedBuffer = ProcessH264Data(buffer, bytesRead);
+                
+                // Queue the processed H.264 data to decoder
+                if (processedBuffer.Length > 0)
+                {
+                    // First frame is likely to contain SPS/PPS, mark it as a keyframe
+                    await QueueH264DataAsync(processedBuffer, processedBuffer.Length, outputBufferIndex, cancellationToken, isKeyFrame: true);
+                    outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
+                    firstFrameSent = true;
+                }
+            }
+            else
+            {
+                // For subsequent frames, break into smaller chunks at NAL boundaries
+                _logger.LogTrace("Processing subsequent frame in smaller chunks");
+                
+                // Split into smaller chunks for better compatibility
+                int position = 0;
+                while (position < bytesRead)
+                {
+                    // Determine chunk size, but try to find NAL boundary
+                    int endPos = Math.Min(position + smallChunkSize, bytesRead);
+                    
+                    // If we're not at the end, try to find a NAL boundary
+                    if (endPos < bytesRead)
+                    {
+                        // Look for next NAL start code after our minimum position
+                        for (int i = position + 4; i < Math.Min(bytesRead - 4, position + smallChunkSize * 2); i++)
+                        {
+                            if ((buffer[i] == 0 && buffer[i+1] == 0 && buffer[i+2] == 1) ||
+                                (buffer[i] == 0 && buffer[i+1] == 0 && buffer[i+2] == 0 && buffer[i+3] == 1))
+                            {
+                                // Found a NAL start code, break here
+                                endPos = i;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Process this chunk
+                    int chunkSize = endPos - position;
+                    if (chunkSize > 0)
+                    {
+                        byte[] chunk = new byte[chunkSize];
+                        Array.Copy(buffer, position, chunk, 0, chunkSize);
+                        
+                        byte[] processedChunk = ProcessH264Data(chunk, chunkSize);
+                        
+                        if (processedChunk.Length > 0)
+                        {
+                            // Check if this chunk might contain an SPS (keyframe)
+                            bool isChunkWithSps = false;
+                            for (int i = 0; i < chunk.Length - 5; i++) {
+                                if (chunk[i] == 0 && chunk[i+1] == 0 && 
+                                    ((chunk[i+2] == 1) || (chunk[i+2] == 0 && chunk[i+3] == 1))) {
+                                    int nalHeaderPos = chunk[i+2] == 0 ? i+4 : i+3;
+                                    if (nalHeaderPos < chunk.Length) {
+                                        byte nalType = (byte)(chunk[nalHeaderPos] & 0x1F);
+                                        if (nalType == 7) { // SPS
+                                            isChunkWithSps = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            await QueueH264DataAsync(processedChunk, processedChunk.Length, outputBufferIndex, cancellationToken, isKeyFrame: isChunkWithSps);
+                            outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
+                        }
+                    }
+                    
+                    position = endPos;
+                }
+            }
 
             // Dequeue decoded frames
             await DequeueDecodedFramesAsync(cancellationToken);
@@ -485,38 +610,168 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         await FlushDecoderAsync(cancellationToken);
     }
 
-    private async Task QueueH264DataAsync(byte[] data, int length, uint bufferIndex, CancellationToken cancellationToken)
+    private async Task QueueH264DataAsync(byte[] data, int length, uint bufferIndex, CancellationToken cancellationToken, bool isKeyFrame = false, bool isEos = false)
     {
         await Task.Run(() =>
         {
-            var mappedBuffer = _outputBuffers[(int)bufferIndex];
-
-            // Copy data to mapped buffer
-            Marshal.Copy(data, 0, mappedBuffer.Pointer, length);
-
-            // Setup buffer for queuing
-            mappedBuffer.Planes[0].BytesUsed = (uint)length;
-
-            var buffer = new V4L2Buffer
+            try
             {
-                Index = bufferIndex,
-                Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
-                Memory = V4L2Constants.V4L2_MEMORY_MMAP,
-                Length = 1
-            };
+                // Skip empty data
+                if (length == 0)
+                {
+                    _logger.LogDebug("Skipping empty data buffer");
+                    return;
+                }
 
-            unsafe
-            {
-                buffer.Planes = (V4L2Plane*)Unsafe.AsPointer(ref mappedBuffer.Planes[0]);
+                var mappedBuffer = _outputBuffers[(int)bufferIndex];
+                
+                // Safety check for buffer size
+                if (length > mappedBuffer.Size)
+                {
+                    _logger.LogWarning("Data ({DataSize} bytes) exceeds buffer size ({BufferSize} bytes), truncating", 
+                        length, mappedBuffer.Size);
+                    length = (int)mappedBuffer.Size;
+                }
+
+                // Log the first few bytes of the data for debugging
+                if (length > 16)
+                {
+                    byte[] firstBytes = new byte[16];
+                    Array.Copy(data, firstBytes, 16);
+                    _logger.LogDebug("Buffer header: {Bytes}", BitConverter.ToString(firstBytes));
+                }
+
+                // Copy data to mapped buffer
+                Marshal.Copy(data, 0, mappedBuffer.Pointer, length);
+
+                // Setup buffer for queuing - BytesUsed is critical
+                mappedBuffer.Planes[0].BytesUsed = (uint)length;
+
+                // Check for SPS NAL unit (which is always part of a keyframe)
+                bool isKeyFrame = false;
+                if (length > 4)
+                {
+                    // Check for NAL unit type 7 (SPS) which indicates a keyframe
+                    for (int i = 0; i < length - 4; i++)
+                    {
+                        if (data[i] == 0 && data[i + 1] == 0 && 
+                            ((data[i + 2] == 0 && data[i + 3] == 1) || (data[i + 2] == 1)))
+                        {
+                            int nalHeaderPos = data[i + 2] == 0 ? i + 4 : i + 3;
+                            if (nalHeaderPos < length)
+                            {
+                                byte nalType = (byte)(data[nalHeaderPos] & 0x1F);
+                                if (nalType == 7) // SPS NAL unit
+                                {
+                                    isKeyFrame = true;
+                                    _logger.LogDebug("Found SPS NAL unit, marking as keyframe");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Set appropriate flags for RockChip decoder
+                uint flags = 0;
+                
+                // V4L2_BUF_FLAG_KEYFRAME = 0x00000008
+                if (isKeyFrame)
+                {
+                    flags |= 0x00000008; // V4L2_BUF_FLAG_KEYFRAME
+                    _logger.LogDebug("Setting KEYFRAME flag");
+                }
+                
+                // For RockChip decoder specifically, set additional flags:
+                // - 0x01 = V4L2_BUF_FLAG_MAPPED (buffer has been mapped)
+                flags |= 0x01;  // V4L2_BUF_FLAG_MAPPED
+                
+                // End-of-stream flag if needed
+                if (isEos)
+                {
+                    flags |= 0x00100000; // V4L2_BUF_FLAG_LAST
+                    _logger.LogDebug("Setting EOS flag");
+                }
+
+                // Create specialized buffer for RockChip decoder
+                var buffer = new V4L2Buffer
+                {
+                    Index = bufferIndex,
+                    Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = 1,
+                    Field = (uint)V4L2Field.NONE,
+                    BytesUsed = (uint)length, // Critical field - must match actual data size
+                    Flags = flags,
+                    // Set timestamp to 0
+                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                    Sequence = 0  // Incremental frame counter could help
+                };
+
+                unsafe
+                {
+                    buffer.Planes = (V4L2Plane*)Unsafe.AsPointer(ref mappedBuffer.Planes[0]);
+                }
+
+                // Check if the device is in a valid state
+                if (_deviceFd < 0)
+                {
+                    throw new InvalidOperationException("Device is not properly initialized");
+                }
+
+                // Log buffer details before queueing
+                _logger.LogDebug("Queueing buffer {Index}: Type={Type}, Memory={Memory}, BytesUsed={Bytes}, Planes={PlaneCount}",
+                    buffer.Index, buffer.Type, buffer.Memory, buffer.BytesUsed, buffer.Length);
+                
+                // Try to check first few bytes to see what we're sending
+                try {
+                    unsafe {
+                        byte[] headerBytes = new byte[Math.Min(16, length)];
+                        Marshal.Copy(mappedBuffer.Pointer, headerBytes, 0, headerBytes.Length);
+                        string firstBytes = BitConverter.ToString(headerBytes);
+                        _logger.LogDebug("First bytes of buffer {Index}: {Bytes}", bufferIndex, firstBytes);
+                    }
+                } catch (Exception ex) {
+                    _logger.LogDebug("Could not log buffer content: {Message}", ex.Message);
+                }
+
+                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+                if (!result.Success)
+                {
+                    // Get the exact error code for diagnostics
+                    int errorCode = Marshal.GetLastWin32Error();
+                    
+                    // Get general and V4L2-specific error descriptions
+                    string errorDescription = GetErrorDescription(errorCode);
+                    string v4l2Context = GetV4L2ErrorContext(errorCode) ?? string.Empty;
+                    
+                    _logger.LogError("V4L2 error: QueueBuffer failed with code {ErrorCode} - {ErrorDesc}", 
+                        errorCode, errorDescription);
+                    
+                    // Try to get more diagnostic info about the format
+                    try {
+                        V4L2Format fmt = new V4L2Format();
+                        fmt.Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+                        var fmtResult = LibV4L2.GetFormat(_deviceFd, ref fmt);
+                        if (fmtResult.Success) {
+                            _logger.LogError("Current output format: Width={Width}, Height={Height}, PixelFormat=0x{PixelFormat:X8}",
+                                fmt.Pix_mp.Width, fmt.Pix_mp.Height, fmt.Pix_mp.PixelFormat);
+                        }
+                    } catch {
+                        // Ignore errors during diagnostic info gathering
+                    }
+                    
+                    throw new InvalidOperationException(
+                        $"Failed to queue output buffer {bufferIndex}: {errorDescription}. {v4l2Context}");
+                }
+
+                _logger.LogTrace("Queued {ByteCount} bytes to output buffer {BufferIndex}", length, bufferIndex);
             }
-
-            var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
-            if (!result.Success)
+            catch (Exception ex) when (!(ex is InvalidOperationException))
             {
-                throw new InvalidOperationException($"Failed to queue output buffer {bufferIndex}: {result.ErrorMessage}");
+                _logger.LogError(ex, "Unexpected error queuing buffer {BufferIndex}", bufferIndex);
+                throw new InvalidOperationException($"Failed to queue output buffer {bufferIndex}: {ex.Message}", ex);
             }
-
-            _logger.LogTrace("Queued {ByteCount} bytes to output buffer {BufferIndex}", length, bufferIndex);
         }, cancellationToken);
     }
 
@@ -543,7 +798,18 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                 var result = LibV4L2.DequeueBuffer(_deviceFd, ref buffer);
                 if (!result.Success)
                 {
-                    // No more buffers available
+                    // EAGAIN (11) is not an error, it just means no buffers are ready
+                    int errorCode = Marshal.GetLastWin32Error();
+                    if (errorCode == 11) // EAGAIN
+                    {
+                        // No more buffers available, this is normal
+                        break;
+                    }
+                    
+                    // For other errors, log them but continue operation
+                    string errorDescription = GetErrorDescription(errorCode);
+                    _logger.LogWarning("DequeueBuffer failed: {ErrorDesc} (Code: {ErrorCode})", 
+                        errorDescription, errorCode);
                     break;
                 }
 
@@ -574,26 +840,50 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     {
         await Task.Run(() =>
         {
-            var mappedBuffer = _captureBuffers[(int)bufferIndex];
-
-            var buffer = new V4L2Buffer
+            // Skip if we're already disposed or the device is closed
+            if (_disposed || _deviceFd < 0)
             {
-                Index = bufferIndex,
-                Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
-                Memory = V4L2Constants.V4L2_MEMORY_MMAP,
-                Length = 3
-            };
-
-            unsafe
-            {
-                buffer.Planes = (V4L2Plane*)Unsafe.AsPointer(ref mappedBuffer.Planes[0]);
+                _logger.LogDebug("Skipping buffer queue on closed device");
+                return;
             }
-
-            var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
-            if (!result.Success)
+            
+            try
             {
-                _logger.LogWarning("Failed to requeue capture buffer {BufferIndex}: {Error}",
-                    bufferIndex, result.ErrorMessage);
+                var mappedBuffer = _captureBuffers[(int)bufferIndex];
+
+                var buffer = new V4L2Buffer
+                {
+                    Index = bufferIndex,
+                    Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = 3,
+                    // Add flags as needed
+                    Flags = 0
+                };
+
+                unsafe
+                {
+                    buffer.Planes = (V4L2Plane*)Unsafe.AsPointer(ref mappedBuffer.Planes[0]);
+                }
+
+                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+                if (!result.Success)
+                {
+                    // Get the exact error code for better diagnostics
+                    int errorCode = Marshal.GetLastWin32Error();
+                    string errorDescription = GetErrorDescription(errorCode);
+                    string v4l2Context = GetV4L2ErrorContext(errorCode);
+                    
+                    _logger.LogWarning("Failed to queue capture buffer {BufferIndex}: {Error} - {ErrorDesc}. {Context}",
+                        bufferIndex, result.ErrorMessage, errorDescription, v4l2Context);
+                    
+                    // Don't throw for capture buffer errors, just log them
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception while queuing capture buffer {BufferIndex}", bufferIndex);
+                // Don't throw and interrupt the decoding process
             }
         }, cancellationToken);
     }
@@ -629,6 +919,339 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             // Dequeue any remaining frames
             DequeueDecodedFramesAsync(cancellationToken).Wait(cancellationToken);
         }, cancellationToken);
+    }
+
+    #endregion
+
+    #region H.264 Processing
+
+    /// <summary>
+    /// Processes H.264 data to ensure it has valid NAL units for the V4L2 decoder
+    /// </summary>
+    private byte[] ProcessH264Data(byte[] buffer, int length)
+    {
+        // Early exit for empty buffers
+        if (length <= 4)
+        {
+            _logger.LogWarning("Buffer too small for H.264 data: {Length} bytes", length);
+            return new byte[0]; // Return empty to skip this chunk
+        }
+
+        try
+        {
+            using var ms = new MemoryStream();
+            
+            // ROCKCHIP SPECIFIC APPROACH - V4 (trying a completely different approach):
+            // The RockChip V4L2 decoder requires specially formatted input:
+            // 1. It may need a complete H.264 frame with no padding
+            // 2. It requires complete NAL units (no partial NAL units)
+            // 3. EBADR (Invalid request descriptor) often means format incompatibility
+            
+            // Let's try a much simpler approach first - just ensure we have valid start codes
+            // and send the minimal amount of data needed:
+            
+            // First, detect if this buffer contains an SPS NAL unit
+            bool hasSps = false;
+            bool hasPps = false;
+            bool hasVps = false;
+            List<(int start, int end, byte nalType)> nalUnits = new List<(int, int, byte)>();
+            
+            // Scan for NAL units and their types
+            int i = 0;
+            while (i < length - 2) // Need at least 3 bytes for a start code
+            {
+                // Check for potential start code
+                if (i + 1 < length && buffer[i] == 0 && buffer[i+1] == 0)
+                {
+                    // Check for 3-byte or 4-byte start code
+                    bool is4ByteStartCode = (i+3 < length && buffer[i+2] == 0 && buffer[i+3] == 1);
+                    bool is3ByteStartCode = (i+2 < length && buffer[i+2] == 1);
+                    
+                    if (is4ByteStartCode || is3ByteStartCode)
+                    {
+                        int startCodeSize = is4ByteStartCode ? 4 : 3;
+                        int nalStart = i + startCodeSize;
+                        
+                        // Find the type of this NAL unit - ensure we have at least one byte for NAL header
+                        if (nalStart < length)
+                        {
+                            byte nalType = (byte)(buffer[nalStart] & 0x1F); // Extract NAL type bits
+                            
+                            // Find the end of this NAL (next start code or end of buffer)
+                            int nalEnd = length;
+                            for (int j = nalStart + 1; j < length - 2; j++) // Need at least 3 bytes for a start code
+                            {
+                                if (j + 1 < length && buffer[j] == 0 && buffer[j+1] == 0)
+                                {
+                                    bool nextIs4ByteStartCode = (j+3 < length && buffer[j+2] == 0 && buffer[j+3] == 1);
+                                    bool nextIs3ByteStartCode = (j+2 < length && buffer[j+2] == 1);
+                                    
+                                    if (nextIs4ByteStartCode || nextIs3ByteStartCode)
+                                    {
+                                        nalEnd = j;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            // Add this NAL unit to our list
+                            nalUnits.Add((nalStart, nalEnd, nalType)); // Store actual data start after start code
+                            
+                            // Track if we have SPS/PPS NALs
+                            if (nalType == 7) hasSps = true;
+                            if (nalType == 8) hasPps = true;
+                            
+                            // Skip to the end of this NAL
+                            i = nalEnd;
+                        }
+                        else
+                        {
+                            i += startCodeSize;
+                        }
+                    }
+                    else
+                    {
+                        i++;
+                    }
+                }
+                else
+                {
+                    i++;
+                }
+            }
+            
+            // Now process NAL units based on what we found
+            if (nalUnits.Count == 0)
+            {
+                // No valid NAL units found, just add a start code and pass through
+                _logger.LogWarning("No valid NAL units found in buffer, adding start code");
+                ms.Write(new byte[] { 0, 0, 0, 1 }, 0, 4);
+                ms.Write(buffer, 0, length);
+            }
+            else
+            {
+                // Process NAL units
+                _logger.LogDebug($"Found {nalUnits.Count} NAL units. SPS: {hasSps}, PPS: {hasPps}");
+                
+                // Special treatment for the first frame with SPS/PPS
+                if (hasSps || hasPps)
+                {
+                    // For RockChip, it's critical to put SPS and PPS in the correct order
+                    foreach (var nal in nalUnits)
+                    {
+                        // Always use 4-byte start codes
+                        ms.Write(new byte[] { 0, 0, 0, 1 }, 0, 4);
+                        
+                        // Write the NAL data - Calculate offset and length carefully to avoid index out of bounds
+                        int startOffset = nal.start;
+                        
+                        // Make sure we don't go out of bounds
+                        if (startOffset < length && nal.end <= length)
+                        {
+                            int dataLength = nal.end - startOffset;
+                            ms.Write(buffer, startOffset, dataLength);
+                        }
+                    }
+                }
+                else
+                {
+                    // For non-SPS/PPS frames, just use standard 4-byte start codes
+                    foreach (var nal in nalUnits)
+                    {
+                        // Always use 4-byte start codes
+                        ms.Write(new byte[] { 0, 0, 0, 1 }, 0, 4);
+                        
+                        // Write the NAL data - Calculate offset and length carefully to avoid index out of bounds
+                        int startOffset = nal.start;
+                        
+                        // Make sure we don't go out of bounds
+                        if (startOffset < length && nal.end <= length)
+                        {
+                            int dataLength = nal.end - startOffset;
+                            ms.Write(buffer, startOffset, dataLength);
+                        }
+                    }
+                }
+            }
+            
+            return ms.ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing H.264 data: {Message}", ex.Message);
+            // In case of error, still try to send something sane
+            return buffer.Take(length).ToArray();
+        }
+    }
+
+    #endregion
+
+    #region Utilities
+
+    /// <summary>
+    /// Converts Linux error codes to descriptive error messages
+    /// </summary>
+    /// <param name="errorCode">The numeric error code</param>
+    /// <returns>A descriptive error message</returns>
+    private string GetErrorDescription(int errorCode)
+    {
+        switch (errorCode)
+        {
+            case 1: return "EPERM: Operation not permitted";
+            case 2: return "ENOENT: No such file or directory";
+            case 3: return "ESRCH: No such process";
+            case 4: return "EINTR: Interrupted system call";
+            case 5: return "EIO: Input/output error";
+            case 6: return "ENXIO: No such device or address";
+            case 7: return "E2BIG: Argument list too long";
+            case 8: return "ENOEXEC: Exec format error";
+            case 9: return "EBADF: Bad file descriptor";
+            case 10: return "ECHILD: No child processes";
+            case 11: return "EAGAIN: Resource temporarily unavailable (try again)";
+            case 12: return "ENOMEM: Cannot allocate memory";
+            case 13: return "EACCES: Permission denied";
+            case 14: return "EFAULT: Bad address";
+            case 15: return "ENOTBLK: Block device required";
+            case 16: return "EBUSY: Device or resource busy";
+            case 17: return "EEXIST: File exists";
+            case 18: return "EXDEV: Invalid cross-device link";
+            case 19: return "ENODEV: No such device";
+            case 20: return "ENOTDIR: Not a directory";
+            case 21: return "EISDIR: Is a directory";
+            case 22: return "EINVAL: Invalid argument";
+            case 23: return "ENFILE: Too many open files in system";
+            case 24: return "EMFILE: Too many open files";
+            case 25: return "ENOTTY: Inappropriate ioctl for device";
+            case 26: return "ETXTBSY: Text file busy";
+            case 27: return "EFBIG: File too large";
+            case 28: return "ENOSPC: No space left on device";
+            case 29: return "ESPIPE: Illegal seek";
+            case 30: return "EROFS: Read-only file system";
+            case 31: return "EMLINK: Too many links";
+            case 32: return "EPIPE: Broken pipe";
+            case 33: return "EDOM: Numerical argument out of domain";
+            case 34: return "ERANGE: Numerical result out of range";
+            case 35: return "EDEADLK: Resource deadlock avoided";
+            case 36: return "ENAMETOOLONG: File name too long";
+            case 37: return "ENOLCK: No locks available";
+            case 38: return "ENOSYS: Function not implemented";
+            case 39: return "ENOTEMPTY: Directory not empty";
+            case 40: return "ELOOP: Too many levels of symbolic links";
+            case 42: return "ENOMSG: No message of desired type";
+            case 43: return "EIDRM: Identifier removed";
+            case 44: return "ECHRNG: Channel number out of range";
+            case 45: return "EL2NSYNC: Level 2 not synchronized";
+            case 46: return "EL3HLT: Level 3 halted";
+            case 47: return "EL3RST: Level 3 reset";
+            case 48: return "ELNRNG: Link number out of range";
+            case 49: return "EUNATCH: Protocol driver not attached";
+            case 50: return "ENOCSI: No CSI structure available";
+            case 51: return "EL2HLT: Level 2 halted";
+            case 52: return "EBADE: Invalid exchange";
+            case 53: return "EBADR: Invalid request descriptor";
+            case 54: return "EXFULL: Exchange full";
+            case 55: return "ENOANO: No anode";
+            case 56: return "EBADRQC: Invalid request code";
+            case 57: return "EBADSLT: Invalid slot";
+            case 59: return "EBFONT: Bad font file format";
+            case 60: return "ENOSTR: Device not a stream";
+            case 61: return "ENODATA: No data available";
+            case 62: return "ETIME: Timer expired";
+            case 63: return "ENOSR: Out of streams resources";
+            case 64: return "ENONET: Machine is not on the network";
+            case 65: return "ENOPKG: Package not installed";
+            case 66: return "EREMOTE: Object is remote";
+            case 67: return "ENOLINK: Link has been severed";
+            case 68: return "EADV: Advertise error";
+            case 69: return "ESRMNT: Srmount error";
+            case 70: return "ECOMM: Communication error on send";
+            case 71: return "EPROTO: Protocol error";
+            case 72: return "EMULTIHOP: Multihop attempted";
+            case 73: return "EDOTDOT: RFS specific error";
+            case 74: return "EBADMSG: Bad message";
+            case 75: return "EOVERFLOW: Value too large for defined data type";
+            case 76: return "ENOTUNIQ: Name not unique on network";
+            case 77: return "EBADFD: File descriptor in bad state";
+            case 78: return "EREMCHG: Remote address changed";
+            case 79: return "ELIBACC: Can not access a needed shared library";
+            case 80: return "ELIBBAD: Accessing a corrupted shared library";
+            case 81: return "ELIBSCN: .lib section in a.out corrupted";
+            case 82: return "ELIBMAX: Attempting to link in too many shared libraries";
+            case 83: return "ELIBEXEC: Cannot exec a shared library directly";
+            case 84: return "EILSEQ: Invalid or incomplete multibyte or wide character";
+            case 85: return "ERESTART: Interrupted system call should be restarted";
+            case 86: return "ESTRPIPE: Streams pipe error";
+            case 87: return "EUSERS: Too many users";
+            case 88: return "ENOTSOCK: Socket operation on non-socket";
+            case 89: return "EDESTADDRREQ: Destination address required";
+            case 90: return "EMSGSIZE: Message too long";
+            case 91: return "EPROTOTYPE: Protocol wrong type for socket";
+            case 92: return "ENOPROTOOPT: Protocol not available";
+            case 93: return "EPROTONOSUPPORT: Protocol not supported";
+            case 94: return "ESOCKTNOSUPPORT: Socket type not supported";
+            case 95: return "EOPNOTSUPP: Operation not supported";
+            case 96: return "EPFNOSUPPORT: Protocol family not supported";
+            case 97: return "EAFNOSUPPORT: Address family not supported by protocol";
+            case 98: return "EADDRINUSE: Address already in use";
+            case 99: return "EADDRNOTAVAIL: Cannot assign requested address";
+            case 100: return "ENETDOWN: Network is down";
+            case 101: return "ENETUNREACH: Network is unreachable";
+            case 102: return "ENETRESET: Network dropped connection on reset";
+            case 103: return "ECONNABORTED: Software caused connection abort";
+            case 104: return "ECONNRESET: Connection reset by peer";
+            case 105: return "ENOBUFS: No buffer space available";
+            case 106: return "EISCONN: Transport endpoint is already connected";
+            case 107: return "ENOTCONN: Transport endpoint is not connected";
+            case 108: return "ESHUTDOWN: Cannot send after transport endpoint shutdown";
+            case 109: return "ETOOMANYREFS: Too many references: cannot splice";
+            case 110: return "ETIMEDOUT: Connection timed out";
+            case 111: return "ECONNREFUSED: Connection refused";
+            case 112: return "EHOSTDOWN: Host is down";
+            case 113: return "EHOSTUNREACH: No route to host";
+            case 114: return "EALREADY: Operation already in progress";
+            case 115: return "EINPROGRESS: Operation now in progress";
+            case 116: return "ESTALE: Stale file handle";
+            case 117: return "EUCLEAN: Structure needs cleaning";
+            case 118: return "ENOTNAM: Not a XENIX named type file";
+            case 119: return "ENAVAIL: No XENIX semaphores available";
+            case 120: return "EISNAM: Is a named type file";
+            case 121: return "EREMOTEIO: Remote I/O error";
+            case 122: return "EDQUOT: Disk quota exceeded";
+            default: return $"Unknown error code: {errorCode}";
+        }
+    }
+
+    /// <summary>
+    /// Gets detailed V4L2-specific information for an error code
+    /// </summary>
+    private string GetV4L2ErrorContext(int errorCode)
+    {
+        switch (errorCode)
+        {
+            case 22: // EINVAL
+                return "Invalid argument - This typically indicates an incorrect parameter was passed to the V4L2 driver, " +
+                       "such as an unsupported format or invalid buffer configuration.";
+                
+            case 53: // EBADR
+                return "Invalid request descriptor - In V4L2 context, this often means the data format is not what the driver expects. " +
+                       "Check if the H.264 stream is properly formatted with valid NAL units, or if it needs specific pre-processing " +
+                       "for this hardware decoder.";
+                
+            case 74: // EBADMSG
+                return "Bad message - This indicates the input data is incorrectly formatted or corrupted. " +
+                       "The hardware decoder cannot parse the provided H.264 stream.";
+                
+            case 5: // EIO
+                return "Input/output error - The hardware decoder encountered a problem during operation. " +
+                       "This could be due to hardware limitations, driver bugs, or invalid stream data.";
+                
+            case 11: // EAGAIN
+                return "Resource temporarily unavailable - The operation would block because resources are not available. " +
+                       "Try again later or check if too many concurrent operations are happening.";
+                
+            default:
+                return string.Empty; // No specific V4L2 context information available
+        }
     }
 
     #endregion
@@ -711,6 +1334,16 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         if (!_disposed)
         {
             CleanupAsync().Wait();
+            _disposed = true;
+        }
+        GC.SuppressFinalize(this);
+    }
+    
+    public async ValueTask DisposeAsync()
+    {
+        if (!_disposed)
+        {
+            await CleanupAsync();
             _disposed = true;
         }
         GC.SuppressFinalize(this);

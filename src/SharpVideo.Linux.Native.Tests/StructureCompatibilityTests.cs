@@ -413,8 +413,8 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal(0u, nativeFilledStruct.Index);
         Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
         Assert.Equal((uint)V4L2Field.NONE, nativeFilledStruct.Field);
-        Assert.Equal(12345L, nativeFilledStruct.TimestampSec);
-        Assert.Equal(67890L, nativeFilledStruct.TimestampUsec);
+        Assert.Equal(12345L, nativeFilledStruct.Timestamp.TvSec);
+        Assert.Equal(67890L, nativeFilledStruct.Timestamp.TvUsec);
         Assert.Equal(123u, nativeFilledStruct.Sequence);
         Assert.Equal(V4L2Constants.V4L2_MEMORY_DMABUF, nativeFilledStruct.Memory);
         Assert.Equal(2u, nativeFilledStruct.Length); // Number of planes

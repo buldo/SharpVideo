@@ -1,3 +1,4 @@
+#if LINUX
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2DecodeDemo.Services;
 
@@ -12,11 +13,33 @@ internal class Program
 
         try
         {
+            // Determine input file path: allow CLI arg override, otherwise use test file next to the executable
+            var filePath = args.Length > 0
+                ? args[0]
+                : Path.Combine(AppContext.BaseDirectory, "test_video.h264");
+
+            Console.WriteLine($"Input file: {filePath}");
+            if (!File.Exists(filePath))
+            {
+                // Fallback: try current working directory for convenience when running from project root
+                var fallback = Path.GetFullPath("test_video.h264");
+                if (File.Exists(fallback))
+                {
+                    filePath = fallback;
+                }
+                else
+                {
+                    Console.WriteLine($"Error: Could not find H.264 file. Checked: {filePath} and {fallback}");
+                    Environment.Exit(1);
+                    return;
+                }
+            }
+
             using var loggerFactory = LoggerFactory.Create(builder =>
                 builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
             var logger = loggerFactory.CreateLogger<H264V4L2StreamingDecoder>();
 
-            var decoder = new H264V4L2StreamingDecoder(logger);
+            await using var decoder = new H264V4L2StreamingDecoder(logger);
 
             // Subscribe to events for real-time feedback
             decoder.FrameDecoded += (sender, e) =>
@@ -35,7 +58,7 @@ internal class Program
                 }
             };
 
-            await decoder.DecodeFileAsync("test_video.h264");
+            await decoder.DecodeFileAsync(filePath);
         }
         catch (Exception ex)
         {
@@ -48,3 +71,7 @@ internal class Program
         }
     }
 }
+#else
+        Console.WriteLine("This demo is only supported on Linux.");
+        await Task.CompletedTask;
+#endif

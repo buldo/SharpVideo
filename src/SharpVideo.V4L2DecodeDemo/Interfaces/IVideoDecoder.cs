@@ -5,7 +5,7 @@ namespace SharpVideo.V4L2DecodeDemo.Interfaces;
 /// <summary>
 /// Interface for video decoders that support streaming operations
 /// </summary>
-public interface IVideoDecoder : IDisposable
+public interface IVideoDecoder : IAsyncDisposable
 {
     /// <summary>
     /// Decodes a video file asynchronously

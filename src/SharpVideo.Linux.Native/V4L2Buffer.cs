@@ -39,6 +39,65 @@ public unsafe struct V4L2Plane
 }
 
 /// <summary>
+/// Struct for storing timestamp (equivalent to struct timeval in C)
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct TimeVal
+{
+    /// <summary>
+    /// Seconds
+    /// </summary>
+    public long TvSec;
+
+    /// <summary>
+    /// Microseconds
+    /// </summary>
+    public long TvUsec;
+}
+
+/// <summary>
+/// Struct for storing timecode (equivalent to struct v4l2_timecode in C)
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct V4L2Timecode
+{
+    /// <summary>
+    /// Type of the time code
+    /// </summary>
+    public uint Type;
+    
+    /// <summary>
+    /// Flags for the time code
+    /// </summary>
+    public uint Flags;
+    
+    /// <summary>
+    /// Frames
+    /// </summary>
+    public byte Frames;
+    
+    /// <summary>
+    /// Seconds
+    /// </summary>
+    public byte Seconds;
+    
+    /// <summary>
+    /// Minutes
+    /// </summary>
+    public byte Minutes;
+    
+    /// <summary>
+    /// Hours
+    /// </summary>
+    public byte Hours;
+    
+    /// <summary>
+    /// User bits
+    /// </summary>
+    public fixed byte Userbits[4];
+}
+
+/// <summary>
 /// Managed representation of the native <c>v4l2_buffer</c> structure.
 /// Describes a video buffer.
 /// </summary>
@@ -71,49 +130,14 @@ public unsafe struct V4L2Buffer
     public uint Field;
 
     /// <summary>
-    /// Time stamp (seconds)
+    /// Time stamp
     /// </summary>
-    public long TimestampSec;
+    public TimeVal Timestamp;
 
     /// <summary>
-    /// Time stamp (microseconds)
+    /// Time code
     /// </summary>
-    public long TimestampUsec;
-
-    /// <summary>
-    /// Time code type
-    /// </summary>
-    public uint TimecodeType;
-
-    /// <summary>
-    /// Time code flags
-    /// </summary>
-    public uint TimecodeFlags;
-
-    /// <summary>
-    /// Time code frames
-    /// </summary>
-    public byte TimecodeFrames;
-
-    /// <summary>
-    /// Time code seconds
-    /// </summary>
-    public byte TimecodeSeconds;
-
-    /// <summary>
-    /// Time code minutes
-    /// </summary>
-    public byte TimecodeMinutes;
-
-    /// <summary>
-    /// Time code hours
-    /// </summary>
-    public byte TimecodeHours;
-
-    /// <summary>
-    /// Time code user bits
-    /// </summary>
-    public fixed byte TimecodeUserbits[4];
+    public V4L2Timecode Timecode;
 
     /// <summary>
     /// Frame sequence number
