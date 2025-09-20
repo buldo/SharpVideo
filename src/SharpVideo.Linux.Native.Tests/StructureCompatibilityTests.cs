@@ -300,8 +300,8 @@ public unsafe class StructureCompatibilityTests
         Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.VIDEO_CAPTURE) != 0);
         Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0);
         Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.STREAMING) != 0);
-        Assert.True((nativeFilledStruct.DeviceCaps & (uint)V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0);
-        Assert.True((nativeFilledStruct.DeviceCaps & (uint)V4L2Capabilities.STREAMING) != 0);
+        Assert.True((nativeFilledStruct.DeviceCaps & V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0);
+        Assert.True((nativeFilledStruct.DeviceCaps & V4L2Capabilities.STREAMING) != 0);
     }
 
     [Fact]

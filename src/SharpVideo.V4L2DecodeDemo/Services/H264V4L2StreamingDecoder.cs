@@ -50,7 +50,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         _configuration = configuration ?? new DecoderConfiguration();
 
         var deviceLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<V4L2DeviceManager>();
-        _deviceManager = deviceManager ?? new V4L2DeviceManager(deviceLogger, _configuration);
+        _deviceManager = deviceManager ?? new V4L2DeviceManager(deviceLogger);
 
         // Initialize NALU parser
         var naluParserLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<H264NaluParser>();
@@ -142,7 +142,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     private async Task InitializeDecoderAsync(CancellationToken cancellationToken)
     {
         // Find suitable decoder device
-        var devicePath = await _deviceManager.FindH264DecoderDeviceAsync();
+        var devicePath = _deviceManager.FindH264DecoderDevice();
         if (string.IsNullOrEmpty(devicePath))
         {
             throw new InvalidOperationException("No suitable H.264 decoder device found");

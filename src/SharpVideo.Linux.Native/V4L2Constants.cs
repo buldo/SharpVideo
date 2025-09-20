@@ -52,44 +52,6 @@ public enum V4L2Field : uint
 }
 
 /// <summary>
-/// V4L2 capability flags
-/// </summary>
-[Flags]
-public enum V4L2Capabilities : uint
-{
-    VIDEO_CAPTURE = 0x00000001,
-    VIDEO_OUTPUT = 0x00000002,
-    VIDEO_OVERLAY = 0x00000004,
-    VBI_CAPTURE = 0x00000010,
-    VBI_OUTPUT = 0x00000020,
-    SLICED_VBI_CAPTURE = 0x00000040,
-    SLICED_VBI_OUTPUT = 0x00000080,
-    RDS_CAPTURE = 0x00000100,
-    VIDEO_OUTPUT_OVERLAY = 0x00000200,
-    HW_FREQ_SEEK = 0x00000400,
-    RDS_OUTPUT = 0x00000800,
-    VIDEO_CAPTURE_MPLANE = 0x00001000,
-    VIDEO_OUTPUT_MPLANE = 0x00002000,
-    VIDEO_M2M_MPLANE = 0x00004000,
-    VIDEO_M2M = 0x00008000,
-    TUNER = 0x00010000,
-    AUDIO = 0x00020000,
-    RADIO = 0x00040000,
-    MODULATOR = 0x00080000,
-    SDR_CAPTURE = 0x00100000,
-    EXT_PIX_FORMAT = 0x00200000,
-    SDR_OUTPUT = 0x00400000,
-    META_CAPTURE = 0x00800000,
-    READWRITE = 0x01000000,
-    ASYNCIO = 0x02000000,
-    STREAMING = 0x04000000,
-    META_OUTPUT = 0x08000000,
-    TOUCH = 0x10000000,
-    IO_MC = 0x20000000,
-    DEVICE_CAPS = 0x80000000,
-}
-
-/// <summary>
 /// V4L2 buffer flags
 /// </summary>
 [Flags]
@@ -140,77 +102,6 @@ public enum V4L2EncoderCommand : uint
     STOP = 1,
     PAUSE = 2,
     RESUME = 3,
-}
-
-/// <summary>
-/// Common V4L2 pixel formats (FOURCC codes)
-/// </summary>
-public static class V4L2PixelFormats
-{
-    private static uint v4l2_fourcc(char a, char b, char c, char d)
-    {
-        return (uint)((byte)a | ((byte)b << 8) | ((byte)c << 16) | ((byte)d << 24));
-    }
-
-    // Multiplanar formats (most commonly used)
-    public static readonly uint NV12M = v4l2_fourcc('N', 'M', '1', '2');
-    public static readonly uint NV21M = v4l2_fourcc('N', 'M', '2', '1');
-    public static readonly uint NV16M = v4l2_fourcc('N', 'M', '1', '6');
-    public static readonly uint NV61M = v4l2_fourcc('N', 'M', '6', '1');
-
-    // RGB formats
-    public static readonly uint RGB332 = v4l2_fourcc('R', 'G', 'B', '1');
-    public static readonly uint RGB444 = v4l2_fourcc('R', '4', '4', '4');
-    public static readonly uint ARGB444 = v4l2_fourcc('A', 'R', '1', '2');
-    public static readonly uint XRGB444 = v4l2_fourcc('X', 'R', '1', '2');
-    public static readonly uint RGB555 = v4l2_fourcc('R', 'G', 'B', 'O');
-    public static readonly uint ARGB555 = v4l2_fourcc('A', 'R', '1', '5');
-    public static readonly uint XRGB555 = v4l2_fourcc('X', 'R', '1', '5');
-    public static readonly uint RGB565 = v4l2_fourcc('R', 'G', 'B', 'P');
-    public static readonly uint BGR24 = v4l2_fourcc('B', 'G', 'R', '3');
-    public static readonly uint RGB24 = v4l2_fourcc('R', 'G', 'B', '3');
-    public static readonly uint BGR32 = v4l2_fourcc('B', 'G', 'R', '4');
-    public static readonly uint ABGR32 = v4l2_fourcc('A', 'R', '2', '4');
-    public static readonly uint XBGR32 = v4l2_fourcc('X', 'R', '2', '4');
-    public static readonly uint RGB32 = v4l2_fourcc('R', 'G', 'B', '4');
-    public static readonly uint ARGB32 = v4l2_fourcc('B', 'A', '2', '4');
-    public static readonly uint XRGB32 = v4l2_fourcc('B', 'X', '2', '4');
-
-    // YUV formats
-    public static readonly uint GREY = v4l2_fourcc('G', 'R', 'E', 'Y');
-    public static readonly uint Y10 = v4l2_fourcc('Y', '1', '0', ' ');
-    public static readonly uint Y12 = v4l2_fourcc('Y', '1', '2', ' ');
-    public static readonly uint Y16 = v4l2_fourcc('Y', '1', '6', ' ');
-    public static readonly uint YUYV = v4l2_fourcc('Y', 'U', 'Y', 'V');
-    public static readonly uint YVYU = v4l2_fourcc('Y', 'V', 'Y', 'U');
-    public static readonly uint UYVY = v4l2_fourcc('U', 'Y', 'V', 'Y');
-    public static readonly uint VYUY = v4l2_fourcc('V', 'Y', 'U', 'Y');
-
-    // Planar YUV formats
-    public static readonly uint YUV420 = v4l2_fourcc('Y', 'U', '1', '2');
-    public static readonly uint YVU420 = v4l2_fourcc('Y', 'V', '1', '2');
-    public static readonly uint YUV422P = v4l2_fourcc('4', '2', '2', 'P');
-    public static readonly uint YUV444P = v4l2_fourcc('Y', '4', '4', 'P');
-
-    // More multiplanar formats
-    public static readonly uint YUV420M = v4l2_fourcc('Y', 'M', '1', '2');
-    public static readonly uint YVU420M = v4l2_fourcc('Y', 'M', '2', '1');
-    public static readonly uint YUV422M = v4l2_fourcc('Y', 'M', '4', '2');
-    public static readonly uint YVU422M = v4l2_fourcc('Y', 'M', '2', '4');
-    public static readonly uint YUV444M = v4l2_fourcc('Y', 'M', '4', '4');
-    public static readonly uint YVU444M = v4l2_fourcc('Y', 'M', '6', '4');
-
-    // Compressed formats
-    public static readonly uint MJPEG = v4l2_fourcc('M', 'J', 'P', 'G');
-    public static readonly uint JPEG = v4l2_fourcc('J', 'P', 'E', 'G');
-    public static readonly uint H264 = v4l2_fourcc('H', '2', '6', '4');
-    public static readonly uint H263 = v4l2_fourcc('H', '2', '6', '3');
-    public static readonly uint MPEG1 = v4l2_fourcc('M', 'P', 'G', '1');
-    public static readonly uint MPEG2 = v4l2_fourcc('M', 'P', 'G', '2');
-    public static readonly uint MPEG4 = v4l2_fourcc('M', 'P', 'G', '4');
-    public static readonly uint VP8 = v4l2_fourcc('V', 'P', '8', '0');
-    public static readonly uint VP9 = v4l2_fourcc('V', 'P', '9', '0');
-    public static readonly uint HEVC = v4l2_fourcc('H', 'E', 'V', 'C');
 }
 
 /// <summary>

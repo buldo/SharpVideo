@@ -37,7 +37,7 @@ public unsafe struct V4L2Capability
     /// <summary>
     /// Available capabilities of the opened device node
     /// </summary>
-    public uint DeviceCaps;
+    public V4L2Capabilities DeviceCaps;
 
     /// <summary>
     /// Reserved for future extensions

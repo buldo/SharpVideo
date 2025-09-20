@@ -246,7 +246,7 @@ public class IoctlTests
                         Assert.NotEqual(0u, capability.Capabilities);
 
                         // If device supports multiplanar capture, test format operations
-                        if ((capability.DeviceCaps & (uint)V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0)
+                        if ((capability.DeviceCaps & V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0)
                         {
                             var format = new V4L2Format
                             {
