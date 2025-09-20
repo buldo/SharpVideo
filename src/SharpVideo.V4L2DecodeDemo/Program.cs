@@ -1,8 +1,10 @@
+using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2DecodeDemo.Services;
 
 namespace SharpVideo.V4L2DecodeDemo;
 
+[SupportedOSPlatform("linux")]
 internal class Program
 {
     static async Task Main(string[] args)

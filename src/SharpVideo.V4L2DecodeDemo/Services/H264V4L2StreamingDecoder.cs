@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2DecodeDemo.Interfaces;
@@ -9,9 +10,22 @@ using SharpVideo.V4L2DecodeDemo.Models;
 namespace SharpVideo.V4L2DecodeDemo.Services;
 
 /// <summary>
-/// High-performance streaming H.264 decoder using V4L2 hardware acceleration.
-/// Implements enterprise-grade patterns with proper resource management, error handling, and extensibility.
+/// High-performance streaming H.264 decoder using V4L2 hardware acceleration for stateless decoders.
+///
+/// Stateless decoders require explicit parameter sets (SPS/PPS) with each frame decode request.
+/// This implementation:
+/// 1. Extracts SPS/PPS parameter sets from the beginning of the stream
+/// 2. Includes parameter sets with each frame sent to the decoder
+/// 3. Manages buffers optimized for stateless operation
+/// 4. Provides both chunk-based and NALU-by-NALU processing modes
+///
+/// Key differences from stateful decoders:
+/// - Parameter sets are cached and sent with each frame
+/// - No decoder state is maintained between frames
+/// - Each decode request is completely self-contained
+/// - Better suited for hardware accelerated decoding on embedded systems
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class H264V4L2StreamingDecoder : IVideoDecoder
 {
     #region Fields and Events
@@ -28,6 +42,13 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     private uint _outputBufferCount;
     private uint _captureBufferCount;
     private int _framesDecoded;
+
+    // Stateless decoder specific fields
+    private byte[]? _currentSps;
+    private byte[]? _currentPps;
+    private readonly Dictionary<uint, byte[]> _spsParameters = new();
+    private readonly Dictionary<uint, byte[]> _ppsParameters = new();
+    private bool _hasValidParameterSets;
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
@@ -62,7 +83,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     #region Public API
 
     /// <summary>
-    /// Decodes an H.264 file using V4L2 hardware acceleration
+    /// Decodes an H.264 file using V4L2 hardware acceleration (stateless decoder)
     /// </summary>
     public async Task DecodeFileAsync(string filePath, CancellationToken cancellationToken = default)
     {
@@ -72,7 +93,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"Video file not found: {filePath}");
 
-        _logger.LogInformation("Starting H.264 decode of {FilePath}", filePath);
+        _logger.LogInformation("Starting H.264 stateless decode of {FilePath}", filePath);
         var stopwatch = Stopwatch.StartNew();
 
         try
@@ -80,16 +101,19 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             // Initialize decoder
             await InitializeDecoderAsync(cancellationToken);
 
-            // Process the file
-            await ProcessVideoFileAsync(filePath, cancellationToken);
+            // Extract parameter sets first
+            await ExtractParameterSetsAsync(filePath, cancellationToken);
+
+            // Process the file with stateless decoding
+            await ProcessVideoFileStatelessAsync(filePath, cancellationToken);
 
             stopwatch.Stop();
-            _logger.LogInformation("Decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
+            _logger.LogInformation("Stateless decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
                 _framesDecoded, stopwatch.Elapsed.TotalSeconds, _framesDecoded / stopwatch.Elapsed.TotalSeconds);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error during H.264 decoding");
+            _logger.LogError(ex, "Error during H.264 stateless decoding");
             throw;
         }
         finally
@@ -99,7 +123,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     }
 
     /// <summary>
-    /// Decodes an H.264 file using V4L2 hardware acceleration, processing data NALU by NALU
+    /// Decodes an H.264 file using V4L2 hardware acceleration, processing data NALU by NALU (stateless decoder)
     /// </summary>
     public async Task DecodeFileNaluByNaluAsync(string filePath, CancellationToken cancellationToken = default)
     {
@@ -109,7 +133,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"Video file not found: {filePath}");
 
-        _logger.LogInformation("Starting H.264 NALU-by-NALU decode of {FilePath}", filePath);
+        _logger.LogInformation("Starting H.264 stateless NALU-by-NALU decode of {FilePath}", filePath);
         var stopwatch = Stopwatch.StartNew();
 
         try
@@ -117,16 +141,19 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             // Initialize decoder
             await InitializeDecoderAsync(cancellationToken);
 
-            // Process the file NALU by NALU
-            await ProcessVideoFileNaluByNaluAsync(filePath, cancellationToken);
+            // Extract parameter sets first for stateless decoding
+            await ExtractParameterSetsAsync(filePath, cancellationToken);
+
+            // Process the file NALU by NALU with stateless decoding
+            await ProcessVideoFileNaluByNaluStatelessAsync(filePath, cancellationToken);
 
             stopwatch.Stop();
-            _logger.LogInformation("NALU-by-NALU decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
+            _logger.LogInformation("Stateless NALU-by-NALU decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
                 _framesDecoded, stopwatch.Elapsed.TotalSeconds, _framesDecoded / stopwatch.Elapsed.TotalSeconds);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error during H.264 NALU-by-NALU decoding");
+            _logger.LogError(ex, "Error during H.264 stateless NALU-by-NALU decoding");
             throw;
         }
         finally
@@ -189,20 +216,20 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
     private async Task ConfigureFormatsAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Configuring decoder formats...");
+        _logger.LogInformation("Configuring stateless decoder formats...");
 
-        // Configure output format (H.264 input)
+        // Configure output format (H.264 input) for stateless decoder
         var outputFormat = new V4L2Format
         {
             Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE
         };
 
-        // Try multiple H.264 formats in order of likely compatibility
+        // Stateless decoders often prefer specific H.264 formats
         uint[] h264Formats = new uint[]
         {
             0x34363248, // H264 (standard)
+            0x34363253, // S264 (H264 Parsed Slice Data) - often preferred for stateless
             0x30313748, // H710 - sometimes used for H.264 on embedded platforms
-            0x34363253, // S264 (H264 Parsed Slice Data)
             0x31435641, // AVC1
             0x31637661, // avc1 (lowercase variant)
             0x48323634, // H264 (alternate byte order)
@@ -212,23 +239,25 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         bool formatSet = false;
         foreach (var format in h264Formats)
         {
-                var outputPixMp = new V4L2PixFormatMplane
-                {
-                    Width = _configuration.InitialWidth,
-                    Height = _configuration.InitialHeight,
-                    PixelFormat = format,
-                    NumPlanes = 1,
-                    Field = (uint)V4L2Field.NONE,
-                    // Some decoders require these fields to be properly set
-                    Colorspace = 5, // V4L2_COLORSPACE_REC709
-                    YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
-                    Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
-                    XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
-                };
-                outputFormat.Pix_mp = outputPixMp;            var formatResult = LibV4L2.SetFormat(_deviceFd, ref outputFormat);
+            var outputPixMp = new V4L2PixFormatMplane
+            {
+                Width = _configuration.InitialWidth,
+                Height = _configuration.InitialHeight,
+                PixelFormat = format,
+                NumPlanes = 1,
+                Field = (uint)V4L2Field.NONE,
+                // Critical for stateless decoders
+                Colorspace = 5, // V4L2_COLORSPACE_REC709
+                YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
+                Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
+                XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
+            };
+            outputFormat.Pix_mp = outputPixMp;
+
+            var formatResult = LibV4L2.SetFormat(_deviceFd, ref outputFormat);
             if (formatResult.Success)
             {
-                _logger.LogInformation("Successfully set H.264 format: 0x{Format:X8}", format);
+                _logger.LogInformation("Successfully set H.264 format for stateless decoder: 0x{Format:X8}", format);
                 formatSet = true;
                 break;
             }
@@ -241,17 +270,16 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             }
         }
 
-        // If we couldn't set a format, throw an exception
         if (!formatSet)
         {
-            _logger.LogError("Failed to set any supported H.264 format on the device");
+            _logger.LogError("Failed to set any supported H.264 format for stateless decoder");
             throw new InvalidOperationException(
-                "Failed to set any supported H.264 format on the device. " +
-                "This may indicate that the hardware decoder doesn't support standard H.264 formats, " +
+                "Failed to set any supported H.264 format for stateless decoder. " +
+                "This may indicate that the hardware decoder doesn't support stateless H.264 decoding, " +
                 "or requires special configuration not currently implemented.");
         }
 
-        _logger.LogInformation("Set output format: {Width}x{Height}, PixelFormat: 0x{PixelFormat:X8}",
+        _logger.LogInformation("Set output format for stateless decoder: {Width}x{Height}, PixelFormat: 0x{PixelFormat:X8}",
             outputFormat.Pix_mp.Width, outputFormat.Pix_mp.Height, outputFormat.Pix_mp.PixelFormat);
 
         // Configure capture format (decoded output)
@@ -306,12 +334,12 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
     private async Task SetupBuffersAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Setting up V4L2 buffers...");
+        _logger.LogInformation("Setting up V4L2 buffers for stateless decoder...");
 
         await SetupOutputBuffersAsync(cancellationToken);
         await SetupCaptureBuffersAsync(cancellationToken);
 
-        _logger.LogInformation("Buffer setup completed. Output: {OutputCount}, Capture: {CaptureCount}",
+        _logger.LogInformation("Stateless decoder buffer setup completed. Output: {OutputCount}, Capture: {CaptureCount}",
             _outputBufferCount, _captureBufferCount);
     }
 
@@ -491,30 +519,324 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
     #endregion
 
-    #region Streaming Operations
+    #region Stateless Decoder Operations
+
+    /// <summary>
+    /// Extracts SPS and PPS parameter sets from the H.264 stream for stateless decoding
+    /// </summary>
+    private async Task ExtractParameterSetsAsync(string filePath, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Extracting H.264 parameter sets from {FilePath}", filePath);
+
+        using var fileStream = File.OpenRead(filePath);
+        var nalus = new List<H264Nalu>();
+
+        // Extract first 1MB to find parameter sets
+        int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
+        var buffer = new byte[maxBytes];
+        int bytesRead = await fileStream.ReadAsync(buffer, 0, maxBytes, cancellationToken);
+
+        // Parse NALUs from the beginning of the stream
+        var initialNalus = _naluParser.ParseNalus(buffer, 0, bytesRead);
+
+        foreach (var nalu in initialNalus)
+        {
+            if (nalu.Type == 7) // SPS
+            {
+                _currentSps = nalu.Data;
+                _spsParameters[0] = nalu.Data; // Store with ID 0 for simplicity
+                _logger.LogInformation("Found SPS parameter set ({Size} bytes)", nalu.Data.Length);
+            }
+            else if (nalu.Type == 8) // PPS
+            {
+                _currentPps = nalu.Data;
+                _ppsParameters[0] = nalu.Data; // Store with ID 0 for simplicity
+                _logger.LogInformation("Found PPS parameter set ({Size} bytes)", nalu.Data.Length);
+            }
+
+            // Stop once we have both SPS and PPS
+            if (_currentSps != null && _currentPps != null)
+                break;
+        }
+
+        if (_currentSps == null || _currentPps == null)
+        {
+            throw new InvalidOperationException(
+                $"Could not find required parameter sets. SPS: {(_currentSps != null ? "Found" : "Missing")}, " +
+                $"PPS: {(_currentPps != null ? "Found" : "Missing")}");
+        }
+
+        _hasValidParameterSets = true;
+        _logger.LogInformation("Successfully extracted parameter sets for stateless decoding");
+    }
+
+    /// <summary>
+    /// Processes video file for stateless decoder - each frame must include parameter sets
+    /// </summary>
+    private async Task ProcessVideoFileStatelessAsync(string filePath, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Processing video file for stateless decoder: {FilePath}", filePath);
+
+        if (!_hasValidParameterSets)
+        {
+            throw new InvalidOperationException("Parameter sets must be extracted before processing frames");
+        }
+
+        var fileInfo = new FileInfo(filePath);
+        long totalBytes = fileInfo.Length;
+        long processedBytes = 0;
+        var stopwatch = Stopwatch.StartNew();
+
+        using var fileStream = File.OpenRead(filePath);
+        uint outputBufferIndex = 0;
+
+        _logger.LogInformation("Starting stateless decode loop...");
+
+        // Process file in chunks, identifying complete frames
+        await foreach (var nalu in _naluParser.ParseNalusFromStreamAsync(fileStream, cancellationToken: cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Skip parameter sets as we'll include them with each frame
+            if (nalu.Type == 7 || nalu.Type == 8)
+            {
+                processedBytes += nalu.Data.Length;
+                continue;
+            }
+
+            // Process frame NALUs (slices)
+            if (IsFrameNalu(nalu.Type))
+            {
+                // For stateless decoder, send parameter sets + frame data together
+                await QueueStatelessFrameAsync(nalu, outputBufferIndex, cancellationToken);
+                outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
+
+                // Dequeue decoded frames
+                await DequeueDecodedFramesAsync(cancellationToken);
+
+                processedBytes += nalu.Data.Length;
+                ReportProgress(processedBytes, totalBytes, stopwatch.Elapsed);
+            }
+            else
+            {
+                // Handle other NALUs (SEI, AUD, etc.)
+                processedBytes += nalu.Data.Length;
+            }
+
+            // Small delay to prevent overwhelming the decoder
+            await Task.Delay(1, cancellationToken);
+        }
+
+        // Flush remaining frames
+        await FlushDecoderAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Processes video file NALU by NALU for stateless decoder
+    /// </summary>
+    private async Task ProcessVideoFileNaluByNaluStatelessAsync(string filePath, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Processing video file NALU by NALU for stateless decoder: {FilePath}", filePath);
+
+        if (!_hasValidParameterSets)
+        {
+            throw new InvalidOperationException("Parameter sets must be extracted before processing frames");
+        }
+
+        var fileInfo = new FileInfo(filePath);
+        long totalBytes = fileInfo.Length;
+        long processedBytes = 0;
+        var stopwatch = Stopwatch.StartNew();
+        uint outputBufferIndex = 0;
+        int naluCount = 0;
+
+        _logger.LogInformation("Starting stateless NALU-by-NALU decode loop...");
+
+        using var fileStream = File.OpenRead(filePath);
+
+        // Collect NALUs that belong to the same frame
+        var currentFrame = new List<H264Nalu>();
+
+        await foreach (var nalu in _naluParser.ParseNalusFromStreamAsync(fileStream, cancellationToken: cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            naluCount++;
+
+            // Skip parameter sets since we'll include them with each frame
+            if (nalu.Type == 7 || nalu.Type == 8)
+            {
+                processedBytes += nalu.Data.Length;
+                continue;
+            }
+
+            // Check if this NALU starts a new frame
+            if (IsFrameStartNalu(nalu.Type))
+            {
+                // Process previous frame if we have one
+                if (currentFrame.Count > 0)
+                {
+                    await QueueStatelessFrameSetAsync(currentFrame, outputBufferIndex, cancellationToken);
+                    outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
+                    await DequeueDecodedFramesAsync(cancellationToken);
+                    currentFrame.Clear();
+                }
+            }
+
+            // Add NALU to current frame if it's relevant
+            if (IsFrameNalu(nalu.Type))
+            {
+                currentFrame.Add(nalu);
+            }
+
+            processedBytes += nalu.Data.Length;
+            ReportProgress(processedBytes, totalBytes, stopwatch.Elapsed);
+
+            // Small delay periodically
+            if (naluCount % 10 == 0)
+            {
+                await Task.Delay(1, cancellationToken);
+            }
+        }
+
+        // Process final frame if any
+        if (currentFrame.Count > 0)
+        {
+            await QueueStatelessFrameSetAsync(currentFrame, outputBufferIndex, cancellationToken);
+            await DequeueDecodedFramesAsync(cancellationToken);
+        }
+
+        _logger.LogInformation("Processed {NaluCount} NALUs from {FilePath}", naluCount, filePath);
+
+        // Flush remaining frames
+        await FlushDecoderAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Queues a frame with parameter sets for stateless decoding
+    /// </summary>
+    private async Task QueueStatelessFrameAsync(H264Nalu frameNalu, uint bufferIndex, CancellationToken cancellationToken)
+    {
+        if (!_hasValidParameterSets)
+        {
+            throw new InvalidOperationException("Parameter sets not available for stateless decoding");
+        }
+
+        var frameData = new List<byte>();
+
+        // Add SPS parameter set
+        frameData.AddRange(_currentSps!);
+
+        // Add PPS parameter set
+        frameData.AddRange(_currentPps!);
+
+        // Add frame NALU
+        frameData.AddRange(frameNalu.Data);
+
+        var combinedData = frameData.ToArray();
+
+        _logger.LogDebug("Queuing stateless frame: SPS({SpsByteCount}) + PPS({PpsByteCount}) + Frame({FrameByteCount}) = {TotalByteCount} bytes",
+            _currentSps.Length, _currentPps.Length, frameNalu.Data.Length, combinedData.Length);
+
+        await QueueH264DataAsync(combinedData, combinedData.Length, bufferIndex, cancellationToken,
+            isKeyFrame: frameNalu.IsKeyFrame || frameNalu.Type == 5);
+    }
+
+    /// <summary>
+    /// Queues a set of NALUs that form a frame with parameter sets for stateless decoding
+    /// </summary>
+    private async Task QueueStatelessFrameSetAsync(List<H264Nalu> frameNalus, uint bufferIndex, CancellationToken cancellationToken)
+    {
+        if (!_hasValidParameterSets || frameNalus.Count == 0)
+        {
+            return;
+        }
+
+        var frameData = new List<byte>();
+
+        // Add SPS parameter set
+        frameData.AddRange(_currentSps!);
+
+        // Add PPS parameter set
+        frameData.AddRange(_currentPps!);
+
+        // Add all frame NALUs
+        bool isKeyFrame = false;
+        foreach (var nalu in frameNalus)
+        {
+            frameData.AddRange(nalu.Data);
+            if (nalu.IsKeyFrame || nalu.Type == 5)
+                isKeyFrame = true;
+        }
+
+        var combinedData = frameData.ToArray();
+
+        _logger.LogDebug("Queuing stateless frame set: SPS({SpsByteCount}) + PPS({PpsByteCount}) + {NaluCount} NALUs = {TotalByteCount} bytes",
+            _currentSps.Length, _currentPps.Length, frameNalus.Count, combinedData.Length);
+
+        await QueueH264DataAsync(combinedData, combinedData.Length, bufferIndex, cancellationToken, isKeyFrame: isKeyFrame);
+    }
+
+    /// <summary>
+    /// Determines if a NALU type represents frame data
+    /// </summary>
+    private static bool IsFrameNalu(byte naluType)
+    {
+        return naluType switch
+        {
+            1 => true,  // Non-IDR slice
+            5 => true,  // IDR slice
+            2 => true,  // Data Partition A
+            3 => true,  // Data Partition B
+            4 => true,  // Data Partition C
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Determines if a NALU type starts a new frame
+    /// </summary>
+    private static bool IsFrameStartNalu(byte naluType)
+    {
+        return naluType switch
+        {
+            1 => true,  // Non-IDR slice (first slice of frame)
+            5 => true,  // IDR slice (first slice of frame)
+            9 => true,  // Access Unit Delimiter
+            _ => false
+        };
+    }
+
+    #endregion
+
+    #region Legacy Streaming Operations (kept for compatibility)
 
     private async Task StartStreamingAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Starting V4L2 streaming...");
+        _logger.LogInformation("Starting V4L2 streaming for stateless decoder...");
 
         // Start output streaming
         var result = LibV4L2.StreamOn(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE);
         if (!result.Success)
         {
-            throw new InvalidOperationException($"Failed to start output streaming: {result.ErrorMessage}");
+            throw new InvalidOperationException($"Failed to start output streaming for stateless decoder: {result.ErrorMessage}");
         }
 
         // Start capture streaming
         result = LibV4L2.StreamOn(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE);
         if (!result.Success)
         {
-            throw new InvalidOperationException($"Failed to start capture streaming: {result.ErrorMessage}");
+            throw new InvalidOperationException($"Failed to start capture streaming for stateless decoder: {result.ErrorMessage}");
         }
 
-        _logger.LogInformation("V4L2 streaming started successfully");
+        _logger.LogInformation("V4L2 streaming started successfully for stateless decoder");
         await Task.CompletedTask;
     }
 
+    /// <summary>
+    /// LEGACY: Processes video file for stateful decoder - deprecated, use ProcessVideoFileStatelessAsync instead
+    /// This method is kept for compatibility but should not be used with stateless decoders
+    /// </summary>
+    [Obsolete("This method is designed for stateful decoders. Use ProcessVideoFileStatelessAsync for stateless decoders.")]
     private async Task ProcessVideoFileAsync(string filePath, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Processing video file: {FilePath}", filePath);
@@ -652,6 +974,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         await FlushDecoderAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// LEGACY: Processes video file NALU by NALU for stateful decoder - deprecated, use ProcessVideoFileNaluByNaluStatelessAsync instead
+    /// This method is kept for compatibility but should not be used with stateless decoders
+    /// </summary>
+    [Obsolete("This method is designed for stateful decoders. Use ProcessVideoFileNaluByNaluStatelessAsync for stateless decoders.")]
     private async Task ProcessVideoFileNaluByNaluAsync(string filePath, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Processing video file NALU by NALU: {FilePath}", filePath);
@@ -1141,11 +1468,126 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
     #endregion
 
-    #region H.264 Processing
+    #region H.264 Processing for Stateless Decoder
 
     /// <summary>
-    /// Processes H.264 data to ensure it has valid NAL units for the V4L2 decoder
+    /// Processes H.264 data for stateless decoder - ensures proper formatting with parameter sets
     /// </summary>
+    private byte[] ProcessH264DataForStatelessDecoder(byte[] buffer, int length, bool includeParameterSets = true)
+    {
+        if (length <= 4)
+        {
+            _logger.LogWarning("Buffer too small for H.264 data: {Length} bytes", length);
+            return new byte[0];
+        }
+
+        try
+        {
+            using var ms = new MemoryStream();
+
+            // For stateless decoders, we handle parameter sets separately
+            // This method focuses on proper NALU formatting
+
+            var nalUnits = new List<(int start, int end, byte nalType)>();
+
+            // Scan for NAL units
+            int i = 0;
+            while (i < length - 2)
+            {
+                if (i + 1 < length && buffer[i] == 0 && buffer[i+1] == 0)
+                {
+                    bool is4ByteStartCode = (i+3 < length && buffer[i+2] == 0 && buffer[i+3] == 1);
+                    bool is3ByteStartCode = (i+2 < length && buffer[i+2] == 1);
+
+                    if (is4ByteStartCode || is3ByteStartCode)
+                    {
+                        int startCodeSize = is4ByteStartCode ? 4 : 3;
+                        int nalStart = i + startCodeSize;
+
+                        if (nalStart < length)
+                        {
+                            byte nalType = (byte)(buffer[nalStart] & 0x1F);
+
+                            // Find the end of this NAL
+                            int nalEnd = length;
+                            for (int j = nalStart + 1; j < length - 2; j++)
+                            {
+                                if (j + 1 < length && buffer[j] == 0 && buffer[j+1] == 0)
+                                {
+                                    bool nextIs4ByteStartCode = (j+3 < length && buffer[j+2] == 0 && buffer[j+3] == 1);
+                                    bool nextIs3ByteStartCode = (j+2 < length && buffer[j+2] == 1);
+
+                                    if (nextIs4ByteStartCode || nextIs3ByteStartCode)
+                                    {
+                                        nalEnd = j;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            nalUnits.Add((nalStart, nalEnd, nalType));
+                            i = nalEnd;
+                        }
+                        else
+                        {
+                            i += startCodeSize;
+                        }
+                    }
+                    else
+                    {
+                        i++;
+                    }
+                }
+                else
+                {
+                    i++;
+                }
+            }
+
+            // Process NAL units with consistent 4-byte start codes for stateless decoder
+            if (nalUnits.Count == 0)
+            {
+                _logger.LogWarning("No valid NAL units found in buffer for stateless decoder");
+                // Add a start code and pass through - may be partial data
+                ms.Write(new byte[] { 0, 0, 0, 1 }, 0, 4);
+                ms.Write(buffer, 0, length);
+            }
+            else
+            {
+                _logger.LogDebug($"Processing {nalUnits.Count} NAL units for stateless decoder");
+
+                foreach (var nal in nalUnits)
+                {
+                    // Always use 4-byte start codes for consistency
+                    ms.Write(new byte[] { 0, 0, 0, 1 }, 0, 4);
+
+                    // Write the NAL data
+                    int startOffset = nal.start;
+                    if (startOffset < length && nal.end <= length)
+                    {
+                        int dataLength = nal.end - startOffset;
+                        ms.Write(buffer, startOffset, dataLength);
+                    }
+                }
+            }
+
+            return ms.ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing H.264 data for stateless decoder: {Message}", ex.Message);
+            // Return original data with start code if processing fails
+            var result = new byte[length + 4];
+            result[0] = 0; result[1] = 0; result[2] = 0; result[3] = 1;
+            Array.Copy(buffer, 0, result, 4, length);
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// LEGACY: Processes H.264 data for stateful decoder - deprecated, use ProcessH264DataForStatelessDecoder instead
+    /// </summary>
+    [Obsolete("This method is designed for stateful decoders. Use ProcessH264DataForStatelessDecoder for stateless decoders.")]
     private byte[] ProcessH264Data(byte[] buffer, int length)
     {
         // Early exit for empty buffers

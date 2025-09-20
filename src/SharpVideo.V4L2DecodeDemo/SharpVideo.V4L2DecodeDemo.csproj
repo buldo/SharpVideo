@@ -5,12 +5,8 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>linux</RuntimeIdentifiers>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
-    <DefineConstants>$(DefineConstants);LINUX</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

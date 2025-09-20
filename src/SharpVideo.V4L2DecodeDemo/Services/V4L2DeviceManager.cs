@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2DecodeDemo.Interfaces;
@@ -8,6 +9,7 @@ namespace SharpVideo.V4L2DecodeDemo.Services;
 /// <summary>
 /// Manages V4L2 device discovery and capability enumeration
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class V4L2DeviceManager : IV4L2DeviceManager
 {
     private readonly ILogger<V4L2DeviceManager> _logger;
