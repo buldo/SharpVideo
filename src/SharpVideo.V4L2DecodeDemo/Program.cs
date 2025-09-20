@@ -1,4 +1,3 @@
-#if LINUX
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2DecodeDemo.Services;
 
@@ -73,7 +72,3 @@ internal class Program
         }
     }
 }
-#else
-        Console.WriteLine("This demo is only supported on Linux.");
-        await Task.CompletedTask;
-#endif
