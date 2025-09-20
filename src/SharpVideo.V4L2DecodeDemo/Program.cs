@@ -58,7 +58,9 @@ internal class Program
                 }
             };
 
-            await decoder.DecodeFileAsync(filePath);
+            // Use NALU-by-NALU decoding for better hardware compatibility
+            Console.WriteLine("Using NALU-by-NALU decoding for optimal hardware decoder compatibility...");
+            await decoder.DecodeFileNaluByNaluAsync(filePath);
         }
         catch (Exception ex)
         {

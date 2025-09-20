@@ -19,7 +19,8 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     private readonly ILogger<H264V4L2StreamingDecoder> _logger;
     private readonly IV4L2DeviceManager _deviceManager;
     private readonly DecoderConfiguration _configuration;
-    
+    private readonly H264NaluParser _naluParser;
+
     private int _deviceFd = -1;
     private readonly List<MappedBuffer> _outputBuffers = new();
     private readonly List<MappedBuffer> _captureBuffers = new();
@@ -47,9 +48,13 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? new DecoderConfiguration();
-        
+
         var deviceLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<V4L2DeviceManager>();
         _deviceManager = deviceManager ?? new V4L2DeviceManager(deviceLogger, _configuration);
+
+        // Initialize NALU parser
+        var naluParserLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<H264NaluParser>();
+        _naluParser = new H264NaluParser(naluParserLogger);
     }
 
     #endregion
@@ -93,6 +98,43 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         }
     }
 
+    /// <summary>
+    /// Decodes an H.264 file using V4L2 hardware acceleration, processing data NALU by NALU
+    /// </summary>
+    public async Task DecodeFileNaluByNaluAsync(string filePath, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+            throw new ArgumentException("File path cannot be null or empty", nameof(filePath));
+
+        if (!File.Exists(filePath))
+            throw new FileNotFoundException($"Video file not found: {filePath}");
+
+        _logger.LogInformation("Starting H.264 NALU-by-NALU decode of {FilePath}", filePath);
+        var stopwatch = Stopwatch.StartNew();
+
+        try
+        {
+            // Initialize decoder
+            await InitializeDecoderAsync(cancellationToken);
+
+            // Process the file NALU by NALU
+            await ProcessVideoFileNaluByNaluAsync(filePath, cancellationToken);
+
+            stopwatch.Stop();
+            _logger.LogInformation("NALU-by-NALU decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
+                _framesDecoded, stopwatch.Elapsed.TotalSeconds, _framesDecoded / stopwatch.Elapsed.TotalSeconds);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during H.264 NALU-by-NALU decoding");
+            throw;
+        }
+        finally
+        {
+            await CleanupAsync();
+        }
+    }
+
     #endregion
 
     #region Initialization
@@ -112,7 +154,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         {
             var error = Marshal.GetLastWin32Error();
             string errorDescription = GetErrorDescription(error);
-            _logger.LogError("Failed to open device {DevicePath}: {ErrorDesc} (Code: {ErrorCode})", 
+            _logger.LogError("Failed to open device {DevicePath}: {ErrorDesc} (Code: {ErrorCode})",
                 devicePath, errorDescription, error);
             throw new InvalidOperationException($"Failed to open device {devicePath}. {errorDescription}. " +
                                                $"Check permissions and make sure the device is not already in use.");
@@ -161,7 +203,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             0x34363248, // H264 (standard)
             0x30313748, // H710 - sometimes used for H.264 on embedded platforms
             0x34363253, // S264 (H264 Parsed Slice Data)
-            0x31435641, // AVC1 
+            0x31435641, // AVC1
             0x31637661, // avc1 (lowercase variant)
             0x48323634, // H264 (alternate byte order)
             0x30323134  // 2014 (RockChip specific H264 format)
@@ -194,11 +236,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             {
                 int errorCode = Marshal.GetLastWin32Error();
                 string errorDesc = GetErrorDescription(errorCode);
-                _logger.LogDebug("Format 0x{Format:X8} not supported: {Error} - {ErrorDesc}", 
+                _logger.LogDebug("Format 0x{Format:X8} not supported: {Error} - {ErrorDesc}",
                     format, formatResult.ErrorMessage, errorDesc);
             }
         }
-        
+
         // If we couldn't set a format, throw an exception
         if (!formatSet)
         {
@@ -238,7 +280,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         if (!result.Success)
         {
             _logger.LogWarning("Preferred format failed, trying alternative...");
-            
+
             // Try alternative format
             capturePixMp.PixelFormat = _configuration.AlternativePixelFormat;
             capturePixMp.NumPlanes = 3; // YUV420 typically has 3 planes
@@ -252,7 +294,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         }
 
         _logger.LogInformation("Set capture format: {Width}x{Height}, PixelFormat: 0x{PixelFormat:X8}, Planes: {NumPlanes}",
-            captureFormat.Pix_mp.Width, captureFormat.Pix_mp.Height, 
+            captureFormat.Pix_mp.Width, captureFormat.Pix_mp.Height,
             captureFormat.Pix_mp.PixelFormat, captureFormat.Pix_mp.NumPlanes);
 
         await Task.CompletedTask; // Make method async for consistency
@@ -494,7 +536,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         }
 
         _logger.LogInformation("Starting decode loop...");
-        
+
         // For some V4L2 decoders, especially RockChip ones, we need to send smaller chunks
         // with very clear NAL boundaries to avoid EBADR errors
         int smallChunkSize = 1024; // Try smaller chunks
@@ -518,11 +560,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             if (!firstFrameSent)
             {
                 _logger.LogDebug("Processing first frame specially");
-                
+
                 // Look for SPS+PPS NAL units to send as first frame
                 // Process H.264 data to ensure proper NAL units
                 byte[] processedBuffer = ProcessH264Data(buffer, bytesRead);
-                
+
                 // Queue the processed H.264 data to decoder
                 if (processedBuffer.Length > 0)
                 {
@@ -536,14 +578,14 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             {
                 // For subsequent frames, break into smaller chunks at NAL boundaries
                 _logger.LogTrace("Processing subsequent frame in smaller chunks");
-                
+
                 // Split into smaller chunks for better compatibility
                 int position = 0;
                 while (position < bytesRead)
                 {
                     // Determine chunk size, but try to find NAL boundary
                     int endPos = Math.Min(position + smallChunkSize, bytesRead);
-                    
+
                     // If we're not at the end, try to find a NAL boundary
                     if (endPos < bytesRead)
                     {
@@ -559,22 +601,22 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                             }
                         }
                     }
-                    
+
                     // Process this chunk
                     int chunkSize = endPos - position;
                     if (chunkSize > 0)
                     {
                         byte[] chunk = new byte[chunkSize];
                         Array.Copy(buffer, position, chunk, 0, chunkSize);
-                        
+
                         byte[] processedChunk = ProcessH264Data(chunk, chunkSize);
-                        
+
                         if (processedChunk.Length > 0)
                         {
                             // Check if this chunk might contain an SPS (keyframe)
                             bool isChunkWithSps = false;
                             for (int i = 0; i < chunk.Length - 5; i++) {
-                                if (chunk[i] == 0 && chunk[i+1] == 0 && 
+                                if (chunk[i] == 0 && chunk[i+1] == 0 &&
                                     ((chunk[i+2] == 1) || (chunk[i+2] == 0 && chunk[i+3] == 1))) {
                                     int nalHeaderPos = chunk[i+2] == 0 ? i+4 : i+3;
                                     if (nalHeaderPos < chunk.Length) {
@@ -586,12 +628,12 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                                     }
                                 }
                             }
-                            
+
                             await QueueH264DataAsync(processedChunk, processedChunk.Length, outputBufferIndex, cancellationToken, isKeyFrame: isChunkWithSps);
                             outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
                         }
                     }
-                    
+
                     position = endPos;
                 }
             }
@@ -610,6 +652,182 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         await FlushDecoderAsync(cancellationToken);
     }
 
+    private async Task ProcessVideoFileNaluByNaluAsync(string filePath, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Processing video file NALU by NALU: {FilePath}", filePath);
+
+        var fileInfo = new FileInfo(filePath);
+        long totalBytes = fileInfo.Length;
+        long processedBytes = 0;
+        var stopwatch = Stopwatch.StartNew();
+        uint outputBufferIndex = 0;
+        int naluCount = 0;
+
+        // Send start command to decoder
+        var startResult = LibV4L2.StartDecoder(_deviceFd);
+        if (!startResult.Success)
+        {
+            _logger.LogWarning("Start decoder command failed: {Error}", startResult.ErrorMessage);
+        }
+
+        _logger.LogInformation("Starting NALU-by-NALU decode loop...");
+
+        using var fileStream = File.OpenRead(filePath);
+
+        // Process NALUs one by one
+        await foreach (var nalu in _naluParser.ParseNalusFromStreamAsync(fileStream, cancellationToken: cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            naluCount++;
+
+            // Log detailed information about important NALUs
+            if (nalu.Type == 7 || nalu.Type == 8 || nalu.Type == 5)
+            {
+                _logger.LogDebug("Processing NALU {Count}: Type={Type} ({Description}), Size={Size} bytes, KeyFrame={IsKeyFrame}",
+                    naluCount, nalu.Type, nalu.TypeDescription, nalu.Data.Length, nalu.IsKeyFrame);
+            }
+            else
+            {
+                _logger.LogTrace("Processing NALU {Count}: Type={Type} ({Description}), Size={Size} bytes",
+                    naluCount, nalu.Type, nalu.TypeDescription, nalu.Data.Length);
+            }
+
+            // Validate the NALU before processing
+            if (!_naluParser.ValidateNalu(nalu))
+            {
+                _logger.LogWarning("Skipping invalid NALU {Count}", naluCount);
+                continue;
+            }
+
+            // Queue the NALU to the decoder
+            try
+            {
+                await QueueNaluAsync(nalu, outputBufferIndex, cancellationToken);
+                outputBufferIndex = (outputBufferIndex + 1) % _outputBufferCount;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to queue NALU {Count} (Type={Type})", naluCount, nalu.Type);
+
+                // For critical NALUs (SPS, PPS, IDR), re-throw the exception
+                if (nalu.Type == 7 || nalu.Type == 8 || nalu.Type == 5)
+                {
+                    throw;
+                }
+
+                // For other NALUs, continue processing
+                _logger.LogWarning("Continuing with next NALU after error with NALU {Count}", naluCount);
+            }
+
+            // Dequeue decoded frames
+            await DequeueDecodedFramesAsync(cancellationToken);
+
+            // Update progress tracking
+            processedBytes += nalu.Data.Length;
+            ReportProgress(processedBytes, totalBytes, stopwatch.Elapsed);
+
+            // Small delay to prevent overwhelming the decoder
+            if (naluCount % 10 == 0)
+            {
+                await Task.Delay(1, cancellationToken);
+            }
+        }
+
+        _logger.LogInformation("Processed {NaluCount} NALUs from {FilePath}", naluCount, filePath);
+
+        // Flush remaining frames
+        await FlushDecoderAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Queues a single NALU to the hardware decoder
+    /// </summary>
+    private async Task QueueNaluAsync(H264Nalu nalu, uint bufferIndex, CancellationToken cancellationToken)
+    {
+        await Task.Run(() =>
+        {
+            try
+            {
+                var mappedBuffer = _outputBuffers[(int)bufferIndex];
+
+                // Safety check for buffer size
+                if (nalu.Data.Length > mappedBuffer.Size)
+                {
+                    _logger.LogWarning("NALU ({NaluSize} bytes) exceeds buffer size ({BufferSize} bytes), truncating",
+                        nalu.Data.Length, mappedBuffer.Size);
+
+                    // For critical NALUs, this is an error
+                    if (nalu.IsKeyFrame)
+                    {
+                        throw new InvalidOperationException($"Critical NALU (type {nalu.Type}) too large for buffer");
+                    }
+
+                    // For non-critical NALUs, skip them
+                    _logger.LogWarning("Skipping NALU type {Type} due to size constraints", nalu.Type);
+                    return;
+                }
+
+                // Copy NALU data to mapped buffer
+                Marshal.Copy(nalu.Data, 0, mappedBuffer.Pointer, nalu.Data.Length);
+
+                // Setup buffer for queuing
+                mappedBuffer.Planes[0].BytesUsed = (uint)nalu.Data.Length;
+
+                // Set appropriate flags
+                uint flags = 0x01; // V4L2_BUF_FLAG_MAPPED
+
+                if (nalu.IsKeyFrame)
+                {
+                    flags |= 0x00000008; // V4L2_BUF_FLAG_KEYFRAME
+                    _logger.LogDebug("Setting KEYFRAME flag for NALU type {Type}", nalu.Type);
+                }
+
+                // Create buffer structure
+                var buffer = new V4L2Buffer
+                {
+                    Index = bufferIndex,
+                    Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = 1,
+                    Field = (uint)V4L2Field.NONE,
+                    BytesUsed = (uint)nalu.Data.Length,
+                    Flags = flags,
+                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                    Sequence = 0
+                };
+
+                unsafe
+                {
+                    buffer.Planes = (V4L2Plane*)Unsafe.AsPointer(ref mappedBuffer.Planes[0]);
+                }
+
+                // Queue the buffer
+                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+                if (!result.Success)
+                {
+                    int errorCode = Marshal.GetLastWin32Error();
+                    string errorDescription = GetErrorDescription(errorCode);
+                    string v4l2Context = GetV4L2ErrorContext(errorCode) ?? string.Empty;
+
+                    _logger.LogError("Failed to queue NALU buffer {Index} (Type={NaluType}): {ErrorDesc} - {Context}",
+                        bufferIndex, nalu.Type, errorDescription, v4l2Context);
+
+                    throw new InvalidOperationException(
+                        $"Failed to queue NALU buffer {bufferIndex} (Type={nalu.Type}): {errorDescription}. {v4l2Context}");
+                }
+
+                _logger.LogTrace("Queued NALU type {Type} ({Size} bytes) to buffer {BufferIndex}",
+                    nalu.Type, nalu.Data.Length, bufferIndex);
+            }
+            catch (Exception ex) when (!(ex is InvalidOperationException))
+            {
+                _logger.LogError(ex, "Unexpected error queuing NALU buffer {BufferIndex}", bufferIndex);
+                throw new InvalidOperationException($"Failed to queue NALU buffer {bufferIndex}: {ex.Message}", ex);
+            }
+        }, cancellationToken);
+    }
+
     private async Task QueueH264DataAsync(byte[] data, int length, uint bufferIndex, CancellationToken cancellationToken, bool isKeyFrame = false, bool isEos = false)
     {
         await Task.Run(() =>
@@ -624,11 +842,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                 }
 
                 var mappedBuffer = _outputBuffers[(int)bufferIndex];
-                
+
                 // Safety check for buffer size
                 if (length > mappedBuffer.Size)
                 {
-                    _logger.LogWarning("Data ({DataSize} bytes) exceeds buffer size ({BufferSize} bytes), truncating", 
+                    _logger.LogWarning("Data ({DataSize} bytes) exceeds buffer size ({BufferSize} bytes), truncating",
                         length, mappedBuffer.Size);
                     length = (int)mappedBuffer.Size;
                 }
@@ -654,7 +872,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     // Check for NAL unit type 7 (SPS) which indicates a keyframe
                     for (int i = 0; i < length - 4; i++)
                     {
-                        if (data[i] == 0 && data[i + 1] == 0 && 
+                        if (data[i] == 0 && data[i + 1] == 0 &&
                             ((data[i + 2] == 0 && data[i + 3] == 1) || (data[i + 2] == 1)))
                         {
                             int nalHeaderPos = data[i + 2] == 0 ? i + 4 : i + 3;
@@ -674,18 +892,18 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
 
                 // Set appropriate flags for RockChip decoder
                 uint flags = 0;
-                
+
                 // V4L2_BUF_FLAG_KEYFRAME = 0x00000008
                 if (isKeyFrame)
                 {
                     flags |= 0x00000008; // V4L2_BUF_FLAG_KEYFRAME
                     _logger.LogDebug("Setting KEYFRAME flag");
                 }
-                
+
                 // For RockChip decoder specifically, set additional flags:
                 // - 0x01 = V4L2_BUF_FLAG_MAPPED (buffer has been mapped)
                 flags |= 0x01;  // V4L2_BUF_FLAG_MAPPED
-                
+
                 // End-of-stream flag if needed
                 if (isEos)
                 {
@@ -722,7 +940,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                 // Log buffer details before queueing
                 _logger.LogDebug("Queueing buffer {Index}: Type={Type}, Memory={Memory}, BytesUsed={Bytes}, Planes={PlaneCount}",
                     buffer.Index, buffer.Type, buffer.Memory, buffer.BytesUsed, buffer.Length);
-                
+
                 // Try to check first few bytes to see what we're sending
                 try {
                     unsafe {
@@ -740,14 +958,14 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                 {
                     // Get the exact error code for diagnostics
                     int errorCode = Marshal.GetLastWin32Error();
-                    
+
                     // Get general and V4L2-specific error descriptions
                     string errorDescription = GetErrorDescription(errorCode);
                     string v4l2Context = GetV4L2ErrorContext(errorCode) ?? string.Empty;
-                    
-                    _logger.LogError("V4L2 error: QueueBuffer failed with code {ErrorCode} - {ErrorDesc}", 
+
+                    _logger.LogError("V4L2 error: QueueBuffer failed with code {ErrorCode} - {ErrorDesc}",
                         errorCode, errorDescription);
-                    
+
                     // Try to get more diagnostic info about the format
                     try {
                         V4L2Format fmt = new V4L2Format();
@@ -760,7 +978,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     } catch {
                         // Ignore errors during diagnostic info gathering
                     }
-                    
+
                     throw new InvalidOperationException(
                         $"Failed to queue output buffer {bufferIndex}: {errorDescription}. {v4l2Context}");
                 }
@@ -805,16 +1023,16 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                         // No more buffers available, this is normal
                         break;
                     }
-                    
+
                     // For other errors, log them but continue operation
                     string errorDescription = GetErrorDescription(errorCode);
-                    _logger.LogWarning("DequeueBuffer failed: {ErrorDesc} (Code: {ErrorCode})", 
+                    _logger.LogWarning("DequeueBuffer failed: {ErrorDesc} (Code: {ErrorCode})",
                         errorDescription, errorCode);
                     break;
                 }
 
                 _framesDecoded++;
-                
+
                 // Raise frame decoded event
                 OnFrameDecoded(new FrameDecodedEventArgs
                 {
@@ -846,7 +1064,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                 _logger.LogDebug("Skipping buffer queue on closed device");
                 return;
             }
-            
+
             try
             {
                 var mappedBuffer = _captureBuffers[(int)bufferIndex];
@@ -873,10 +1091,10 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     int errorCode = Marshal.GetLastWin32Error();
                     string errorDescription = GetErrorDescription(errorCode);
                     string v4l2Context = GetV4L2ErrorContext(errorCode);
-                    
+
                     _logger.LogWarning("Failed to queue capture buffer {BufferIndex}: {Error} - {ErrorDesc}. {Context}",
                         bufferIndex, result.ErrorMessage, errorDescription, v4l2Context);
-                    
+
                     // Don't throw for capture buffer errors, just log them
                 }
             }
@@ -940,22 +1158,21 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         try
         {
             using var ms = new MemoryStream();
-            
+
             // ROCKCHIP SPECIFIC APPROACH - V4 (trying a completely different approach):
             // The RockChip V4L2 decoder requires specially formatted input:
             // 1. It may need a complete H.264 frame with no padding
             // 2. It requires complete NAL units (no partial NAL units)
             // 3. EBADR (Invalid request descriptor) often means format incompatibility
-            
+
             // Let's try a much simpler approach first - just ensure we have valid start codes
             // and send the minimal amount of data needed:
-            
+
             // First, detect if this buffer contains an SPS NAL unit
             bool hasSps = false;
             bool hasPps = false;
-            bool hasVps = false;
             List<(int start, int end, byte nalType)> nalUnits = new List<(int, int, byte)>();
-            
+
             // Scan for NAL units and their types
             int i = 0;
             while (i < length - 2) // Need at least 3 bytes for a start code
@@ -966,17 +1183,17 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     // Check for 3-byte or 4-byte start code
                     bool is4ByteStartCode = (i+3 < length && buffer[i+2] == 0 && buffer[i+3] == 1);
                     bool is3ByteStartCode = (i+2 < length && buffer[i+2] == 1);
-                    
+
                     if (is4ByteStartCode || is3ByteStartCode)
                     {
                         int startCodeSize = is4ByteStartCode ? 4 : 3;
                         int nalStart = i + startCodeSize;
-                        
+
                         // Find the type of this NAL unit - ensure we have at least one byte for NAL header
                         if (nalStart < length)
                         {
                             byte nalType = (byte)(buffer[nalStart] & 0x1F); // Extract NAL type bits
-                            
+
                             // Find the end of this NAL (next start code or end of buffer)
                             int nalEnd = length;
                             for (int j = nalStart + 1; j < length - 2; j++) // Need at least 3 bytes for a start code
@@ -985,7 +1202,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                                 {
                                     bool nextIs4ByteStartCode = (j+3 < length && buffer[j+2] == 0 && buffer[j+3] == 1);
                                     bool nextIs3ByteStartCode = (j+2 < length && buffer[j+2] == 1);
-                                    
+
                                     if (nextIs4ByteStartCode || nextIs3ByteStartCode)
                                     {
                                         nalEnd = j;
@@ -993,14 +1210,14 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                                     }
                                 }
                             }
-                            
+
                             // Add this NAL unit to our list
                             nalUnits.Add((nalStart, nalEnd, nalType)); // Store actual data start after start code
-                            
+
                             // Track if we have SPS/PPS NALs
                             if (nalType == 7) hasSps = true;
                             if (nalType == 8) hasPps = true;
-                            
+
                             // Skip to the end of this NAL
                             i = nalEnd;
                         }
@@ -1019,7 +1236,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     i++;
                 }
             }
-            
+
             // Now process NAL units based on what we found
             if (nalUnits.Count == 0)
             {
@@ -1032,7 +1249,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             {
                 // Process NAL units
                 _logger.LogDebug($"Found {nalUnits.Count} NAL units. SPS: {hasSps}, PPS: {hasPps}");
-                
+
                 // Special treatment for the first frame with SPS/PPS
                 if (hasSps || hasPps)
                 {
@@ -1041,10 +1258,10 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     {
                         // Always use 4-byte start codes
                         ms.Write(new byte[] { 0, 0, 0, 1 }, 0, 4);
-                        
+
                         // Write the NAL data - Calculate offset and length carefully to avoid index out of bounds
                         int startOffset = nal.start;
-                        
+
                         // Make sure we don't go out of bounds
                         if (startOffset < length && nal.end <= length)
                         {
@@ -1060,10 +1277,10 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     {
                         // Always use 4-byte start codes
                         ms.Write(new byte[] { 0, 0, 0, 1 }, 0, 4);
-                        
+
                         // Write the NAL data - Calculate offset and length carefully to avoid index out of bounds
                         int startOffset = nal.start;
-                        
+
                         // Make sure we don't go out of bounds
                         if (startOffset < length && nal.end <= length)
                         {
@@ -1073,7 +1290,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
                     }
                 }
             }
-            
+
             return ms.ToArray();
         }
         catch (Exception ex)
@@ -1231,24 +1448,24 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             case 22: // EINVAL
                 return "Invalid argument - This typically indicates an incorrect parameter was passed to the V4L2 driver, " +
                        "such as an unsupported format or invalid buffer configuration.";
-                
+
             case 53: // EBADR
                 return "Invalid request descriptor - In V4L2 context, this often means the data format is not what the driver expects. " +
                        "Check if the H.264 stream is properly formatted with valid NAL units, or if it needs specific pre-processing " +
                        "for this hardware decoder.";
-                
+
             case 74: // EBADMSG
                 return "Bad message - This indicates the input data is incorrectly formatted or corrupted. " +
                        "The hardware decoder cannot parse the provided H.264 stream.";
-                
+
             case 5: // EIO
                 return "Input/output error - The hardware decoder encountered a problem during operation. " +
                        "This could be due to hardware limitations, driver bugs, or invalid stream data.";
-                
+
             case 11: // EAGAIN
                 return "Resource temporarily unavailable - The operation would block because resources are not available. " +
                        "Try again later or check if too many concurrent operations are happening.";
-                
+
             default:
                 return string.Empty; // No specific V4L2 context information available
         }
@@ -1338,7 +1555,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         }
         GC.SuppressFinalize(this);
     }
-    
+
     public async ValueTask DisposeAsync()
     {
         if (!_disposed)

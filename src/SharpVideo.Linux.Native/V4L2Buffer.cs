@@ -65,32 +65,32 @@ public unsafe struct V4L2Timecode
     /// Type of the time code
     /// </summary>
     public uint Type;
-    
+
     /// <summary>
     /// Flags for the time code
     /// </summary>
     public uint Flags;
-    
+
     /// <summary>
     /// Frames
     /// </summary>
     public byte Frames;
-    
+
     /// <summary>
     /// Seconds
     /// </summary>
     public byte Seconds;
-    
+
     /// <summary>
     /// Minutes
     /// </summary>
     public byte Minutes;
-    
+
     /// <summary>
     /// Hours
     /// </summary>
     public byte Hours;
-    
+
     /// <summary>
     /// User bits
     /// </summary>

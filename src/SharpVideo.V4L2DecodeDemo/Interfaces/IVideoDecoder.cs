@@ -16,6 +16,14 @@ public interface IVideoDecoder : IAsyncDisposable
     Task DecodeFileAsync(string filePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Decodes a video file asynchronously, processing data NALU by NALU for optimal hardware decoder compatibility
+    /// </summary>
+    /// <param name="filePath">Path to the video file to decode</param>
+    /// <param name="cancellationToken">Cancellation token for the operation</param>
+    /// <returns>Task representing the decode operation</returns>
+    Task DecodeFileNaluByNaluAsync(string filePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Event raised when a frame is decoded
     /// </summary>
     event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
