@@ -7,7 +7,7 @@
             "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/SharpVideo.sln",
+                "${workspaceFolder}/src/SharpVideo.sln",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary;ForceNoAlign"
             ],
@@ -19,7 +19,7 @@
             "type": "process",
             "args": [
                 "publish",
-                "${workspaceFolder}/SharpVideo.sln",
+                "${workspaceFolder}/src/SharpVideo.sln",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary;ForceNoAlign"
             ],
@@ -33,7 +33,7 @@
                 "watch",
                 "run",
                 "--project",
-                "${workspaceFolder}/SharpVideo.sln"
+                "${workspaceFolder}/src/SharpVideo.sln"
             ],
             "problemMatcher": "$msCompile"
         }

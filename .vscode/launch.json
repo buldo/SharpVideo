@@ -40,6 +40,17 @@
             "stopAtEntry": false
         },
         {
+            "name": "V4L2-Decode-Demo-Debug",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            "program": "${workspaceFolder}/src/SharpVideo.V4L2DecodeDemo/bin/Debug/net9.0/SharpVideo.V4L2DecodeDemo.dll",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/SharpVideo.V4L2DecodeDemo",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        },
+        {
             "name": ".NET Core Attach",
             "type": "coreclr",
             "request": "attach"
