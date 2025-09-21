@@ -1,9 +1,6 @@
-﻿using System;
-using System.IO;
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 using System.Text;
 using SharpVideo.Linux.Native;
-using SharpVideo;
 using SharpVideo.V4L2;
 
 namespace SharpVideo.V4L2PrintInfo
@@ -14,72 +11,60 @@ namespace SharpVideo.V4L2PrintInfo
         static void Main(string[] args)
         {
             Console.WriteLine("Searching for V4L2 devices...");
-            var devices = V4L2DeviceManager.GetVideoDevices();
+            var deviceInfos = V4L2DeviceManager.GetVideoDevices();
 
-            if (devices.Length == 0)
+            if (deviceInfos.Length == 0)
             {
                 Console.WriteLine("No V4L2 devices found in /dev/");
                 return;
             }
 
             // Sort devices for consistent output
-            Array.Sort(devices);
+            Array.Sort(deviceInfos);
 
-            int m2mDevicesFound = 0;
-            foreach (var devicePath in devices)
+            foreach (var devicePath in deviceInfos)
             {
-                if (PrintM2mDeviceInfo(devicePath))
+                using var device = V4L2DeviceFactory.Open(devicePath);
+                if (device != null)
                 {
-                    m2mDevicesFound++;
+                    PrintM2mDeviceInfo(device);
                 }
-            }
-
-            if (m2mDevicesFound == 0)
-            {
-                Console.WriteLine("\nNo V4L2 M2M devices found in system.");
             }
         }
 
-        private static bool PrintM2mDeviceInfo(string devicePath)
+        private static bool PrintM2mDeviceInfo(V4L2Device device)
         {
-            int fd = -1;
             try
             {
-                fd = Libc.open(devicePath, OpenFlags.O_RDWR);
-                if (fd < 0) return false;
 
-                var queryResult = LibV4L2.QueryCapabilities(fd, out var capability);
+                var queryResult = LibV4L2.QueryCapabilities(device.fd, out var capability);
                 if (!queryResult.Success) return false;
 
                 bool isM2mDevice = ((uint)capability.Capabilities & ((uint)V4L2Capabilities.VIDEO_M2M_MPLANE | (uint)V4L2Capabilities.VIDEO_M2M)) != 0;
 
                 if (!isM2mDevice) return false;
 
-                Console.WriteLine($"\n--- Found V4L2 M2M Device: {devicePath} ---");
+                Console.WriteLine($"\n--- Found V4L2 M2M Device: {device} ---");
                 Console.WriteLine($"  Driver: {capability.DriverString}");
                 Console.WriteLine($"  Card: {capability.CardString}");
                 Console.WriteLine($"  Bus Info: {capability.BusInfoString}");
                 Console.WriteLine($"  Capabilities: 0x{(uint)capability.Capabilities:X8}");
                 Console.WriteLine($"    {FormatCapabilities((V4L2Capabilities)capability.Capabilities)}");
 
-                PrintFormatsSection(fd, V4L2BufferType.VIDEO_OUTPUT, "OUTPUT formats (single-planar)");
-                PrintFormatsSection(fd, V4L2BufferType.VIDEO_OUTPUT_MPLANE, "OUTPUT formats (multi-planar)");
-                PrintFormatsSection(fd, V4L2BufferType.VIDEO_CAPTURE, "CAPTURE formats (single-planar)");
-                PrintFormatsSection(fd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, "CAPTURE formats (multi-planar)");
+                PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_OUTPUT, "OUTPUT formats (single-planar)");
+                PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_OUTPUT_MPLANE, "OUTPUT formats (multi-planar)");
+                PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_CAPTURE, "CAPTURE formats (single-planar)");
+                PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, "CAPTURE formats (multi-planar)");
 
-                PrintControls(fd);
+                PrintControls(device.fd);
 
                 Console.WriteLine("--- End of Info ---");
                 return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"  Error querying device {devicePath}: {ex.Message}");
+                Console.WriteLine($"  Error querying device {device}: {ex.Message}");
                 return false;
-            }
-            finally
-            {
-                if (fd >= 0) Libc.close(fd);
             }
         }
 
