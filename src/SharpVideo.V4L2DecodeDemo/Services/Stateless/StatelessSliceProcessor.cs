@@ -20,7 +20,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
     private readonly IH264ParameterSetParser _parameterSetParser;
     private readonly V4L2Device _device;
     private readonly List<MappedBuffer> _outputBuffers;
-    private readonly bool _hasValidParameterSets;
+    private readonly Func<bool> _hasValidParameterSetsProvider;
 
     public StatelessSliceProcessor(
         ILogger<StatelessSliceProcessor> logger,
@@ -28,17 +28,19 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         IH264ParameterSetParser parameterSetParser,
         V4L2Device device,
         List<MappedBuffer> outputBuffers,
-        bool hasValidParameterSets)
+        Func<bool> hasValidParameterSetsProvider)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _controlManager = controlManager ?? throw new ArgumentNullException(nameof(controlManager));
         _parameterSetParser = parameterSetParser ?? throw new ArgumentNullException(nameof(parameterSetParser));
-        _device = device;
+        _device = device ?? throw new ArgumentNullException(nameof(device));
         _outputBuffers = outputBuffers ?? throw new ArgumentNullException(nameof(outputBuffers));
-        _hasValidParameterSets = hasValidParameterSets;
+        _hasValidParameterSetsProvider = hasValidParameterSetsProvider ?? throw new ArgumentNullException(nameof(hasValidParameterSetsProvider));
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Extract only slice data (remove start codes if needed)
+    /// </summary>
     public byte[] ExtractSliceDataOnly(byte[] naluData, bool useStartCodes)
     {
         if (!useStartCodes)
@@ -57,23 +59,35 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         return naluData;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Queue stateless slice data with proper control setup
+    /// </summary>
     public async Task QueueStatelessSliceDataAsync(byte[] sliceData, byte naluType, uint bufferIndex, CancellationToken cancellationToken)
     {
-        if (!_hasValidParameterSets)
+        if (!_hasValidParameterSetsProvider())
         {
             throw new InvalidOperationException("Parameter sets not available for stateless decoding");
+        }
+
+        if (_outputBuffers.Count == 0)
+        {
+            throw new InvalidOperationException("Output buffers not initialized");
+        }
+
+        if (bufferIndex >= _outputBuffers.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bufferIndex), $"Buffer index {bufferIndex} exceeds available buffers ({_outputBuffers.Count})");
         }
 
         // First, set the slice parameters controls
         await _controlManager.SetSliceParamsControlsAsync(sliceData, naluType, cancellationToken);
 
         // Extract only the slice data (without start codes if configured)
-        // Note: useStartCodes should be passed from the main decoder
-        byte[] pureSliceData = ExtractSliceDataOnly(sliceData, true); // TODO: Get from configuration
+        // TODO: Get useStartCodes from configuration
+        byte[] pureSliceData = ExtractSliceDataOnly(sliceData, true);
 
-        _logger.LogDebug("Queuing stateless slice data: {SliceByteCount} bytes (NALU type {NaluType})",
-            pureSliceData.Length, naluType);
+        _logger.LogDebug("Queuing stateless slice data: {SliceByteCount} bytes (NALU type {NaluType}) to buffer {BufferIndex}",
+            pureSliceData.Length, naluType, bufferIndex);
 
         // Queue only the slice data to the hardware
         await QueueSliceDataToHardwareAsync(pureSliceData, bufferIndex, cancellationToken,
@@ -98,22 +112,12 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
 
                 var mappedBuffer = _outputBuffers[(int)bufferIndex];
 
-                // Safety check for buffer size
+                // Critical: Don't truncate slice data as it will break decoding
                 if (sliceData.Length > mappedBuffer.Size)
                 {
-                    _logger.LogWarning("Slice data ({DataSize} bytes) exceeds buffer size ({BufferSize} bytes), truncating",
-                        sliceData.Length, mappedBuffer.Size);
-
-                    // For stateless decoders, truncation may break decoding
-                    if (isKeyFrame)
-                    {
-                        throw new InvalidOperationException($"Critical slice data too large for buffer: {sliceData.Length} > {mappedBuffer.Size}");
-                    }
-
-                    // Truncate if necessary
-                    byte[] truncated = new byte[mappedBuffer.Size];
-                    Array.Copy(sliceData, truncated, (int)mappedBuffer.Size);
-                    sliceData = truncated;
+                    throw new InvalidOperationException(
+                        $"Slice data ({sliceData.Length} bytes) exceeds buffer size ({mappedBuffer.Size} bytes). " +
+                        "This indicates insufficient buffer allocation or corrupted data.");
                 }
 
                 // Copy slice data to mapped buffer
@@ -142,7 +146,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
                 var buffer = new V4L2Buffer
                 {
                     Index = bufferIndex,
-                    Type =  V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+                    Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
                     Memory = V4L2Constants.V4L2_MEMORY_MMAP,
                     Length = 1,
                     Field = (uint)V4L2Field.NONE,
@@ -182,7 +186,6 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         }, cancellationToken);
     }
 
-    // TODO: These utility methods should be moved to a shared utilities class
     private string GetErrorDescription(int errorCode)
     {
         return errorCode switch
@@ -212,18 +215,27 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
     /// </summary>
     public async Task ProcessVideoFileAsync(int deviceFd, string filePath, Action<double> progressCallback)
     {
+        _logger.LogInformation("Processing video file for slice data: {FilePath}", filePath);
+        
+        var fileInfo = new FileInfo(filePath);
+        long totalBytes = fileInfo.Length;
+        long processedBytes = 0;
+
         using var fileStream = File.OpenRead(filePath);
         using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
 
-        // Read file data
-        var buffer = new byte[fileStream.Length];
-        await fileStream.ReadAsync(buffer, 0, buffer.Length);
+        // Read file data in chunks to handle large files
+        const int chunkSize = 1024 * 1024; // 1MB chunks
+        var buffer = new byte[Math.Min(chunkSize, (int)fileStream.Length)];
+        int bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length);
+        processedBytes += bytesRead;
 
         // Feed data to NALU provider
-        await naluProvider.AppendData(buffer, CancellationToken.None);
+        await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), CancellationToken.None);
         naluProvider.CompleteWriting();
 
         int processedNalus = 0;
+        uint currentBufferIndex = 0;
 
         // Process slice NALUs
         await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
@@ -233,16 +245,22 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
             byte naluType = (byte)(naluData[0] & 0x1F);
             if (naluType == 1 || naluType == 5) // Slice NALUs
             {
-                await QueueSliceDataAsync(deviceFd, naluData);
+                await QueueStatelessSliceDataAsync(naluData.ToArray(), naluType, currentBufferIndex, CancellationToken.None);
+                
+                // Cycle through available buffers
+                currentBufferIndex = (currentBufferIndex + 1) % (uint)_outputBuffers.Count;
                 processedNalus++;
 
-                // Simple progress reporting
+                // Report progress
                 if (processedNalus % 10 == 0)
                 {
-                    progressCallback?.Invoke(processedNalus);
+                    double progressPercentage = (double)processedBytes / totalBytes * 100;
+                    progressCallback?.Invoke(progressPercentage);
                 }
             }
         }
+
+        _logger.LogInformation("Processed {NaluCount} slice NALUs from file", processedNalus);
     }
 
     /// <summary>
@@ -250,18 +268,26 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
     /// </summary>
     public async Task ProcessVideoFileNaluByNaluAsync(int deviceFd, string filePath, Action<object> frameCallback, Action<double> progressCallback)
     {
+        _logger.LogInformation("Processing video file NALU by NALU: {FilePath}", filePath);
+        
+        var fileInfo = new FileInfo(filePath);
+        long totalBytes = fileInfo.Length;
+        long processedBytes = 0;
+
         using var fileStream = File.OpenRead(filePath);
         using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
 
         // Read file data
         var buffer = new byte[fileStream.Length];
         await fileStream.ReadAsync(buffer, 0, buffer.Length);
+        processedBytes = buffer.Length;
 
         // Feed data to NALU provider
         await naluProvider.AppendData(buffer, CancellationToken.None);
         naluProvider.CompleteWriting();
 
         int processedNalus = 0;
+        uint currentBufferIndex = 0;
 
         await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
         {
@@ -270,7 +296,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
             byte naluType = (byte)(naluData[0] & 0x1F);
             if (naluType == 1 || naluType == 5) // Slice NALUs
             {
-                await QueueSliceDataAsync(deviceFd, naluData);
+                await QueueStatelessSliceDataAsync(naluData.ToArray(), naluType, currentBufferIndex, CancellationToken.None);
 
                 // Try to dequeue a frame
                 var frame = await DequeueFrameAsync(deviceFd);
@@ -279,13 +305,18 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
                     frameCallback?.Invoke(frame);
                 }
 
+                currentBufferIndex = (currentBufferIndex + 1) % (uint)_outputBuffers.Count;
                 processedNalus++;
+                
                 if (processedNalus % 10 == 0)
                 {
-                    progressCallback?.Invoke(processedNalus);
+                    double progressPercentage = (double)processedNalus / 100 * 100; // Approximate progress
+                    progressCallback?.Invoke(progressPercentage);
                 }
             }
         }
+
+        _logger.LogInformation("Processed {NaluCount} slice NALUs with frame callbacks", processedNalus);
     }
 
     /// <summary>
@@ -293,8 +324,8 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
     /// </summary>
     public async Task QueueSliceDataAsync(int deviceFd, ReadOnlyMemory<byte> sliceData)
     {
-        // Use existing method with some buffer index (simplified)
-        await QueueStatelessSliceDataAsync(sliceData.ToArray(), (byte)(sliceData.Span[0] & 0x1F), 0, CancellationToken.None);
+        byte naluType = sliceData.Span.Length > 0 ? (byte)(sliceData.Span[0] & 0x1F) : (byte)1;
+        await QueueStatelessSliceDataAsync(sliceData.ToArray(), naluType, 0, CancellationToken.None);
     }
 
     /// <summary>
@@ -314,8 +345,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
             if (result.Success)
             {
                 // Frame data is available in the buffer
-                // For now, return a placeholder object
-                return new { BufferIndex = buffer.Index, Timestamp = buffer.Timestamp };
+                return new { BufferIndex = buffer.Index, Timestamp = buffer.Timestamp, BytesUsed = buffer.BytesUsed };
             }
 
             return null;

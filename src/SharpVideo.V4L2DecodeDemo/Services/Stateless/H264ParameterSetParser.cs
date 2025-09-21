@@ -211,14 +211,14 @@ public class H264ParameterSetParser : IH264ParameterSetParser
     }
 
     /// <summary>
-    /// Maps H.264 slice type to V4L2 slice type
+    /// Maps H.264 NALU type to V4L2 slice type (corrected logic)
     /// </summary>
-    private static byte MapH264SliceType(byte h264SliceType)
+    private static byte MapH264SliceType(byte naluType)
     {
-        return h264SliceType switch
+        return naluType switch
         {
-            1 => 0, // Non-IDR slice -> P slice
-            5 => 1, // IDR slice -> I slice
+            1 => 0, // Non-IDR slice -> P slice (most common for type 1)
+            5 => 2, // IDR slice -> I slice  
             _ => 0  // Default to P slice
         };
     }
