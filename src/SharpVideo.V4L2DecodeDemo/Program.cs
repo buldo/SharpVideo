@@ -1,6 +1,8 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2DecodeDemo.Services;
+using SharpVideo.V4L2DecodeDemo.Services.Stateless;
+using SharpVideo.V4L2DecodeDemo.Interfaces;
 
 namespace SharpVideo.V4L2DecodeDemo;
 
@@ -38,9 +40,10 @@ internal class Program
 
             using var loggerFactory = LoggerFactory.Create(builder =>
                 builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
-            var logger = loggerFactory.CreateLogger<H264V4L2StreamingDecoder>();
 
-            await using var decoder = new H264V4L2StreamingDecoder(logger);
+            // Create the decoder with logger - it will create its own modular components internally
+            var logger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
+            await using var decoder = new H264V4L2StatelessDecoder(logger);
 
             // Subscribe to events for real-time feedback
             decoder.FrameDecoded += (sender, e) =>
