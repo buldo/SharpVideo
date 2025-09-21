@@ -37,12 +37,12 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 
             // Create extended controls array
             var extControls = new V4L2ExtControl[2];
-            
+
             // Allocate unmanaged memory for SPS data
             var spsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264Sps>());
             Marshal.StructureToPtr(spsControl, spsPtr, false);
-            
-            // Allocate unmanaged memory for PPS data  
+
+            // Allocate unmanaged memory for PPS data
             var ppsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264Pps>());
             Marshal.StructureToPtr(ppsControl, ppsPtr, false);
 
@@ -70,7 +70,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 {
                     // Copy controls to unmanaged memory
                     Marshal.StructureToPtr(extControls[0], controlsPtr, false);
-                    Marshal.StructureToPtr(extControls[1], 
+                    Marshal.StructureToPtr(extControls[1],
                         IntPtr.Add(controlsPtr, Marshal.SizeOf<V4L2ExtControl>()), false);
 
                     // Set up extended controls structure
@@ -138,11 +138,11 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 
             // Create extended controls array
             var extControls = new V4L2ExtControl[2];
-            
+
             // Allocate unmanaged memory for slice params
             var slicePtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264SliceParams>());
             Marshal.StructureToPtr(sliceParams, slicePtr, false);
-            
+
             // Allocate unmanaged memory for decode params
             var decodePtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264DecodeParams>());
             Marshal.StructureToPtr(decodeParams, decodePtr, false);
@@ -171,7 +171,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 {
                     // Copy controls to unmanaged memory
                     Marshal.StructureToPtr(extControls[0], controlsPtr, false);
-                    Marshal.StructureToPtr(extControls[1], 
+                    Marshal.StructureToPtr(extControls[1],
                         IntPtr.Add(controlsPtr, Marshal.SizeOf<V4L2ExtControl>()), false);
 
                     // Set up extended controls structure
@@ -236,11 +236,11 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             else
             {
                 _logger.LogWarning("Failed to set frame-based mode, trying slice-based: {Error}", result.ErrorMessage);
-                
+
                 // Try slice-based mode as fallback
                 decodeModeControl.Value = (int)V4L2Constants.V4L2_STATELESS_H264_DECODE_MODE_SLICE_BASED;
                 result = LibV4L2.SetControl(_deviceFd, ref decodeModeControl);
-                
+
                 if (result.Success)
                 {
                     _logger.LogInformation("Set stateless decoder to slice-based mode");
@@ -306,12 +306,12 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 
             // Create extended controls array
             var extControls = new V4L2ExtControl[2];
-            
+
             // Allocate unmanaged memory for SPS data
             var spsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264Sps>());
             Marshal.StructureToPtr(sps, spsPtr, false);
-            
-            // Allocate unmanaged memory for PPS data  
+
+            // Allocate unmanaged memory for PPS data
             var ppsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264Pps>());
             Marshal.StructureToPtr(pps, ppsPtr, false);
 
@@ -339,7 +339,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 {
                     // Copy controls to unmanaged memory
                     Marshal.StructureToPtr(extControls[0], controlsPtr, false);
-                    Marshal.StructureToPtr(extControls[1], 
+                    Marshal.StructureToPtr(extControls[1],
                         IntPtr.Add(controlsPtr, Marshal.SizeOf<V4L2ExtControl>()), false);
 
                     // Set extended controls
@@ -376,7 +376,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             _logger.LogError(ex, "Failed to set parameter sets");
             throw;
         }
-        
+
         await Task.CompletedTask;
     }
 
@@ -388,7 +388,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         try
         {
             _logger.LogInformation("Setting decode parameters for frame");
-            
+
             // For now, use simplified approach
             // In a full implementation, we'd set all slice parameters
             await Task.CompletedTask;
@@ -408,7 +408,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         try
         {
             _logger.LogInformation("Configuring stateless decoder mode");
-            
+
             // Use existing method
             await ConfigureStatelessControlsAsync(CancellationToken.None);
         }

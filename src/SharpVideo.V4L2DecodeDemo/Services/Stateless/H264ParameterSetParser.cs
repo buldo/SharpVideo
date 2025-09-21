@@ -31,7 +31,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
 
         var naluHeader = spsData[naluStart];
         var naluType = (byte)(naluHeader & 0x1F);
-        
+
         if (naluType != 7)
             throw new ArgumentException($"Expected SPS NALU (type 7), got type {naluType}");
 
@@ -75,7 +75,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
 
         var naluHeader = ppsData[naluStart];
         var naluType = (byte)(naluHeader & 0x1F);
-        
+
         if (naluType != 8)
             throw new ArgumentException($"Expected PPS NALU (type 8), got type {naluType}");
 
@@ -112,7 +112,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
 
         var naluHeader = sliceData[naluStart];
         var naluTypeFromHeader = (byte)(naluHeader & 0x1F);
-        
+
         if (!IsFrameNalu(naluTypeFromHeader))
             throw new ArgumentException($"Expected slice NALU, got type {naluTypeFromHeader}");
 
@@ -127,7 +127,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
             RedundantPicCnt = 0, // No redundancy
             CabacInitIdc = 0, // CABAC initialization
             SliceQpDelta = 0, // No QP delta
-            SliceQsDelta = 0, // No QS delta  
+            SliceQsDelta = 0, // No QS delta
             DisableDeblockingFilterIdc = 0, // Enable deblocking
             SliceAlphaC0OffsetDiv2 = 0, // No alpha offset
             SliceBetaOffsetDiv2 = 0, // No beta offset
@@ -205,28 +205,28 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         {
             using var fileStream = File.OpenRead(filePath);
             using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
-            
-            // Read file data 
+
+            // Read file data
             int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
             var buffer = new byte[maxBytes];
             int bytesRead = await fileStream.ReadAsync(buffer, 0, maxBytes);
-            
+
             // Feed data to NALU provider
             await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), CancellationToken.None);
             naluProvider.CompleteWriting();
-            
+
             // Read NALUs and look for SPS
             await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
             {
                 if (naluData.Length < 1) continue;
-                
+
                 byte naluType = (byte)(naluData[0] & 0x1F);
                 if (naluType == 7) // SPS NALU type
                 {
                     return ParseSps(naluData.AsSpan());
                 }
             }
-            
+
             return null;
         }
         catch (Exception ex)
@@ -237,7 +237,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
     }
 
     /// <summary>
-    /// Extract PPS from H.264 bitstream file  
+    /// Extract PPS from H.264 bitstream file
     /// </summary>
     public async Task<V4L2CtrlH264Pps?> ExtractPpsAsync(string filePath)
     {
@@ -245,28 +245,28 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         {
             using var fileStream = File.OpenRead(filePath);
             using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
-            
-            // Read file data 
+
+            // Read file data
             int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
             var buffer = new byte[maxBytes];
             int bytesRead = await fileStream.ReadAsync(buffer, 0, maxBytes);
-            
+
             // Feed data to NALU provider
             await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), CancellationToken.None);
             naluProvider.CompleteWriting();
-            
+
             // Read NALUs and look for PPS
             await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
             {
                 if (naluData.Length < 1) continue;
-                
+
                 byte naluType = (byte)(naluData[0] & 0x1F);
                 if (naluType == 8) // PPS NALU type
                 {
                     return ParsePps(naluData.AsSpan());
                 }
             }
-            
+
             return null;
         }
         catch (Exception ex)

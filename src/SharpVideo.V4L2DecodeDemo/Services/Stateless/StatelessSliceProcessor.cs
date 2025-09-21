@@ -49,7 +49,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
                 return sliceOnly;
             }
         }
-        
+
         // Return as-is if using start codes or no start code found
         return naluData;
     }
@@ -171,13 +171,13 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
                 {
                     _logger.LogWarning("Slice data ({DataSize} bytes) exceeds buffer size ({BufferSize} bytes), truncating",
                         sliceData.Length, mappedBuffer.Size);
-                    
+
                     // For stateless decoders, truncation may break decoding
                     if (isKeyFrame)
                     {
                         throw new InvalidOperationException($"Critical slice data too large for buffer: {sliceData.Length} > {mappedBuffer.Size}");
                     }
-                    
+
                     // Truncate if necessary
                     byte[] truncated = new byte[mappedBuffer.Size];
                     Array.Copy(sliceData, truncated, (int)mappedBuffer.Size);
@@ -282,28 +282,28 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
     {
         using var fileStream = File.OpenRead(filePath);
         using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
-        
+
         // Read file data
         var buffer = new byte[fileStream.Length];
         await fileStream.ReadAsync(buffer, 0, buffer.Length);
-        
+
         // Feed data to NALU provider
         await naluProvider.AppendData(buffer, CancellationToken.None);
         naluProvider.CompleteWriting();
-        
+
         int processedNalus = 0;
-        
+
         // Process slice NALUs
         await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
         {
             if (naluData.Length < 1) continue;
-            
+
             byte naluType = (byte)(naluData[0] & 0x1F);
             if (naluType == 1 || naluType == 5) // Slice NALUs
             {
                 await QueueSliceDataAsync(deviceFd, naluData);
                 processedNalus++;
-                
+
                 // Simple progress reporting
                 if (processedNalus % 10 == 0)
                 {
@@ -320,33 +320,33 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
     {
         using var fileStream = File.OpenRead(filePath);
         using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
-        
+
         // Read file data
         var buffer = new byte[fileStream.Length];
         await fileStream.ReadAsync(buffer, 0, buffer.Length);
-        
+
         // Feed data to NALU provider
         await naluProvider.AppendData(buffer, CancellationToken.None);
         naluProvider.CompleteWriting();
-        
+
         int processedNalus = 0;
-        
+
         await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
         {
             if (naluData.Length < 1) continue;
-            
+
             byte naluType = (byte)(naluData[0] & 0x1F);
             if (naluType == 1 || naluType == 5) // Slice NALUs
             {
                 await QueueSliceDataAsync(deviceFd, naluData);
-                
+
                 // Try to dequeue a frame
                 var frame = await DequeueFrameAsync(deviceFd);
                 if (frame != null)
                 {
                     frameCallback?.Invoke(frame);
                 }
-                
+
                 processedNalus++;
                 if (processedNalus % 10 == 0)
                 {
@@ -385,7 +385,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
                 // For now, return a placeholder object
                 return new { BufferIndex = buffer.Index, Timestamp = buffer.Timestamp };
             }
-            
+
             return null;
         }
         catch (Exception ex)

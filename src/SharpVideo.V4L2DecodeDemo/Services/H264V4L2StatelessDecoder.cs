@@ -12,15 +12,15 @@ namespace SharpVideo.V4L2DecodeDemo.Services;
 
 /// <summary>
 /// Modern, clean H.264 decoder using V4L2 hardware acceleration for stateless decoders.
-/// 
+///
 /// This implementation correctly separates bitstream data from metadata according to V4L2 specifications:
 /// - SPS/PPS parameter sets are sent as V4L2 controls
 /// - Slice headers are parsed and sent as V4L2 controls
 /// - Only slice data (without parameter sets) is sent in OUTPUT buffers
-/// 
+///
 /// The architecture is modular with separate components for:
 /// - Parameter set parsing (IH264ParameterSetParser)
-/// - Control management (IV4L2StatelessControlManager)  
+/// - Control management (IV4L2StatelessControlManager)
 /// - Slice processing (IStatelessSliceProcessor)
 /// </summary>
 [SupportedOSPlatform("linux")]
@@ -324,12 +324,12 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     // of the buffer setup, streaming, parameter extraction, and processing methods
 
     #region Private Implementation Methods
-    
+
     private async Task ExtractAndSetParameterSetsAsync(string filePath, CancellationToken cancellationToken = default)
     {
         var sps = await _parameterSetParser.ExtractSpsAsync(filePath);
         var pps = await _parameterSetParser.ExtractPpsAsync(filePath);
-        
+
         if (sps.HasValue && pps.HasValue)
         {
             await _controlManager.SetParameterSetsAsync(_deviceFd, sps.Value, pps.Value);
@@ -346,9 +346,9 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     private async Task ProcessVideoFileStatelessAsync(string filePath, CancellationToken cancellationToken = default)
     {
         // Process slice data
-        await _sliceProcessor.ProcessVideoFileAsync(_deviceFd, filePath, 
+        await _sliceProcessor.ProcessVideoFileAsync(_deviceFd, filePath,
             progress => ProgressChanged?.Invoke(progress));
-        
+
         // Update frame count
         _framesDecoded++;
     }
