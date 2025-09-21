@@ -343,6 +343,17 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
+    /// Get a single control value.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="control">Control structure with ID set, receives current value</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult GetControl(int fd, ref V4L2Control control)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_G_CTRL, ref control);
+    }
+
+    /// <summary>
     /// Set extended V4L2 controls (for complex data structures).
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>

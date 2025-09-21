@@ -236,11 +236,11 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
             Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE
         };
 
-        // Try common H.264 formats for stateless decoders
+        // Try common H.264 formats for stateless decoders, prioritizing S264 for rkvdec
         uint[] h264Formats = new uint[]
         {
+            0x34363253, // S264 (H264 Parsed Slice Data) - preferred for rkvdec stateless
             0x34363248, // H264 (standard)
-            0x34363253, // S264 (H264 Parsed Slice Data) - often preferred for stateless
             0x31435641, // AVC1
         };
 

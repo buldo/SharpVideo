@@ -118,6 +118,14 @@ public static class V4L2Constants
     public const uint V4L2_CID_STATELESS_H264_DPB = V4L2_CID_CODEC_BASE + 307;
     public const uint V4L2_CID_STATELESS_H264_DECODE_MODE = V4L2_CID_CODEC_BASE + 308;
 
+    // Rockchip rkvdec specific control IDs (discovered from actual device)
+    public const uint RKVDEC_CID_H264_DECODE_MODE = 0x00a40900;
+    public const uint RKVDEC_CID_H264_START_CODE = 0x00a40901;
+    public const uint RKVDEC_CID_H264_SPS = 0x00a40902;
+    public const uint RKVDEC_CID_H264_PPS = 0x00a40903;
+    public const uint RKVDEC_CID_H264_SCALING_MATRIX = 0x00a40904;
+    public const uint RKVDEC_CID_H264_DECODE_PARAMS = 0x00a40907;
+
     // V4L2 Control values for H.264 start code
     public const uint V4L2_STATELESS_H264_START_CODE_NONE = 0;
     public const uint V4L2_STATELESS_H264_START_CODE_ANNEX_B = 1;

@@ -13,6 +13,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     private readonly ILogger<V4L2StatelessControlManager> _logger;
     private readonly IH264ParameterSetParser _parameterSetParser;
     private readonly int _deviceFd;
+    private readonly bool _useRkvdecControls;
 
     public V4L2StatelessControlManager(
         ILogger<V4L2StatelessControlManager> logger,
@@ -22,6 +23,35 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _parameterSetParser = parameterSetParser ?? throw new ArgumentNullException(nameof(parameterSetParser));
         _deviceFd = deviceFd;
+        
+        // Detect if this is a rkvdec device that needs special control IDs
+        _useRkvdecControls = DetectRkvdecDevice(deviceFd);
+        if (_useRkvdecControls)
+        {
+            _logger.LogInformation("Detected rkvdec device - using device-specific control IDs");
+        }
+    }
+
+    /// <summary>
+    /// Detect if this is a rkvdec device that requires special control IDs
+    /// </summary>
+    private bool DetectRkvdecDevice(int deviceFd)
+    {
+        try
+        {
+            // Try to query rkvdec-specific control to detect the device type
+            var control = new V4L2Control
+            {
+                Id = V4L2Constants.RKVDEC_CID_H264_DECODE_MODE
+            };
+            
+            var result = LibV4L2.GetControl(deviceFd, ref control);
+            return result.Success; // If we can read this control, it's likely rkvdec
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <inheritdoc />
@@ -221,6 +251,45 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 
         try
         {
+            // For rkvdec, the decode mode is fixed to frame-based and start code to Annex-B
+            if (_useRkvdecControls)
+            {
+                _logger.LogInformation("Using rkvdec-specific controls - decode mode and start codes are fixed");
+                // Try to set the controls to their expected values even if they're read-only
+                var rkvdecDecodeModeControl = new V4L2Control
+                {
+                    Id = V4L2Constants.RKVDEC_CID_H264_DECODE_MODE,
+                    Value = 1 // Frame-based mode
+                };
+
+                var rkvdecResult = LibV4L2.SetControl(_deviceFd, ref rkvdecDecodeModeControl);
+                if (rkvdecResult.Success)
+                {
+                    _logger.LogInformation("Set rkvdec decode mode to frame-based");
+                }
+                else
+                {
+                    _logger.LogInformation("rkvdec decode mode is read-only (expected): {Error}", rkvdecResult.ErrorMessage);
+                }
+
+                var rkvdecStartCodeControl = new V4L2Control
+                {
+                    Id = V4L2Constants.RKVDEC_CID_H264_START_CODE,
+                    Value = 1 // Annex-B start codes
+                };
+
+                rkvdecResult = LibV4L2.SetControl(_deviceFd, ref rkvdecStartCodeControl);
+                if (rkvdecResult.Success)
+                {
+                    _logger.LogInformation("Set rkvdec start code format to Annex-B");
+                }
+                else
+                {
+                    _logger.LogInformation("rkvdec start code format is read-only (expected): {Error}", rkvdecResult.ErrorMessage);
+                }
+
+                return true; // rkvdec uses Annex-B format
+            }
             // First, try to set decode mode to frame-based (preferred)
             var decodeModeControl = new V4L2Control
             {
@@ -347,7 +416,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 // Setup SPS control
                 extControls[0] = new V4L2ExtControl
                 {
-                    Id = V4L2Constants.V4L2_CID_STATELESS_H264_SPS,
+                    Id = _useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_SPS : V4L2Constants.V4L2_CID_STATELESS_H264_SPS,
                     Size = (uint)Marshal.SizeOf<V4L2CtrlH264Sps>(),
                     Ptr = spsPtr
                 };
@@ -355,7 +424,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 // Setup PPS control
                 extControls[1] = new V4L2ExtControl
                 {
-                    Id = V4L2Constants.V4L2_CID_STATELESS_H264_PPS,
+                    Id = _useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_PPS : V4L2Constants.V4L2_CID_STATELESS_H264_PPS,
                     Size = (uint)Marshal.SizeOf<V4L2CtrlH264Pps>(),
                     Ptr = ppsPtr
                 };
