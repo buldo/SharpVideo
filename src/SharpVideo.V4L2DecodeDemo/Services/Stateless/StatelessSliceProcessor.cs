@@ -4,12 +4,14 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2DecodeDemo.Interfaces;
 using SharpVideo.H264;
+using System.Runtime.Versioning;
 
 namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 
 /// <summary>
 /// Processes H.264 slice data for stateless decoders
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class StatelessSliceProcessor : IStatelessSliceProcessor
 {
     private readonly ILogger<StatelessSliceProcessor> _logger;

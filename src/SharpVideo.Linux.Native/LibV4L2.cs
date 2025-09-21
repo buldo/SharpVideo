@@ -374,4 +374,26 @@ public static unsafe class LibV4L2
     {
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_G_EXT_CTRLS, ref extControls);
     }
+
+    /// <summary>
+    /// Query control information.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="queryCtrl">Control query structure</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult QueryControl(int fd, ref V4L2QueryCtrl queryCtrl)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERYCTRL, ref queryCtrl);
+    }
+
+    /// <summary>
+    /// Query menu item information for a menu control.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="queryMenuItem">Menu item query structure</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult QueryMenuItem(int fd, ref V4L2QueryMenuItem queryMenuItem)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERYMENU, ref queryMenuItem);
+    }
 }

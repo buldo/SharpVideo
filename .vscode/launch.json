@@ -10,9 +10,9 @@
             "request": "launch",
             "preLaunchTask": "build",
             // Если вы изменили требуемые версии .NET Framework, обязательно обновите путь к программе.
-            "program": "${workspaceFolder}/SharpVideo.DrmDemo/bin/Debug/net9.0/SharpVideo.DrmDemo.dll",
+            "program": "${workspaceFolder}/src/SharpVideo.DrmDemo/bin/Debug/net9.0/SharpVideo.DrmDemo.dll",
             "args": [],
-            "cwd": "${workspaceFolder}/SharpVideo.DrmDemo",
+            "cwd": "${workspaceFolder}/src/SharpVideo.DrmDemo",
             // Дополнительные сведения о поле \"console\" см. в https://aka.ms/VSCode-CS-LaunchJson-Console
             "console": "internalConsole",
             "stopAtEntry": false
@@ -22,9 +22,9 @@
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/SharpVideo.DrmDmaDemo/bin/Debug/net9.0/SharpVideo.DrmDmaDemo.dll",
+            "program": "${workspaceFolder}/src/SharpVideo.DrmDmaDemo/bin/Debug/net9.0/SharpVideo.DrmDmaDemo.dll",
             "args": [],
-            "cwd": "${workspaceFolder}/SharpVideo.DrmDmaDemo",
+            "cwd": "${workspaceFolder}/src/SharpVideo.DrmDmaDemo",
             "console": "internalConsole",
             "stopAtEntry": false
         },
@@ -33,9 +33,9 @@
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/SharpVideo.V4L2PrintInfo/bin/Debug/net9.0/SharpVideo.V4L2PrintInfo.dll",
+            "program": "${workspaceFolder}/src/SharpVideo.V4L2PrintInfo/bin/Debug/net9.0/SharpVideo.V4L2PrintInfo.dll",
             "args": [],
-            "cwd": "${workspaceFolder}/SharpVideo.V4L2PrintInfo",
+            "cwd": "${workspaceFolder}/src/SharpVideo.V4L2PrintInfo",
             "console": "internalConsole",
             "stopAtEntry": false
         },

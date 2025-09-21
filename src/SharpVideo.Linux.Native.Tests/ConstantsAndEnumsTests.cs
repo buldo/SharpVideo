@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.Versioning;
 using Xunit;
 
 namespace SharpVideo.Linux.Native.Tests;
@@ -6,6 +7,7 @@ namespace SharpVideo.Linux.Native.Tests;
 /// <summary>
 /// Tests for constants and enum values to ensure they have expected values and behaviors
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class ConstantsAndEnumsTests
 {
     #region Enum Value Tests

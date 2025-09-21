@@ -39,8 +39,8 @@ public static class V4L2Constants
     public static readonly uint VIDIOC_S_TUNER = IoctlConstants.IOW(V4L2_IOCTL_MAGIC, 30, 84);
     public static readonly uint VIDIOC_G_AUDIO = IoctlConstants.IOR(V4L2_IOCTL_MAGIC, 33, 52);
     public static readonly uint VIDIOC_S_AUDIO = IoctlConstants.IOW(V4L2_IOCTL_MAGIC, 34, 52);
-    public static readonly uint VIDIOC_QUERYCTRL = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 36, 68);
-    public static readonly uint VIDIOC_QUERYMENU = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 37, 44);
+    public static unsafe readonly uint VIDIOC_QUERYCTRL = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 36, (uint)sizeof(V4L2QueryCtrl));
+    public static unsafe readonly uint VIDIOC_QUERYMENU = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 37, (uint)sizeof(V4L2QueryMenuItem));
     public static readonly uint VIDIOC_G_INPUT = IoctlConstants.IOR(V4L2_IOCTL_MAGIC, 38, 4);
     public static readonly uint VIDIOC_S_INPUT = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 39, 4);
     public static readonly uint VIDIOC_G_EDID = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 40, 32);
@@ -133,4 +133,7 @@ public static class V4L2Constants
     // V4L2 Control values for H.264 decode mode
     public const uint V4L2_STATELESS_H264_DECODE_MODE_SLICE_BASED = 0;
     public const uint V4L2_STATELESS_H264_DECODE_MODE_FRAME_BASED = 1;
+
+    public const uint V4L2_CTRL_FLAG_NEXT_CTRL = 0x80000000;
+    public const uint V4L2_CTRL_FLAG_NEXT_COMPOUND = 0x40000000;
 }

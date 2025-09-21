@@ -67,6 +67,8 @@ namespace SharpVideo.V4L2PrintInfo
                 PrintFormatsSection(fd, V4L2BufferType.VIDEO_CAPTURE, "CAPTURE formats (single-planar)");
                 PrintFormatsSection(fd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, "CAPTURE formats (multi-planar)");
 
+                PrintControls(fd);
+
                 Console.WriteLine("--- End of Info ---");
                 return true;
             }
@@ -78,6 +80,50 @@ namespace SharpVideo.V4L2PrintInfo
             finally
             {
                 if (fd >= 0) Libc.close(fd);
+            }
+        }
+
+        private static unsafe void PrintControls(int fd)
+        {
+            Console.WriteLine("\n  Available Controls:");
+
+            var queryCtrl = new V4L2QueryCtrl { Id = (uint)V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL };
+
+            while (LibV4L2.QueryControl(fd, ref queryCtrl).Success)
+            {
+                if ((queryCtrl.Flags & V4L2ControlFlags.DISABLED) != 0)
+                {
+                    queryCtrl.Id |= (uint)V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL;
+                    continue;
+                }
+
+                Console.WriteLine($"    - {queryCtrl.Name} (ID: 0x{queryCtrl.Id:X8})");
+                Console.WriteLine($"      Type: {queryCtrl.Type}, Flags: {queryCtrl.Flags}");
+                Console.WriteLine($"      Min: {queryCtrl.Minimum}, Max: {queryCtrl.Maximum}, Step: {queryCtrl.Step}, Default: {queryCtrl.DefaultValue}");
+
+                if (queryCtrl.Type == V4L2CtrlType.Menu || queryCtrl.Type == V4L2CtrlType.IntegerMenu)
+                {
+                    Console.WriteLine("      Menu Items:");
+                    var queryMenuItem = new V4L2QueryMenuItem();
+                    for (uint i = (uint)queryCtrl.Minimum; i <= queryCtrl.Maximum; i++)
+                    {
+                        queryMenuItem.Id = queryCtrl.Id;
+                        queryMenuItem.Index = i;
+                        if (LibV4L2.QueryMenuItem(fd, ref queryMenuItem).Success)
+                        {
+                            if (queryCtrl.Type == V4L2CtrlType.Menu)
+                            {
+                                Console.WriteLine($"        {queryMenuItem.Index}: {queryMenuItem.Name}");
+                            }
+                            else // IntegerMenu
+                            {
+                                Console.WriteLine($"        {queryMenuItem.Index}: {queryMenuItem.Value}");
+                            }
+                        }
+                    }
+                }
+
+                queryCtrl.Id |= (uint)V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL;
             }
         }
 

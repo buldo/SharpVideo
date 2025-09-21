@@ -8,6 +8,7 @@ namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 /// <summary>
 /// Manages V4L2 extended controls for stateless H.264 decoders
 /// </summary>
+/// [SupportedOSPlatform("linux")]
 public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 {
     private readonly ILogger<V4L2StatelessControlManager> _logger;
