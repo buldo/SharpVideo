@@ -41,6 +41,7 @@ public static class V4L2Constants
     public static readonly uint VIDIOC_S_AUDIO = IoctlConstants.IOW(V4L2_IOCTL_MAGIC, 34, 52);
     public static unsafe readonly uint VIDIOC_QUERYCTRL = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 36, (uint)sizeof(V4L2QueryCtrl));
     public static unsafe readonly uint VIDIOC_QUERYMENU = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 37, (uint)sizeof(V4L2QueryMenuItem));
+    public static unsafe readonly uint VIDIOC_QUERY_EXT_CTRL = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 103, (uint)sizeof(V4L2QueryExtCtrl));
     public static readonly uint VIDIOC_G_INPUT = IoctlConstants.IOR(V4L2_IOCTL_MAGIC, 38, 4);
     public static readonly uint VIDIOC_S_INPUT = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 39, 4);
     public static readonly uint VIDIOC_G_EDID = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 40, 32);

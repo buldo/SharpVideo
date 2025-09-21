@@ -396,4 +396,15 @@ public static unsafe class LibV4L2
     {
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERYMENU, ref queryMenuItem);
     }
+
+    /// <summary>
+    /// Query extended control information (including compound controls).
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="queryExtCtrl">Extended control query structure</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult QueryExtendedControl(int fd, ref V4L2QueryExtCtrl queryExtCtrl)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERY_EXT_CTRL, ref queryExtCtrl);
+    }
 }
