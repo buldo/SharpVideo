@@ -469,5 +469,87 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal((uint)V4L2DecoderCommand.START, nativeFilledStruct.Cmd);
         Assert.Equal(0u, nativeFilledStruct.Flags);
     }
+
+    [Fact]
+    public void TestTimeVal_StructSize()
+    {
+        // Test that TimeVal structure has expected size (2 * sizeof(long))
+        int csharpSize = Marshal.SizeOf<TimeVal>();
+        int expectedSize = 16; // 2 * 8 bytes on 64-bit platforms
+
+        Assert.Equal(expectedSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestTimeVal_FieldLayout()
+    {
+        // Test that TimeVal fields can be set and read correctly
+        var timeVal = new TimeVal
+        {
+            TvSec = 12345,
+            TvUsec = 67890
+        };
+
+        Assert.Equal(12345, timeVal.TvSec);
+        Assert.Equal(67890, timeVal.TvUsec);
+    }
+
+    [Fact]
+    public void TestV4L2Fract_StructSize()
+    {
+        // Test that V4L2Fract structure has expected size (2 * sizeof(uint))
+        int csharpSize = Marshal.SizeOf<V4L2Fract>();
+        int expectedSize = 8; // 2 * 4 bytes
+
+        Assert.Equal(expectedSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2Fract_FieldLayout()
+    {
+        // Test that V4L2Fract fields can be set and read correctly
+        var fract = new V4L2Fract
+        {
+            Numerator = 30,
+            Denominator = 1
+        };
+
+        Assert.Equal(30u, fract.Numerator);
+        Assert.Equal(1u, fract.Denominator);
+    }
+
+    [Fact]
+    public void TestIoctlResult_BasicProperties()
+    {
+        // Test IoctlResult structure basic properties
+        var successResult = new IoctlResult(true, 0, "Success");
+        var failureResult = new IoctlResult(false, -1, "Error");
+
+        Assert.True(successResult.Success);
+        Assert.Equal(0, successResult.ErrorCode);
+        Assert.Equal("Success", successResult.ErrorMessage);
+
+        Assert.False(failureResult.Success);
+        Assert.Equal(-1, failureResult.ErrorCode);
+        Assert.Equal("Error", failureResult.ErrorMessage);
+    }
+
+    [Fact]
+    public void TestIoctlResultWithDetails_BasicProperties()
+    {
+        // Test IoctlResultWithDetails structure basic properties
+        var successResult = IoctlResultWithDetails.CreateSuccess("test_operation");
+        var failureResult = IoctlResultWithDetails.CreateError("test_operation", -1, "Test error", "Test suggestion");
+
+        Assert.True(successResult.Success);
+        Assert.Equal("test_operation", successResult.OperationName);
+        Assert.Equal(0, successResult.ErrorCode);
+
+        Assert.False(failureResult.Success);
+        Assert.Equal("test_operation", failureResult.OperationName);
+        Assert.Equal(-1, failureResult.ErrorCode);
+        Assert.Equal("Test error", failureResult.ErrorMessage);
+        Assert.Equal("Test suggestion", failureResult.ErrorSuggestion);
+    }
 }
 
