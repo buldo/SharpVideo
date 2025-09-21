@@ -304,6 +304,33 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         {
             _logger.LogInformation("Setting SPS/PPS controls for stateless decoder");
 
+            // Validate SPS parameters
+            if (sps.ProfileIdc == 0 || sps.LevelIdc == 0)
+            {
+                throw new ArgumentException("Invalid SPS: ProfileIdc and LevelIdc must be non-zero");
+            }
+
+            if (sps.PicWidthInMbsMinus1 == 0xFFFF || sps.PicHeightInMapUnitsMinus1 == 0xFFFF)
+            {
+                throw new ArgumentException("Invalid SPS: Picture dimensions are invalid");
+            }
+
+            // Log SPS details for debugging
+            _logger.LogInformation("SPS Details: Profile=0x{Profile:X2}, Level=0x{Level:X2}, Constraints=0x{Constraints:X2}, " +
+                                   "ChromaFormat={Chroma}, BitDepthLuma={LumaBits}, BitDepthChroma={ChromaBits}, " +
+                                   "Width={Width}MB, Height={Height}MB, MaxRefFrames={MaxRef}",
+                sps.ProfileIdc, sps.LevelIdc, sps.ConstraintSetFlags, sps.ChromaFormatIdc,
+                sps.BitDepthLumaMinus8 + 8, sps.BitDepthChromaMinus8 + 8,
+                sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1, sps.MaxNumRefFrames);
+
+            // Log PPS details for debugging
+            _logger.LogInformation("PPS Details: ID={PpsId}, SpsId={SpsId}, SliceGroups={SliceGroups}, " +
+                                   "RefIdxL0={RefL0}, RefIdxL1={RefL1}, WeightedBipred={WeightedBipred}, " +
+                                   "InitQP={InitQP}, ChromaQpOffset={ChromaOffset}",
+                pps.PicParameterSetId, pps.SeqParameterSetId, pps.NumSliceGroupsMinus1 + 1,
+                pps.NumRefIdxL0DefaultActiveMinus1 + 1, pps.NumRefIdxL1DefaultActiveMinus1 + 1,
+                pps.WeightedBipredIdc, pps.PicInitQpMinus26 + 26, pps.ChromaQpIndexOffset);
+
             // Create extended controls array
             var extControls = new V4L2ExtControl[2];
 
@@ -354,10 +381,58 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                     if (!result.Success)
                     {
                         _logger.LogError("Failed to set SPS/PPS controls: {Error}", result.ErrorMessage);
-                        throw new InvalidOperationException($"Failed to set parameter sets: {result.ErrorMessage}");
-                    }
 
-                    _logger.LogInformation("Successfully set SPS and PPS controls for stateless decoder");
+                        // Try alternative approach: set controls individually
+                        _logger.LogInformation("Attempting to set SPS and PPS controls individually...");
+
+                        var spsControlsWrapper = new V4L2ExtControls
+                        {
+                            Which = V4L2Constants.V4L2_CTRL_CLASS_CODEC,
+                            Count = 1,
+                            Controls = controlsPtr // Points to SPS control
+                        };
+
+                        var spsResult = LibV4L2.SetExtendedControls(deviceFd, ref spsControlsWrapper);
+                        if (!spsResult.Success)
+                        {
+                            _logger.LogError("Failed to set SPS control individually: {Error}", spsResult.ErrorMessage);
+                        }
+                        else
+                        {
+                            _logger.LogInformation("Successfully set SPS control individually");
+                        }
+
+                        var ppsControlsWrapper = new V4L2ExtControls
+                        {
+                            Which = V4L2Constants.V4L2_CTRL_CLASS_CODEC,
+                            Count = 1,
+                            Controls = IntPtr.Add(controlsPtr, Marshal.SizeOf<V4L2ExtControl>()) // Points to PPS control
+                        };
+
+                        var ppsResult = LibV4L2.SetExtendedControls(deviceFd, ref ppsControlsWrapper);
+                        if (!ppsResult.Success)
+                        {
+                            _logger.LogError("Failed to set PPS control individually: {Error}", ppsResult.ErrorMessage);
+                            throw new InvalidOperationException($"Failed to set parameter sets: SPS={spsResult.ErrorMessage}, PPS={ppsResult.ErrorMessage}");
+                        }
+                        else
+                        {
+                            _logger.LogInformation("Successfully set PPS control individually");
+                        }
+
+                        if (spsResult.Success && ppsResult.Success)
+                        {
+                            _logger.LogInformation("Successfully set SPS and PPS controls individually");
+                        }
+                        else
+                        {
+                            throw new InvalidOperationException($"Failed to set parameter sets: {result.ErrorMessage}");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Successfully set SPS and PPS controls together");
+                    }
                 }
                 finally
                 {

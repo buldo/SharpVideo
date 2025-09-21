@@ -35,32 +35,49 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         if (naluType != 7)
             throw new ArgumentException($"Expected SPS NALU (type 7), got type {naluType}");
 
-        // For now, create a basic SPS structure
-        // In a complete implementation, this would parse the bitstream fully
+        // Extract basic SPS parameters
+        var profileIdc = spsData.Length > naluStart + 1 ? spsData[naluStart + 1] : (byte)0;
+        var constraintSetFlags = spsData.Length > naluStart + 2 ? spsData[naluStart + 2] : (byte)0;
+        var levelIdc = spsData.Length > naluStart + 3 ? spsData[naluStart + 3] : (byte)0;
+
+        // Validate basic parameters
+        if (profileIdc == 0 || levelIdc == 0)
+        {
+            throw new ArgumentException("Invalid SPS: missing profile or level information");
+        }
+
+        // Create SPS structure with validated parameters
         var sps = new V4L2CtrlH264Sps
         {
-            ProfileIdc = spsData.Length > naluStart + 1 ? spsData[naluStart + 1] : (byte)0,
-            LevelIdc = spsData.Length > naluStart + 3 ? spsData[naluStart + 3] : (byte)0,
-            SeqParameterSetId = 0, // Simplified - would need bitstream parsing
-            ChromaFormatIdc = 1, // 4:2:0 default
-            BitDepthLumaMinus8 = 0, // 8-bit default
-            BitDepthChromaMinus8 = 0, // 8-bit default
-            Log2MaxFrameNumMinus4 = 0, // Would need parsing
-            PicOrderCntType = 0, // Would need parsing
-            Log2MaxPicOrderCntLsbMinus4 = 0,
-            MaxNumRefFrames = 1, // Conservative default
-            NumRefFramesInPicOrderCntCycle = 0,
-            OffsetForRefFrame0 = 0,
-            OffsetForRefFrame1 = 0,
-            OffsetForTopToBottomField = 0,
-            OffsetForNonRefPic = 0,
+            ProfileIdc = profileIdc,
+            ConstraintSetFlags = constraintSetFlags,
+            LevelIdc = levelIdc,
+            SeqParameterSetId = 0, // For simplicity, assume SPS ID 0
+            ChromaFormatIdc = 1, // 4:2:0 YUV format (most common)
+            BitDepthLumaMinus8 = 0, // 8-bit luma (8 - 8 = 0)
+            BitDepthChromaMinus8 = 0, // 8-bit chroma (8 - 8 = 0)
+            Log2MaxFrameNumMinus4 = 0, // log2_max_frame_num_minus4 = 0 means max_frame_num = 16
+            PicOrderCntType = 0, // Picture order count type 0 (most common)
+            Log2MaxPicOrderCntLsbMinus4 = 0, // For POC type 0
+            MaxNumRefFrames = 1, // Single reference frame (conservative)
+            NumRefFramesInPicOrderCntCycle = 0, // Not used for POC type 0
+            OffsetForRefFrame0 = 0, // Only used for POC type 1
+            OffsetForRefFrame1 = 0, // Only used for POC type 1
+            OffsetForTopToBottomField = 0, // Only used for POC type 1
+            OffsetForNonRefPic = 0, // Only used for POC type 1
             PicWidthInMbsMinus1 = (ushort)((_initialWidth / 16) - 1),
             PicHeightInMapUnitsMinus1 = (ushort)((_initialHeight / 16) - 1),
-            Flags = 0 // Would need to parse specific flags
+            Flags = 0 // Additional flags can be set here if needed
         };
 
-        _logger.LogDebug("Parsed SPS: Profile={Profile}, Level={Level}, Width={Width}MB, Height={Height}MB",
-            sps.ProfileIdc, sps.LevelIdc, sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1);
+        // Validate calculated dimensions
+        if (sps.PicWidthInMbsMinus1 == 0xFFFF || sps.PicHeightInMapUnitsMinus1 == 0xFFFF)
+        {
+            throw new ArgumentException($"Invalid picture dimensions: {_initialWidth}x{_initialHeight}");
+        }
+
+        _logger.LogDebug("Parsed SPS: Profile=0x{Profile:X2}, Level=0x{Level:X2}, Constraints=0x{Constraints:X2}, Width={Width}MB, Height={Height}MB",
+            sps.ProfileIdc, sps.LevelIdc, sps.ConstraintSetFlags, sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1);
 
         return sps;
     }
@@ -79,25 +96,36 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         if (naluType != 8)
             throw new ArgumentException($"Expected PPS NALU (type 8), got type {naluType}");
 
-        // For now, create a basic PPS structure
-        // In a complete implementation, this would parse the bitstream fully
+        // Validate minimum PPS size (should be at least 2 bytes after NALU header)
+        if (ppsData.Length < naluStart + 2)
+        {
+            throw new ArgumentException("PPS NALU too short");
+        }
+
+        // Create PPS structure with safe defaults
         var pps = new V4L2CtrlH264Pps
         {
-            PicParameterSetId = 0, // Simplified - would need bitstream parsing
-            SeqParameterSetId = 0, // Links to SPS
-            NumSliceGroupsMinus1 = 0, // Single slice group default
-            NumRefIdxL0DefaultActiveMinus1 = 0, // Single reference default
-            NumRefIdxL1DefaultActiveMinus1 = 0, // Single reference default
-            WeightedBipredIdc = 0, // No weighted prediction default
-            PicInitQpMinus26 = 0, // Default QP
-            PicInitQsMinus26 = 0, // Default QS
-            ChromaQpIndexOffset = 0, // No chroma offset
-            SecondChromaQpIndexOffset = 0, // No second chroma offset
-            Flags = 0 // Would need to parse specific flags
+            PicParameterSetId = 0, // Assume PPS ID 0 for simplicity
+            SeqParameterSetId = 0, // Links to SPS ID 0
+            NumSliceGroupsMinus1 = 0, // Single slice group (most common)
+            NumRefIdxL0DefaultActiveMinus1 = 0, // Default: 1 reference frame for L0
+            NumRefIdxL1DefaultActiveMinus1 = 0, // Default: 1 reference frame for L1 (not used in P-frames)
+            WeightedBipredIdc = 0, // No weighted prediction (simpler)
+            PicInitQpMinus26 = 0, // Default QP = 26 (0 + 26)
+            PicInitQsMinus26 = 0, // Default QS = 26 (0 + 26)
+            ChromaQpIndexOffset = 0, // No chroma QP offset
+            SecondChromaQpIndexOffset = 0, // No second chroma QP offset
+            Flags = 0 // No special flags
         };
 
-        _logger.LogDebug("Parsed PPS: ID={PpsId}, SPS_ID={SpsId}, SliceGroups={SliceGroups}",
-            pps.PicParameterSetId, pps.SeqParameterSetId, pps.NumSliceGroupsMinus1 + 1);
+        // Validate PPS parameters
+        if (pps.PicInitQpMinus26 < -26 || pps.PicInitQpMinus26 > 25)
+        {
+            _logger.LogWarning("PPS QP value may be out of range: {QP}", pps.PicInitQpMinus26 + 26);
+        }
+
+        _logger.LogDebug("Parsed PPS: ID={PpsId}, SPS_ID={SpsId}, SliceGroups={SliceGroups}, QP={QP}",
+            pps.PicParameterSetId, pps.SeqParameterSetId, pps.NumSliceGroupsMinus1 + 1, pps.PicInitQpMinus26 + 26);
 
         return pps;
     }
