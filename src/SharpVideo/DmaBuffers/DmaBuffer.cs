@@ -116,11 +116,3 @@ public class DmaBuffer
         Dispose();
     }
 }
-
-public enum MapStatus
-{
-    NotMapped,
-    FailedToMap,
-    Mapped,
-    FailedToUnmap
-}

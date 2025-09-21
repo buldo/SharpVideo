@@ -3,38 +3,6 @@ using System.Runtime.Versioning;
 namespace SharpVideo.Linux.Native;
 
 /// <summary>
-/// Logging interface for ioctl operations.
-/// </summary>
-public interface IIoctlLogger
-{
-    void LogIoctlCall(int fd, uint request, string operation);
-    void LogIoctlSuccess(int fd, uint request, string operation);
-    void LogIoctlError(int fd, uint request, string operation, int errorCode, string errorMessage);
-}
-
-/// <summary>
-/// Console-based logger for ioctl operations.
-/// </summary>
-[SupportedOSPlatform("linux")]
-public class ConsoleIoctlLogger : IIoctlLogger
-{
-    public void LogIoctlCall(int fd, uint request, string operation)
-    {
-        Console.WriteLine($"[IOCTL] Calling {operation} on fd={fd}, request=0x{request:X8}");
-    }
-
-    public void LogIoctlSuccess(int fd, uint request, string operation)
-    {
-        Console.WriteLine($"[IOCTL] ✅ {operation} succeeded on fd={fd}, request=0x{request:X8}");
-    }
-
-    public void LogIoctlError(int fd, uint request, string operation, int errorCode, string errorMessage)
-    {
-        Console.WriteLine($"[IOCTL] ❌ {operation} failed on fd={fd}, request=0x{request:X8}, error={errorCode} ({errorMessage})");
-    }
-}
-
-/// <summary>
 /// Enhanced ioctl helper with logging and detailed error reporting.
 /// </summary>
 [SupportedOSPlatform("linux")]
@@ -144,51 +112,5 @@ public static class IoctlHelperWithLogging
             25 => "Check if the ioctl is supported by this device type",
             _ => "Consult system documentation or kernel logs for more information"
         };
-    }
-}
-
-/// <summary>
-/// Enhanced ioctl result with detailed error information and suggestions.
-/// </summary>
-public readonly struct IoctlResultWithDetails
-{
-    public bool Success { get; }
-    public string OperationName { get; }
-    public int ErrorCode { get; }
-    public string? ErrorMessage { get; }
-    public string? ErrorSuggestion { get; }
-
-    private IoctlResultWithDetails(bool success, string operationName, int errorCode = 0, string? errorMessage = null, string? errorSuggestion = null)
-    {
-        Success = success;
-        OperationName = operationName;
-        ErrorCode = errorCode;
-        ErrorMessage = errorMessage;
-        ErrorSuggestion = errorSuggestion;
-    }
-
-    public static IoctlResultWithDetails CreateSuccess(string operationName) => 
-        new(true, operationName);
-
-    public static IoctlResultWithDetails CreateError(string operationName, int errorCode, string? errorMessage = null, string? errorSuggestion = null) => 
-        new(false, operationName, errorCode, errorMessage, errorSuggestion);
-
-    public override string ToString()
-    {
-        if (Success)
-        {
-            return $"{OperationName}: Success";
-        }
-
-        var result = $"{OperationName}: Failed (Error {ErrorCode})";
-        if (!string.IsNullOrEmpty(ErrorMessage))
-        {
-            result += $" - {ErrorMessage}";
-        }
-        if (!string.IsNullOrEmpty(ErrorSuggestion))
-        {
-            result += $" | Suggestion: {ErrorSuggestion}";
-        }
-        return result;
     }
 }
