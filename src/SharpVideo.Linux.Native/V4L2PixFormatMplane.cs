@@ -37,7 +37,7 @@ public unsafe struct V4L2PixFormatMplane
     /// <summary>
     /// Per-plane format information (8 planes max)
     /// </summary>
-    public fixed byte PlaneFormat[8 * 16]; // V4L2PlanePix[8], each is 16 bytes
+    public fixed byte PlaneFormat[8 * 20]; // V4L2PlanePix[8], each is 20 bytes
 
     /// <summary>
     /// Number of planes
@@ -68,11 +68,6 @@ public unsafe struct V4L2PixFormatMplane
     /// Reserved for future extensions
     /// </summary>
     public fixed byte Reserved[7];
-
-    /// <summary>
-    /// Additional padding to match native structure size (192 - 160 = 32 bytes)
-    /// </summary>
-    private fixed byte _padding[32];
 
     /// <summary>
     /// Gets plane format information as a span
