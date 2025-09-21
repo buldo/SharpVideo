@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
+using SharpVideo.V4L2;
 using SharpVideo.V4L2DecodeDemo.Interfaces;
 
 namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
@@ -13,46 +14,16 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 {
     private readonly ILogger<V4L2StatelessControlManager> _logger;
     private readonly IH264ParameterSetParser _parameterSetParser;
-    private readonly int _deviceFd;
-    private readonly bool _useRkvdecControls;
+    private readonly V4L2Device _device;
 
     public V4L2StatelessControlManager(
         ILogger<V4L2StatelessControlManager> logger,
         IH264ParameterSetParser parameterSetParser,
-        int deviceFd)
+        V4L2Device device)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _parameterSetParser = parameterSetParser ?? throw new ArgumentNullException(nameof(parameterSetParser));
-        _deviceFd = deviceFd;
-
-        // Detect if this is a rkvdec device that needs special control IDs
-        _useRkvdecControls = DetectRkvdecDevice(deviceFd);
-        if (_useRkvdecControls)
-        {
-            _logger.LogInformation("Detected rkvdec device - using device-specific control IDs");
-        }
-    }
-
-    /// <summary>
-    /// Detect if this is a rkvdec device that requires special control IDs
-    /// </summary>
-    private bool DetectRkvdecDevice(int deviceFd)
-    {
-        try
-        {
-            // Try to query rkvdec-specific control to detect the device type
-            var control = new V4L2Control
-            {
-                Id = V4L2Constants.RKVDEC_CID_H264_DECODE_MODE
-            };
-
-            var result = LibV4L2.GetControl(deviceFd, ref control);
-            return result.Success; // If we can read this control, it's likely rkvdec
-        }
-        catch
-        {
-            return false;
-        }
+        _device = device;
     }
 
     /// <inheritdoc />
@@ -65,7 +36,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         var ppsControl = _parameterSetParser.ParsePpsToControl(ppsData);
 
         // Use the main parameter setting method
-        await SetParameterSetsAsync(_deviceFd, spsControl, ppsControl);
+        await SetParameterSetsAsync(_device.fd, spsControl, ppsControl);
     }
 
     /// <inheritdoc />
@@ -95,8 +66,8 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 
             // Set slice parameters and decode parameters
             await SetExtendedControlsAsync(new[] {
-                CreateExtendedControl(V4L2Constants.V4L2_CID_STATELESS_H264_SLICE_PARAMS, sliceParams),
-                CreateExtendedControl(V4L2Constants.V4L2_CID_STATELESS_H264_DECODE_PARAMS, decodeParams)
+                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS, sliceParams),
+                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS, decodeParams)
             });
 
             _logger.LogDebug("Successfully set slice and decode parameters controls");
@@ -115,22 +86,10 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 
         try
         {
-            // For rkvdec, the decode mode is fixed to frame-based and start code to Annex-B
-            if (_useRkvdecControls)
-            {
-                _logger.LogInformation("Using rkvdec-specific controls - decode mode and start codes are fixed");
-
-                // Try to set rkvdec controls to their expected values (they may be read-only)
-                TrySetSimpleControl(V4L2Constants.RKVDEC_CID_H264_DECODE_MODE, 1, "rkvdec decode mode to frame-based");
-                TrySetSimpleControl(V4L2Constants.RKVDEC_CID_H264_START_CODE, 1, "rkvdec start code format to Annex-B");
-
-                return Task.FromResult(true); // rkvdec uses Annex-B format
-            }
-
             // Try standard V4L2 stateless controls
             // First, try to set decode mode to frame-based (preferred)
-            if (TrySetSimpleControl(V4L2Constants.V4L2_CID_STATELESS_H264_DECODE_MODE,
-                    (int)V4L2Constants.V4L2_STATELESS_H264_DECODE_MODE_FRAME_BASED,
+            if (TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
+                    (int)V4L2StatelessH264DecodeMode.FRAME_BASED,
                     "stateless decoder to frame-based mode"))
             {
                 _logger.LogInformation("Set stateless decoder to frame-based mode");
@@ -138,14 +97,14 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             else
             {
                 // Try slice-based mode as fallback
-                TrySetSimpleControl(V4L2Constants.V4L2_CID_STATELESS_H264_DECODE_MODE,
-                    (int)V4L2Constants.V4L2_STATELESS_H264_DECODE_MODE_SLICE_BASED,
+                TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
+                    (int)V4L2StatelessH264DecodeMode.SLICE_BASED,
                     "stateless decoder to slice-based mode");
             }
 
             // Configure start code format - try Annex-B first, then none
-            if (TrySetSimpleControl(V4L2Constants.V4L2_CID_STATELESS_H264_START_CODE,
-                    (int)V4L2Constants.V4L2_STATELESS_H264_START_CODE_ANNEX_B,
+            if (TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
+                    (int)V4L2StatelessH264StartCode.ANNEX_B,
                     "start code format to Annex-B"))
             {
                 _logger.LogInformation("Successfully configured stateless decoder for Annex-B format (with start codes)");
@@ -154,8 +113,8 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             else
             {
                 // Try setting to no start codes
-                if (TrySetSimpleControl(V4L2Constants.V4L2_CID_STATELESS_H264_START_CODE,
-                        (int)V4L2Constants.V4L2_STATELESS_H264_START_CODE_NONE,
+                if (TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
+                        (int)V4L2StatelessH264StartCode.NONE,
                         "start code format to none"))
                 {
                     _logger.LogInformation("Successfully configured stateless decoder for raw NALUs (without start codes)");
@@ -192,8 +151,8 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         {
             // Set SPS and PPS controls together
             await SetExtendedControlsAsync(new[] {
-                CreateExtendedControl(_useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_SPS : V4L2Constants.V4L2_CID_STATELESS_H264_SPS, sps),
-                CreateExtendedControl(_useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_PPS : V4L2Constants.V4L2_CID_STATELESS_H264_PPS, pps)
+                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, sps),
+                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, pps)
             });
 
             _logger.LogInformation("Successfully set SPS and PPS controls");
@@ -248,13 +207,13 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             // Set up extended controls structure
             var extControlsWrapper = new V4L2ExtControls
             {
-                Which = V4L2Constants.V4L2_CTRL_CLASS_CODEC,
+                Which = V4l2ControlsConstants.V4L2_CTRL_CLASS_CODEC,
                 Count = (uint)controlArray.Length,
                 Controls = controlsPtr
             };
 
             // Set the controls
-            var result = LibV4L2.SetExtendedControls(_deviceFd, ref extControlsWrapper);
+            var result = LibV4L2.SetExtendedControls(_device.fd, ref extControlsWrapper);
             if (!result.Success)
             {
                 throw new InvalidOperationException($"Failed to set extended controls: {result.ErrorMessage}");
@@ -286,7 +245,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 Value = value
             };
 
-            var result = LibV4L2.SetControl(_deviceFd, ref control);
+            var result = LibV4L2.SetControl(_device.fd, ref control);
             if (result.Success)
             {
                 _logger.LogInformation("Set {Description}", description);

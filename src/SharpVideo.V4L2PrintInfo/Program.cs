@@ -103,7 +103,7 @@ namespace SharpVideo.V4L2PrintInfo
                 var fmtDesc = new V4L2FmtDesc
                 {
                     Index = i,
-                    Type = (uint)bufferType
+                    Type = bufferType
                 };
 
                 var result = LibV4L2.EnumerateFormat(fd, ref fmtDesc);

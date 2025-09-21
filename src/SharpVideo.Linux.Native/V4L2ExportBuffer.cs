@@ -12,7 +12,7 @@ public unsafe struct V4L2ExportBuffer
     /// <summary>
     /// Buffer type
     /// </summary>
-    public uint Type;
+    public V4L2BufferType Type;
 
     /// <summary>
     /// Buffer index

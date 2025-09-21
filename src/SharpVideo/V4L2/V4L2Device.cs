@@ -1,7 +1,11 @@
-﻿using SharpVideo.Linux.Native;
+﻿using System.Runtime.Serialization;
+using System.Runtime.Versioning;
+
+using SharpVideo.Linux.Native;
 
 namespace SharpVideo.V4L2;
 
+[SupportedOSPlatform("linux")]
 public class V4L2Device : IDisposable
 {
     private readonly int _deviceFd;
@@ -17,6 +21,41 @@ public class V4L2Device : IDisposable
     public IReadOnlyCollection<V4L2DeviceControl> Controls { get; }
 
     public IReadOnlyCollection<V4L2DeviceExtendedControl> ExtendedControls { get; }
+
+    public void SetFormatMplane(
+        V4L2BufferType type,
+        V4L2PixFormatMplane pixFormat)
+    {
+        var format = new V4L2Format
+        {
+            Type = type,
+            Pix_mp = pixFormat
+        };
+
+        var formatResult = LibV4L2.SetFormat(_deviceFd, ref format);
+        if (!formatResult.Success)
+        {
+            throw new Exception($"Failed to set {type} format");
+        }
+    }
+
+    public void StreamOn(V4L2BufferType type)
+    {
+        var outputResult = LibV4L2.StreamOn(_deviceFd, type);
+        if (!outputResult.Success)
+        {
+            throw new Exception($"Failed to start {type} streaming: {outputResult.ErrorMessage}");
+        }
+    }
+
+    public void StreamOff(V4L2BufferType type)
+    {
+        var outputResult = LibV4L2.StreamOff(_deviceFd, type);
+        if (!outputResult.Success)
+        {
+            throw new Exception($"Failed to start {type} streaming: {outputResult.ErrorMessage}");
+        }
+    }
 
     // TODO: Remove
     public int fd

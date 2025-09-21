@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.H264;
 using SharpVideo.Linux.Native;
+using SharpVideo.V4L2;
 using SharpVideo.V4L2DecodeDemo.Interfaces;
 using SharpVideo.V4L2DecodeDemo.Models;
 using SharpVideo.V4L2DecodeDemo.Services.Stateless;
@@ -26,20 +27,13 @@ namespace SharpVideo.V4L2DecodeDemo.Services;
 [SupportedOSPlatform("linux")]
 public class H264V4L2StatelessDecoder : IVideoDecoder
 {
-    #region Dependencies and Configuration
-
+    private readonly V4L2Device _device;
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
-    private readonly IV4L2DeviceManager _deviceManager;
     private readonly DecoderConfiguration _configuration;
     private readonly IH264ParameterSetParser _parameterSetParser;
     private readonly IV4L2StatelessControlManager _controlManager;
     private readonly IStatelessSliceProcessor _sliceProcessor;
 
-    #endregion
-
-    #region State
-
-    private int _deviceFd = -1;
     private readonly List<MappedBuffer> _outputBuffers = new();
     private readonly List<MappedBuffer> _captureBuffers = new();
     private bool _disposed;
@@ -53,27 +47,19 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     private bool _hasValidParameterSets;
     private bool _useStartCodes = true;
 
-    #endregion
-
-    #region Events
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
 
-    #endregion
-
-    #region Constructor
 
     public H264V4L2StatelessDecoder(
+        V4L2Device device,
         ILogger<H264V4L2StatelessDecoder> logger,
-        IV4L2DeviceManager? deviceManager = null,
         DecoderConfiguration? configuration = null)
     {
+        _device = device;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? new DecoderConfiguration();
-
-        var deviceLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<V4L2DeviceManager>();
-        _deviceManager = deviceManager ?? new V4L2DeviceManager(deviceLogger);
 
         // Create parameter set parser
         var parserLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<H264ParameterSetParser>();
@@ -83,10 +69,6 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
         _controlManager = null!; // Will be set in InitializeDecoderAsync
         _sliceProcessor = null!; // Will be set in InitializeDecoderAsync
     }
-
-    #endregion
-
-    #region Public API
 
     /// <summary>
     /// Decodes an H.264 file using V4L2 hardware acceleration (stateless decoder)
@@ -124,7 +106,7 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
         }
         finally
         {
-            await CleanupAsync();
+            Cleanup();
         }
     }
 
@@ -164,129 +146,60 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
         }
         finally
         {
-            await CleanupAsync();
+            Cleanup();
         }
     }
-
-    #endregion
-
-    #region Initialization
 
     private async Task InitializeDecoderAsync(CancellationToken cancellationToken)
     {
-        // Find and open device
-        var devicePath = _deviceManager.FindH264DecoderDevice();
-        if (string.IsNullOrEmpty(devicePath))
-        {
-            throw new InvalidOperationException("No suitable H.264 decoder device found");
-        }
+        // Create control manager and slice processor now that we have device FD
+        var controlLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<V4L2StatelessControlManager>();
+        var controlManager = new V4L2StatelessControlManager(controlLogger, _parameterSetParser, _device);
 
-        _deviceFd = Libc.open(devicePath, OpenFlags.O_RDWR | OpenFlags.O_NONBLOCK);
-        if (_deviceFd < 0)
-        {
-            var error = Marshal.GetLastWin32Error();
-            throw new InvalidOperationException($"Failed to open device {devicePath}. Error: {error}");
-        }
+        var sliceLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<StatelessSliceProcessor>();
+        var sliceProcessor = new StatelessSliceProcessor(sliceLogger, controlManager, _parameterSetParser, _device,
+            _outputBuffers, _hasValidParameterSets);
 
-        _logger.LogInformation("Opened decoder device: {DevicePath} (fd: {FileDescriptor})", devicePath, _deviceFd);
+        // Store references (hack around readonly requirement)
+        object objControlManager = controlManager;
+        object objSliceProcessor = sliceProcessor;
+        var controlManagerField = typeof(H264V4L2StatelessDecoder).GetField("_controlManager",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var sliceProcessorField = typeof(H264V4L2StatelessDecoder).GetField("_sliceProcessor",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        controlManagerField?.SetValue(this, objControlManager);
+        sliceProcessorField?.SetValue(this, objSliceProcessor);
 
-        try
-        {
-            // Create control manager and slice processor now that we have device FD
-            var controlLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<V4L2StatelessControlManager>();
-            var controlManager = new V4L2StatelessControlManager(controlLogger, _parameterSetParser, _deviceFd);
+        // Configure decoder
+        ConfigureFormats();
+        _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
+        SetupBuffers();
+        StartStreaming();
 
-            var sliceLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger<StatelessSliceProcessor>();
-            var sliceProcessor = new StatelessSliceProcessor(sliceLogger, controlManager, _parameterSetParser, _deviceFd, _outputBuffers, _hasValidParameterSets);
-
-            // Store references (hack around readonly requirement)
-            object objControlManager = controlManager;
-            object objSliceProcessor = sliceProcessor;
-            var controlManagerField = typeof(H264V4L2StatelessDecoder).GetField("_controlManager", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            var sliceProcessorField = typeof(H264V4L2StatelessDecoder).GetField("_sliceProcessor", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            controlManagerField?.SetValue(this, objControlManager);
-            sliceProcessorField?.SetValue(this, objSliceProcessor);
-
-            // Configure decoder
-            await ConfigureFormatsAsync(cancellationToken);
-            _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
-            await SetupBuffersAsync(cancellationToken);
-            await StartStreamingAsync(cancellationToken);
-
-            _logger.LogInformation("Decoder initialization completed successfully");
-        }
-        catch
-        {
-            if (_deviceFd >= 0)
-            {
-                Libc.close(_deviceFd);
-                _deviceFd = -1;
-            }
-            throw;
-        }
+        _logger.LogInformation("Decoder initialization completed successfully");
     }
 
-    private async Task ConfigureFormatsAsync(CancellationToken cancellationToken)
+    private void ConfigureFormats()
     {
         _logger.LogInformation("Configuring stateless decoder formats...");
 
         // Configure output format (H.264 input) for stateless decoder
-        var outputFormat = new V4L2Format
+        var outputFormat = new V4L2PixFormatMplane
         {
-            Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE
+            Width = _configuration.InitialWidth,
+            Height = _configuration.InitialHeight,
+            PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE,
+            NumPlanes = 1,
+            Field = (uint)V4L2Field.NONE,
+            Colorspace = 5, // V4L2_COLORSPACE_REC709
+            YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
+            Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
+            XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
         };
+        _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
 
-        // Try common H.264 formats for stateless decoders, prioritizing S264 for rkvdec
-        uint[] h264Formats = new uint[]
-        {
-            0x34363253, // S264 (H264 Parsed Slice Data) - preferred for rkvdec stateless
-            0x34363248, // H264 (standard)
-            0x31435641, // AVC1
-        };
 
-        bool formatSet = false;
-        foreach (var format in h264Formats)
-        {
-            var outputPixMp = new V4L2PixFormatMplane
-            {
-                Width = _configuration.InitialWidth,
-                Height = _configuration.InitialHeight,
-                PixelFormat = format,
-                NumPlanes = 1,
-                Field = (uint)V4L2Field.NONE,
-                Colorspace = 5, // V4L2_COLORSPACE_REC709
-                YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
-                Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
-                XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
-            };
-            outputFormat.Pix_mp = outputPixMp;
-
-            var formatResult = LibV4L2.SetFormat(_deviceFd, ref outputFormat);
-            if (formatResult.Success)
-            {
-                _logger.LogInformation("Successfully set H.264 format for stateless decoder: 0x{Format:X8}", format);
-                formatSet = true;
-                break;
-            }
-        }
-
-        if (!formatSet)
-        {
-            throw new InvalidOperationException("Failed to set any supported H.264 format for stateless decoder");
-        }
-
-        // Configure capture format (decoded output)
-        await ConfigureCaptureFormatAsync(cancellationToken);
-    }
-
-    private async Task ConfigureCaptureFormatAsync(CancellationToken cancellationToken)
-    {
-        var captureFormat = new V4L2Format
-        {
-            Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE
-        };
-
-        var capturePixMp = new V4L2PixFormatMplane
+        var captureFormat = new V4L2PixFormatMplane
         {
             Width = _configuration.InitialWidth,
             Height = _configuration.InitialHeight,
@@ -294,36 +207,27 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
             NumPlanes = 2, // NV12 typically has 2 planes
             Field = (uint)V4L2Field.NONE
         };
-        captureFormat.Pix_mp = capturePixMp;
+        _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
 
-        var result = LibV4L2.SetFormat(_deviceFd, ref captureFormat);
-        if (!result.Success)
-        {
-            // Try alternative format
-            capturePixMp.PixelFormat = _configuration.AlternativePixelFormat;
-            capturePixMp.NumPlanes = 3; // YUV420 typically has 3 planes
-            captureFormat.Pix_mp = capturePixMp;
+        //var result = LibV4L2.SetFormat(_deviceFd, ref captureFormat);
+        //if (!result.Success)
+        //{
+        //    // Try alternative format
+        //    capturePixMp.PixelFormat = _configuration.AlternativePixelFormat;
+        //    capturePixMp.NumPlanes = 3; // YUV420 typically has 3 planes
+        //    captureFormat.Pix_mp = capturePixMp;
 
-            result = LibV4L2.SetFormat(_deviceFd, ref captureFormat);
-            if (!result.Success)
-            {
-                throw new InvalidOperationException($"Failed to set capture format: {result.ErrorMessage}");
-            }
-        }
-
-        _logger.LogInformation("Set capture format: {Width}x{Height}, PixelFormat: 0x{PixelFormat:X8}",
-            captureFormat.Pix_mp.Width, captureFormat.Pix_mp.Height, captureFormat.Pix_mp.PixelFormat);
-
-        await Task.CompletedTask;
+        //    result = LibV4L2.SetFormat(_deviceFd, ref captureFormat);
+        //    if (!result.Success)
+        //    {
+        //        throw new InvalidOperationException($"Failed to set capture format: {result.ErrorMessage}");
+        //    }
+        //}
     }
-
-    #endregion
 
     // TODO: Complete the implementation with the remaining methods
     // This is a foundational structure - the remaining methods would be simplified versions
     // of the buffer setup, streaming, parameter extraction, and processing methods
-
-    #region Private Implementation Methods
 
     private async Task ExtractAndSetParameterSetsAsync(string filePath, CancellationToken cancellationToken = default)
     {
@@ -332,7 +236,7 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
 
         if (sps.HasValue && pps.HasValue)
         {
-            await _controlManager.SetParameterSetsAsync(_deviceFd, sps.Value, pps.Value);
+            await _controlManager.SetParameterSetsAsync(_device.fd, sps.Value, pps.Value);
             _currentSps = sps.Value;
             _currentPps = pps.Value;
             _hasValidParameterSets = true;
@@ -346,7 +250,7 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     private async Task ProcessVideoFileStatelessAsync(string filePath, CancellationToken cancellationToken = default)
     {
                 // Process slice data
-        await _sliceProcessor.ProcessVideoFileAsync(_deviceFd, filePath,
+        await _sliceProcessor.ProcessVideoFileAsync(_device.fd, filePath,
             progress => ProgressChanged?.Invoke(this, new DecodingProgressEventArgs {
                 BytesProcessed = (long)progress,
                 TotalBytes = 100,
@@ -361,7 +265,7 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     private async Task ProcessVideoFileNaluByNaluStatelessAsync(string filePath, CancellationToken cancellationToken = default)
     {
         // Process NALUs one by one
-        await _sliceProcessor.ProcessVideoFileNaluByNaluAsync(_deviceFd, filePath,
+        await _sliceProcessor.ProcessVideoFileNaluByNaluAsync(_device.fd, filePath,
             frame => {
                 _framesDecoded++;
                 FrameDecoded?.Invoke(this, new FrameDecodedEventArgs {
@@ -379,17 +283,17 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
             }));
     }
 
-    private async Task SetupBuffersAsync(CancellationToken cancellationToken = default)
+    private void SetupBuffers()
     {
         // Request OUTPUT buffers for slice data
         var outputReqBufs = new V4L2RequestBuffers
         {
             Count = (uint)_outputBufferCount,
-            Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
             Memory = V4L2Constants.V4L2_MEMORY_MMAP
         };
 
-        var outputResult = LibV4L2.RequestBuffers(_deviceFd, ref outputReqBufs);
+        var outputResult = LibV4L2.RequestBuffers(_device.fd, ref outputReqBufs);
         if (!outputResult.Success)
         {
             throw new InvalidOperationException($"Failed to request OUTPUT buffers: {outputResult.ErrorMessage}");
@@ -399,89 +303,64 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
         var captureReqBufs = new V4L2RequestBuffers
         {
             Count = (uint)_captureBufferCount,
-            Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+            Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
             Memory = V4L2Constants.V4L2_MEMORY_MMAP
         };
 
-        var captureResult = LibV4L2.RequestBuffers(_deviceFd, ref captureReqBufs);
+        var captureResult = LibV4L2.RequestBuffers(_device.fd, ref captureReqBufs);
         if (!captureResult.Success)
         {
             throw new InvalidOperationException($"Failed to request CAPTURE buffers: {captureResult.ErrorMessage}");
         }
-
-        await Task.CompletedTask;
     }
 
-    private async Task StartStreamingAsync(CancellationToken cancellationToken = default)
+    private void StartStreaming()
     {
         // Start streaming on both queues
-        var outputResult = LibV4L2.StreamOn(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE);
-        if (!outputResult.Success)
-        {
-            throw new InvalidOperationException($"Failed to start OUTPUT streaming: {outputResult.ErrorMessage}");
-        }
-
-        var captureResult = LibV4L2.StreamOn(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE);
-        if (!captureResult.Success)
-        {
-            throw new InvalidOperationException($"Failed to start CAPTURE streaming: {captureResult.ErrorMessage}");
-        }
-
-        await Task.CompletedTask;
+        _device.StreamOn(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
+        _device.StreamOn(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
     }
 
-    #endregion
-
-    #region Cleanup and Disposal
-
-    private async Task CleanupAsync()
+    private void Cleanup()
     {
-        if (_deviceFd >= 0)
+
+        _logger.LogInformation("Cleaning up decoder resources...");
+
+        // Stop streaming
+        _device.StreamOff(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
+        _device.StreamOff(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
+
+        // Unmap buffers
+        foreach (var buffer in _outputBuffers)
         {
-            _logger.LogInformation("Cleaning up decoder resources...");
-
-            // Stop streaming
-            LibV4L2.StreamOff(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE);
-            LibV4L2.StreamOff(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE);
-
-            // Unmap buffers
-            foreach (var buffer in _outputBuffers)
+            if (buffer.Pointer != IntPtr.Zero)
             {
-                if (buffer.Pointer != IntPtr.Zero)
+                unsafe
                 {
-                    unsafe
-                    {
-                        Libc.munmap((void*)buffer.Pointer, buffer.Size);
-                    }
+                    Libc.munmap((void*)buffer.Pointer, buffer.Size);
                 }
             }
-
-            foreach (var buffer in _captureBuffers)
-            {
-                if (buffer.Pointer != IntPtr.Zero)
-                {
-                    unsafe
-                    {
-                        Libc.munmap((void*)buffer.Pointer, buffer.Size);
-                    }
-                }
-            }
-
-            // Close device
-            Libc.close(_deviceFd);
-            _deviceFd = -1;
-
-            _logger.LogInformation("Decoder cleanup completed");
         }
 
-        await Task.CompletedTask;
+        foreach (var buffer in _captureBuffers)
+        {
+            if (buffer.Pointer != IntPtr.Zero)
+            {
+                unsafe
+                {
+                    Libc.munmap((void*)buffer.Pointer, buffer.Size);
+                }
+            }
+        }
+
+        _logger.LogInformation("Decoder cleanup completed");
     }
 
     public void Dispose()
     {
         if (!_disposed)
         {
-            CleanupAsync().Wait();
+            Cleanup();
             _disposed = true;
         }
         GC.SuppressFinalize(this);
@@ -491,11 +370,9 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     {
         if (!_disposed)
         {
-            await CleanupAsync();
+            Cleanup();
             _disposed = true;
         }
         GC.SuppressFinalize(this);
     }
-
-    #endregion
 }

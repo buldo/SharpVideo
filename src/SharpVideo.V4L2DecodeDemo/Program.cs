@@ -42,8 +42,11 @@ internal class Program
                 builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
 
             // Create the decoder with logger - it will create its own modular components internally
+
+            var deviceInfo = V4L2.V4L2DeviceManager.GetH264Devices().First();
+            var device = V4L2.V4L2DeviceFactory.Open(deviceInfo.DevicePath);
             var logger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
-            await using var decoder = new H264V4L2StatelessDecoder(logger);
+            await using var decoder = new H264V4L2StatelessDecoder(device, logger);
 
             // Subscribe to events for real-time feedback
             decoder.FrameDecoded += (sender, e) =>

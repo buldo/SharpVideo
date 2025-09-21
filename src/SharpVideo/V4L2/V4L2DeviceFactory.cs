@@ -25,7 +25,7 @@ public static class V4L2DeviceFactory
         var ext = new List<V4L2DeviceExtendedControl>();
 
         // First try extended control enumeration
-        var qext = new V4L2QueryExtCtrl { Id = V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL | V4L2Constants.V4L2_CTRL_FLAG_NEXT_COMPOUND };
+        var qext = new V4L2QueryExtCtrl { Id = (uint)(V4L2ControlFlags.NEXT_CTRL | V4L2ControlFlags.NEXT_COMPOUND) };
         var useExt = LibV4L2.QueryExtendedControl(deviceFd, ref qext).Success;
         if (useExt)
         {
@@ -33,7 +33,7 @@ public static class V4L2DeviceFactory
             {
                 if (qext.Flags.HasFlag(V4L2ControlFlags.DISABLED))
                 {
-                    qext.Id |= V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL | V4L2Constants.V4L2_CTRL_FLAG_NEXT_COMPOUND;
+                    qext.Id |= (uint)(V4L2ControlFlags.NEXT_CTRL | V4L2ControlFlags.NEXT_COMPOUND);
                     continue;
                 }
 
@@ -76,7 +76,7 @@ public static class V4L2DeviceFactory
 
                 ext.Add(control);
 
-                qext.Id |= V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL | V4L2Constants.V4L2_CTRL_FLAG_NEXT_COMPOUND;
+                qext.Id |= (uint)(V4L2ControlFlags.NEXT_CTRL | V4L2ControlFlags.NEXT_COMPOUND);
             } while (LibV4L2.QueryExtendedControl(deviceFd, ref qext).Success);
         }
         else
@@ -91,12 +91,12 @@ public static class V4L2DeviceFactory
     {
         // Fallback to legacy queryctrl enumeration
         var ret = new List<V4L2DeviceControl>();
-        var queryCtrl = new V4L2QueryCtrl { Id = V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL };
+        var queryCtrl = new V4L2QueryCtrl { Id = (uint)V4L2ControlFlags.NEXT_CTRL };
         while (LibV4L2.QueryControl(deviceFd, ref queryCtrl).Success)
         {
             if (queryCtrl.Flags.HasFlag(V4L2ControlFlags.DISABLED))
             {
-                queryCtrl.Id |= V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL;
+                queryCtrl.Id |= (uint)V4L2ControlFlags.NEXT_CTRL;
                 continue;
             }
 
@@ -132,7 +132,7 @@ public static class V4L2DeviceFactory
             };
             ret.Add(controlModel);
 
-            queryCtrl.Id |= V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL;
+            queryCtrl.Id |= (uint)V4L2ControlFlags.NEXT_CTRL;
         }
 
         return ret;

@@ -227,7 +227,7 @@ public static unsafe class LibV4L2
     {
         var format = new V4L2Format
         {
-            Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+            Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
             Pix_mp = new V4L2PixFormatMplane
             {
                 Width = width,
@@ -253,7 +253,7 @@ public static unsafe class LibV4L2
         var reqbufs = new V4L2RequestBuffers
         {
             Count = count,
-            Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+            Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
             Memory = V4L2Constants.V4L2_MEMORY_DMABUF
         };
 
@@ -272,7 +272,7 @@ public static unsafe class LibV4L2
     {
         var expbuf = new V4L2ExportBuffer
         {
-            Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+            Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
             Index = index,
             Plane = plane,
             Flags = 0

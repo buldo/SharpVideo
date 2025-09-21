@@ -150,7 +150,7 @@ public class IoctlTests
             // Test format operations
             var format = new V4L2Format
             {
-                Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE
+                Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE
             };
 
             var formatResult = LibV4L2.GetFormat(fd, ref format);
@@ -189,7 +189,7 @@ public class IoctlTests
             Assert.False(formatResult.Success); // Expected to fail with /dev/null
 
             // Verify format structure was set up correctly
-            Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, format.Type);
+            Assert.Equal(V4L2BufferType.VIDEO_CAPTURE_MPLANE, format.Type);
             Assert.Equal(1920u, format.Pix_mp.Width);
             Assert.Equal(1080u, format.Pix_mp.Height);
             Assert.Equal(V4L2PixelFormats.NV12M, format.Pix_mp.PixelFormat);
@@ -250,7 +250,7 @@ public class IoctlTests
                         {
                             var format = new V4L2Format
                             {
-                                Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE
+                                Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE
                             };
 
                             var formatResult = LibV4L2.GetFormat(videoFd, ref format);

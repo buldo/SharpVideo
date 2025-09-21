@@ -427,70 +427,6 @@ public class ConstantsAndEnumsTests
 
     #endregion
 
-    #region Additional V4L2Constants Tests
-
-    [Fact]
-    public void TestV4L2Constants_AllBufferTypes()
-    {
-        // Test all V4L2 buffer type constants have expected values
-        Assert.Equal(1u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE);
-        Assert.Equal(2u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT);
-        Assert.Equal(3u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OVERLAY);
-        Assert.Equal(4u, V4L2Constants.V4L2_BUF_TYPE_VBI_CAPTURE);
-        Assert.Equal(5u, V4L2Constants.V4L2_BUF_TYPE_VBI_OUTPUT);
-        Assert.Equal(6u, V4L2Constants.V4L2_BUF_TYPE_SLICED_VBI_CAPTURE);
-        Assert.Equal(7u, V4L2Constants.V4L2_BUF_TYPE_SLICED_VBI_OUTPUT);
-        Assert.Equal(8u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_OVERLAY);
-        Assert.Equal(9u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
-        Assert.Equal(10u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
-        Assert.Equal(11u, V4L2Constants.V4L2_BUF_TYPE_SDR_CAPTURE);
-        Assert.Equal(12u, V4L2Constants.V4L2_BUF_TYPE_SDR_OUTPUT);
-        Assert.Equal(13u, V4L2Constants.V4L2_BUF_TYPE_META_CAPTURE);
-        Assert.Equal(14u, V4L2Constants.V4L2_BUF_TYPE_META_OUTPUT);
-    }
-
-    [Fact]
-    public void TestV4L2Constants_ControlConstants()
-    {
-        // Test V4L2 control class constants
-        Assert.Equal(0x00980000u, V4L2Constants.V4L2_CTRL_CLASS_USER);
-        Assert.Equal(0x00990000u, V4L2Constants.V4L2_CTRL_CLASS_CODEC);
-
-        // Test computed control base
-        Assert.Equal(V4L2Constants.V4L2_CTRL_CLASS_CODEC | 0x900u, V4L2Constants.V4L2_CID_CODEC_BASE);
-
-        // Test H.264 control IDs
-        Assert.Equal(V4L2Constants.V4L2_CID_CODEC_BASE + 302u, V4L2Constants.V4L2_CID_STATELESS_H264_SPS);
-        Assert.Equal(V4L2Constants.V4L2_CID_CODEC_BASE + 303u, V4L2Constants.V4L2_CID_STATELESS_H264_PPS);
-        Assert.Equal(V4L2Constants.V4L2_CID_CODEC_BASE + 304u, V4L2Constants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
-        Assert.Equal(V4L2Constants.V4L2_CID_CODEC_BASE + 305u, V4L2Constants.V4L2_CID_STATELESS_H264_DECODE_PARAMS);
-        Assert.Equal(V4L2Constants.V4L2_CID_CODEC_BASE + 306u, V4L2Constants.V4L2_CID_STATELESS_H264_START_CODE);
-        Assert.Equal(V4L2Constants.V4L2_CID_CODEC_BASE + 307u, V4L2Constants.V4L2_CID_STATELESS_H264_DPB);
-        Assert.Equal(V4L2Constants.V4L2_CID_CODEC_BASE + 308u, V4L2Constants.V4L2_CID_STATELESS_H264_DECODE_MODE);
-    }
-
-    [Fact]
-    public void TestV4L2Constants_H264Values()
-    {
-        // Test H.264 start code values
-        Assert.Equal(0u, V4L2Constants.V4L2_STATELESS_H264_START_CODE_NONE);
-        Assert.Equal(1u, V4L2Constants.V4L2_STATELESS_H264_START_CODE_ANNEX_B);
-
-        // Test H.264 decode mode values
-        Assert.Equal(0u, V4L2Constants.V4L2_STATELESS_H264_DECODE_MODE_SLICE_BASED);
-        Assert.Equal(1u, V4L2Constants.V4L2_STATELESS_H264_DECODE_MODE_FRAME_BASED);
-    }
-
-    [Fact]
-    public void TestV4L2Constants_MiscConstants()
-    {
-        // Test miscellaneous V4L2 constants
-        Assert.Equal(32u, V4L2Constants.VIDEO_MAX_FRAME);
-        Assert.Equal(8u, V4L2Constants.VIDEO_MAX_PLANES);
-    }
-
-    #endregion
-
     #region Constant Value Tests
 
     [Fact]
@@ -638,18 +574,6 @@ public class ConstantsAndEnumsTests
         Assert.NotEqual(0u, iorRequest);
         Assert.NotEqual(0u, iowRequest);
         Assert.NotEqual(0u, iowrRequest);
-    }
-
-    [Fact]
-    public void TestV4L2Constants_BufferTypes()
-    {
-        // Test that V4L2 buffer type constants have expected values
-        Assert.Equal(1u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE);
-        Assert.Equal(2u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT);
-        Assert.Equal(9u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
-        Assert.Equal(10u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
-        Assert.Equal(13u, V4L2Constants.V4L2_BUF_TYPE_META_CAPTURE);
-        Assert.Equal(14u, V4L2Constants.V4L2_BUF_TYPE_META_OUTPUT);
     }
 
     [Fact]

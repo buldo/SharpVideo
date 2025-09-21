@@ -125,7 +125,7 @@ public static class V4L2DeviceManager
             var fmtDesc = new V4L2FmtDesc
             {
                 Index = fmtIndex,
-                Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE
+                Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE
             };
 
             var result = LibV4L2.EnumerateFormat(fd, ref fmtDesc);
@@ -137,7 +137,7 @@ public static class V4L2DeviceManager
                 Index = fmtIndex,
                 PixelFormat = fmtDesc.PixelFormat,
                 Description = fmtDesc.DescriptionString,
-                BufferType = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE
+                BufferType =  fmtDesc.Type
             };
 
             formats.Add(formatInfo);

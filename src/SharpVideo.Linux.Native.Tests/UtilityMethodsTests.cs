@@ -129,18 +129,6 @@ public class UtilityMethodsTests
     }
 
     [Fact]
-    public void TestV4L2Constants_BufferTypes()
-    {
-        // Test that V4L2 buffer type constants have expected values
-        Assert.Equal(1u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE);
-        Assert.Equal(2u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT);
-        Assert.Equal(9u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
-        Assert.Equal(10u, V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
-        Assert.Equal(13u, V4L2Constants.V4L2_BUF_TYPE_META_CAPTURE);
-        Assert.Equal(14u, V4L2Constants.V4L2_BUF_TYPE_META_OUTPUT);
-    }
-
-    [Fact]
     public void TestV4L2Constants_MemoryTypes()
     {
         // Test that V4L2 memory type constants have expected values
@@ -190,19 +178,7 @@ public class UtilityMethodsTests
             }
         }
     }
-
-    [Fact]
-    public void TestV4L2Constants_ControlConstants()
-    {
-        // Test V4L2 control constants
-        Assert.NotEqual(0u, V4L2Constants.V4L2_CTRL_CLASS_USER);
-        Assert.NotEqual(0u, V4L2Constants.V4L2_CTRL_CLASS_CODEC);
-        Assert.NotEqual(0u, V4L2Constants.V4L2_CID_CODEC_BASE);
-
-        // Test that different control classes have different values
-        Assert.NotEqual(V4L2Constants.V4L2_CTRL_CLASS_USER, V4L2Constants.V4L2_CTRL_CLASS_CODEC);
-    }
-
+    
     [Fact]
     public void TestV4L2Constants_OtherConstants()
     {

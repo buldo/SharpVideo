@@ -13,7 +13,7 @@ public unsafe struct V4L2Format
     /// Buffer type
     /// </summary>
     [FieldOffset(0)]
-    public uint Type;
+    public V4L2BufferType Type;
 
     /// <summary>
     /// Format data union - represented as raw bytes since it can contain different format types

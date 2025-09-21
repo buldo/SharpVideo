@@ -79,22 +79,6 @@ public static class V4L2Constants
     public static readonly uint VIDIOC_DECODER_CMD = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 96, 72); // sizeof(V4L2DecoderCmd)
     public static readonly uint VIDIOC_TRY_DECODER_CMD = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 97, 72); // sizeof(V4L2DecoderCmd)
 
-    // Stream type constants
-    public const uint V4L2_BUF_TYPE_VIDEO_CAPTURE = 1;
-    public const uint V4L2_BUF_TYPE_VIDEO_OUTPUT = 2;
-    public const uint V4L2_BUF_TYPE_VIDEO_OVERLAY = 3;
-    public const uint V4L2_BUF_TYPE_VBI_CAPTURE = 4;
-    public const uint V4L2_BUF_TYPE_VBI_OUTPUT = 5;
-    public const uint V4L2_BUF_TYPE_SLICED_VBI_CAPTURE = 6;
-    public const uint V4L2_BUF_TYPE_SLICED_VBI_OUTPUT = 7;
-    public const uint V4L2_BUF_TYPE_VIDEO_OUTPUT_OVERLAY = 8;
-    public const uint V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE = 9;
-    public const uint V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE = 10;
-    public const uint V4L2_BUF_TYPE_SDR_CAPTURE = 11;
-    public const uint V4L2_BUF_TYPE_SDR_OUTPUT = 12;
-    public const uint V4L2_BUF_TYPE_META_CAPTURE = 13;
-    public const uint V4L2_BUF_TYPE_META_OUTPUT = 14;
-
     // Memory types
     public const uint V4L2_MEMORY_MMAP = 1;
     public const uint V4L2_MEMORY_USERPTR = 2;
@@ -104,37 +88,4 @@ public static class V4L2Constants
     // Other useful constants
     public const uint VIDEO_MAX_FRAME = 32;
     public const uint VIDEO_MAX_PLANES = 8;
-
-    // V4L2 Control constants
-    public const uint V4L2_CTRL_CLASS_USER = 0x00980000;
-    public const uint V4L2_CTRL_CLASS_CODEC = 0x00990000;
-
-    // V4L2 Control IDs for H.264 Stateless Decoder
-    public const uint V4L2_CID_CODEC_BASE = V4L2_CTRL_CLASS_CODEC | 0x900;
-    public const uint V4L2_CID_STATELESS_H264_SPS = V4L2_CID_CODEC_BASE + 302;
-    public const uint V4L2_CID_STATELESS_H264_PPS = V4L2_CID_CODEC_BASE + 303;
-    public const uint V4L2_CID_STATELESS_H264_SLICE_PARAMS = V4L2_CID_CODEC_BASE + 304;
-    public const uint V4L2_CID_STATELESS_H264_DECODE_PARAMS = V4L2_CID_CODEC_BASE + 305;
-    public const uint V4L2_CID_STATELESS_H264_START_CODE = V4L2_CID_CODEC_BASE + 306;
-    public const uint V4L2_CID_STATELESS_H264_DPB = V4L2_CID_CODEC_BASE + 307;
-    public const uint V4L2_CID_STATELESS_H264_DECODE_MODE = V4L2_CID_CODEC_BASE + 308;
-
-    // Rockchip rkvdec specific control IDs (discovered from actual device)
-    public const uint RKVDEC_CID_H264_DECODE_MODE = 0x00a40900;
-    public const uint RKVDEC_CID_H264_START_CODE = 0x00a40901;
-    public const uint RKVDEC_CID_H264_SPS = 0x00a40902;
-    public const uint RKVDEC_CID_H264_PPS = 0x00a40903;
-    public const uint RKVDEC_CID_H264_SCALING_MATRIX = 0x00a40904;
-    public const uint RKVDEC_CID_H264_DECODE_PARAMS = 0x00a40907;
-
-    // V4L2 Control values for H.264 start code
-    public const uint V4L2_STATELESS_H264_START_CODE_NONE = 0;
-    public const uint V4L2_STATELESS_H264_START_CODE_ANNEX_B = 1;
-
-    // V4L2 Control values for H.264 decode mode
-    public const uint V4L2_STATELESS_H264_DECODE_MODE_SLICE_BASED = 0;
-    public const uint V4L2_STATELESS_H264_DECODE_MODE_FRAME_BASED = 1;
-
-    public const uint V4L2_CTRL_FLAG_NEXT_CTRL = 0x80000000;
-    public const uint V4L2_CTRL_FLAG_NEXT_COMPOUND = 0x40000000;
 }

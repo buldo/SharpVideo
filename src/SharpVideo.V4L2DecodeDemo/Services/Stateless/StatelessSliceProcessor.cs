@@ -5,6 +5,7 @@ using SharpVideo.Linux.Native;
 using SharpVideo.V4L2DecodeDemo.Interfaces;
 using SharpVideo.H264;
 using System.Runtime.Versioning;
+using SharpVideo.V4L2;
 
 namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 
@@ -17,7 +18,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
     private readonly ILogger<StatelessSliceProcessor> _logger;
     private readonly IV4L2StatelessControlManager _controlManager;
     private readonly IH264ParameterSetParser _parameterSetParser;
-    private readonly int _deviceFd;
+    private readonly V4L2Device _device;
     private readonly List<MappedBuffer> _outputBuffers;
     private readonly bool _hasValidParameterSets;
 
@@ -25,14 +26,14 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         ILogger<StatelessSliceProcessor> logger,
         IV4L2StatelessControlManager controlManager,
         IH264ParameterSetParser parameterSetParser,
-        int deviceFd,
+        V4L2Device device,
         List<MappedBuffer> outputBuffers,
         bool hasValidParameterSets)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _controlManager = controlManager ?? throw new ArgumentNullException(nameof(controlManager));
         _parameterSetParser = parameterSetParser ?? throw new ArgumentNullException(nameof(parameterSetParser));
-        _deviceFd = deviceFd;
+        _device = device;
         _outputBuffers = outputBuffers ?? throw new ArgumentNullException(nameof(outputBuffers));
         _hasValidParameterSets = hasValidParameterSets;
     }
@@ -212,7 +213,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
                 var buffer = new V4L2Buffer
                 {
                     Index = bufferIndex,
-                    Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
+                    Type =  V4L2BufferType.VIDEO_OUTPUT_MPLANE,
                     Memory = V4L2Constants.V4L2_MEMORY_MMAP,
                     Length = 1,
                     Field = (uint)V4L2Field.NONE,
@@ -228,7 +229,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
                 }
 
                 // Queue the buffer containing only slice data
-                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+                var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
                 if (!result.Success)
                 {
                     int errorCode = Marshal.GetLastWin32Error();
@@ -376,7 +377,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         {
             var buffer = new V4L2Buffer
             {
-                Type = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+                Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
                 Memory = V4L2Constants.V4L2_MEMORY_MMAP
             };
 

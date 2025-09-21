@@ -17,7 +17,7 @@ public unsafe struct V4L2RequestBuffers
     /// <summary>
     /// Buffer type
     /// </summary>
-    public uint Type;
+    public V4L2BufferType Type;
 
     /// <summary>
     /// Memory type

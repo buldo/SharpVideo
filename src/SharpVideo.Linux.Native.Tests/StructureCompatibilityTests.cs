@@ -355,7 +355,7 @@ public unsafe class StructureCompatibilityTests
         NativeTestLibrary.FillNativeV4L2Format(&nativeFilledStruct);
 
         // Verify that the managed structure fields have the expected distinctive patterns
-        Assert.Equal(0xFACADE00u, nativeFilledStruct.Type);
+        Assert.Equal((V4L2BufferType)0xFACADE00u, nativeFilledStruct.Type);
         Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Pix_mp.Width);
         Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Pix_mp.Height);
         Assert.Equal(0x12345678u, nativeFilledStruct.Pix_mp.PixelFormat);
@@ -383,7 +383,7 @@ public unsafe class StructureCompatibilityTests
 
         // Verify that the managed structure fields have the expected distinctive patterns
         Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Count);
-        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Type);
+        Assert.Equal((V4L2BufferType)0xCAFEBABEu, nativeFilledStruct.Type);
         Assert.Equal(0x12345678u, nativeFilledStruct.Memory);
     }
 
@@ -408,7 +408,7 @@ public unsafe class StructureCompatibilityTests
 
         // Verify that the managed structure fields have the expected distinctive patterns
         Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Index);
-        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Type);
+        Assert.Equal((V4L2BufferType)0xCAFEBABEu, nativeFilledStruct.Type);
         Assert.Equal(0xFEDCBA98u, nativeFilledStruct.Field);
         Assert.Equal(0x11111111L, nativeFilledStruct.Timestamp.TvSec);
         Assert.Equal(0x22222222L, nativeFilledStruct.Timestamp.TvUsec);
@@ -437,7 +437,7 @@ public unsafe class StructureCompatibilityTests
         NativeTestLibrary.FillNativeV4L2ExportBuffer(&nativeFilledStruct);
 
         // Verify that the managed structure fields have the expected distinctive patterns
-        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Type);
+        Assert.Equal((V4L2BufferType)0xDEADBEEFu, nativeFilledStruct.Type);
         Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Index);
         Assert.Equal(0x12345678u, nativeFilledStruct.Plane);
         Assert.Equal(unchecked((int)0xFEDCBA98), nativeFilledStruct.Fd);

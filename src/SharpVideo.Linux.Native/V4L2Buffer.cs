@@ -17,7 +17,7 @@ public unsafe struct V4L2Buffer
     /// <summary>
     /// Buffer type
     /// </summary>
-    public uint Type;
+    public V4L2BufferType Type;
 
     /// <summary>
     /// Number of bytes occupied by data in the buffer (unused for multiplanar)
