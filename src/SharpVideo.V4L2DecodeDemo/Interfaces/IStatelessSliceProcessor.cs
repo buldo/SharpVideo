@@ -14,14 +14,4 @@ public interface IStatelessSliceProcessor
     /// Process video file NALU by NALU with frame callbacks
     /// </summary>
     Task ProcessVideoFileNaluByNaluAsync(int deviceFd, string filePath, Action<object> frameCallback, Action<double> progressCallback);
-
-    /// <summary>
-    /// Queue slice data to OUTPUT buffer
-    /// </summary>
-    Task QueueSliceDataAsync(int deviceFd, ReadOnlyMemory<byte> sliceData);
-
-    /// <summary>
-    /// Dequeue and return decoded frame from CAPTURE buffer
-    /// </summary>
-    Task<object?> DequeueFrameAsync(int deviceFd);
 }

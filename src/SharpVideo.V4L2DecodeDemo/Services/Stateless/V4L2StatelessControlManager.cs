@@ -27,19 +27,6 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <inheritdoc />
-    public async Task SetParameterSetControlsAsync(byte[] spsData, byte[] ppsData, CancellationToken cancellationToken)
-    {
-        _logger.LogInformation("Setting SPS/PPS controls for stateless decoder");
-
-        // Parse SPS and PPS to control structures
-        var spsControl = _parameterSetParser.ParseSpsToControl(spsData);
-        var ppsControl = _parameterSetParser.ParsePpsToControl(ppsData);
-
-        // Use the main parameter setting method
-        await SetParameterSetsAsync(_device.fd, spsControl, ppsControl);
-    }
-
-    /// <inheritdoc />
     public async Task SetSliceParamsControlsAsync(byte[] sliceData, byte sliceType, CancellationToken cancellationToken)
     {
         _logger.LogDebug("Setting slice parameters controls for stateless decoder");

@@ -13,16 +13,6 @@ public interface IV4L2StatelessControlManager
     Task SetParameterSetsAsync(int deviceFd, V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps);
 
     /// <summary>
-    /// Set decode parameters for a frame
-    /// </summary>
-    Task SetDecodeParametersAsync(int deviceFd, V4L2CtrlH264DecodeParams decodeParams, V4L2CtrlH264SliceParams[] sliceParams);
-
-    /// <summary>
-    /// Configure stateless decoder mode and settings
-    /// </summary>
-    Task ConfigureStatelessModeAsync(int deviceFd);
-
-    /// <summary>
     /// Set slice parameters controls (legacy method)
     /// </summary>
     Task SetSliceParamsControlsAsync(byte[] sliceData, byte sliceType, CancellationToken cancellationToken);

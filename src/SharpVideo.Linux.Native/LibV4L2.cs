@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace SharpVideo.Linux.Native;
@@ -45,17 +44,6 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
-    /// Try format for the specified buffer type without applying it.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="format">Format structure with desired format</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult TryFormat(int fd, ref V4L2Format format)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_TRY_FMT, ref format);
-    }
-
-    /// <summary>
     /// Request buffer allocation.
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>
@@ -64,17 +52,6 @@ public static unsafe class LibV4L2
     public static IoctlResult RequestBuffers(int fd, ref V4L2RequestBuffers requestBuffers)
     {
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_REQBUFS, ref requestBuffers);
-    }
-
-    /// <summary>
-    /// Query buffer information.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="buffer">Buffer structure with index and type set, receives buffer info</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult QueryBuffer(int fd, ref V4L2Buffer buffer)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERYBUF, ref buffer);
     }
 
     /// <summary>
@@ -99,16 +76,6 @@ public static unsafe class LibV4L2
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_DQBUF, ref buffer);
     }
 
-    /// <summary>
-    /// Export buffer as DMABUF file descriptor.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="exportBuffer">Export buffer structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult ExportBuffer(int fd, ref V4L2ExportBuffer exportBuffer)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_EXPBUF, ref exportBuffer);
-    }
 
     /// <summary>
     /// Start streaming.
@@ -134,27 +101,6 @@ public static unsafe class LibV4L2
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_STREAMOFF, ref type);
     }
 
-    /// <summary>
-    /// Get stream parameters.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="streamParm">Stream parameters structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult GetStreamParameters(int fd, ref V4L2StreamParm streamParm)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_G_PARM, ref streamParm);
-    }
-
-    /// <summary>
-    /// Set stream parameters.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="streamParm">Stream parameters structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult SetStreamParameters(int fd, ref V4L2StreamParm streamParm)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_S_PARM, ref streamParm);
-    }
 
     /// <summary>
     /// Send decoder command.
@@ -168,17 +114,6 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
-    /// Try decoder command without executing it.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="decoderCmd">Decoder command structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult TryDecoderCommand(int fd, ref V4L2DecoderCmd decoderCmd)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_TRY_DECODER_CMD, ref decoderCmd);
-    }
-
-    /// <summary>
     /// Enumerate supported formats for a given buffer type.
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>
@@ -188,30 +123,6 @@ public static unsafe class LibV4L2
     {
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_ENUM_FMT, ref fmtDesc);
     }
-
-    /// <summary>
-    /// Send encoder command.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="encoderCmd">Encoder command structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult EncoderCommand(int fd, ref V4L2EncoderCmd encoderCmd)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_ENCODER_CMD, ref encoderCmd);
-    }
-
-    /// <summary>
-    /// Try encoder command without executing it.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="encoderCmd">Encoder command structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult TryEncoderCommand(int fd, ref V4L2EncoderCmd encoderCmd)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_TRY_ENCODER_CMD, ref encoderCmd);
-    }
-
-    // High-level helper methods for common operations
 
     /// <summary>
     /// Helper method to set multiplanar capture format.
@@ -259,27 +170,6 @@ public static unsafe class LibV4L2
 
         var result = RequestBuffers(fd, ref reqbufs);
         return (result, reqbufs.Count);
-    }
-
-    /// <summary>
-    /// Helper method to export a buffer plane as DMABUF file descriptor.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="index">Buffer index</param>
-    /// <param name="plane">Plane index</param>
-    /// <returns>Result of the operation and the DMABUF file descriptor</returns>
-    public static (IoctlResult Result, int DmaBufFd) ExportMultiplanarBuffer(int fd, uint index, uint plane)
-    {
-        var expbuf = new V4L2ExportBuffer
-        {
-            Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-            Index = index,
-            Plane = plane,
-            Flags = 0
-        };
-
-        var result = ExportBuffer(fd, ref expbuf);
-        return (result, expbuf.Fd);
     }
 
     /// <summary>
@@ -343,17 +233,6 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
-    /// Get a single control value.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="control">Control structure with ID set, receives current value</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult GetControl(int fd, ref V4L2Control control)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_G_CTRL, ref control);
-    }
-
-    /// <summary>
     /// Set extended V4L2 controls (for complex data structures).
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>
@@ -365,17 +244,6 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
-    /// Get extended V4L2 controls (for complex data structures).
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="extControls">Extended controls structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult GetExtendedControls(int fd, ref V4L2ExtControls extControls)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_G_EXT_CTRLS, ref extControls);
-    }
-
-    /// <summary>
     /// Query control information.
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>
@@ -384,17 +252,6 @@ public static unsafe class LibV4L2
     public static IoctlResult QueryControl(int fd, ref V4L2QueryCtrl queryCtrl)
     {
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERYCTRL, ref queryCtrl);
-    }
-
-    /// <summary>
-    /// Query menu item information for a menu control.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="queryMenuItem">Menu item query structure</param>
-    /// <returns>Result of the operation</returns>
-    public static IoctlResult QueryMenuItem(int fd, ref V4L2QueryMenuItem queryMenuItem)
-    {
-        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERYMENU, ref queryMenuItem);
     }
 
     /// <summary>

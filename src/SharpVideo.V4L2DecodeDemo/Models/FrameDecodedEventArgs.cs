@@ -9,7 +9,4 @@ public class FrameDecodedEventArgs : EventArgs
     public required uint BufferIndex { get; init; }
     public required uint BytesUsed { get; init; }
     public required DateTime Timestamp { get; init; }
-    public uint Width { get; init; }
-    public uint Height { get; init; }
-    public uint PixelFormat { get; init; }
 }

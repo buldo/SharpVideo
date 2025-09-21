@@ -25,7 +25,7 @@ namespace SharpVideo.V4L2DecodeDemo.Services;
 /// - Slice processing (IStatelessSliceProcessor)
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class H264V4L2StatelessDecoder : IVideoDecoder
+public class H264V4L2StatelessDecoder
 {
     private readonly V4L2Device _device;
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
@@ -41,12 +41,7 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     private uint _captureBufferCount = 4;
     private int _framesDecoded;
 
-    // Stateless decoder specific state
-    private V4L2CtrlH264Sps? _currentSps;
-    private V4L2CtrlH264Pps? _currentPps;
     private bool _hasValidParameterSets;
-    private bool _useStartCodes = true;
-
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
@@ -172,7 +167,7 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
 
         // Configure decoder
         ConfigureFormats();
-        _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
+        await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
         SetupBuffers();
         StartStreaming();
 
@@ -225,10 +220,6 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
         //}
     }
 
-    // TODO: Complete the implementation with the remaining methods
-    // This is a foundational structure - the remaining methods would be simplified versions
-    // of the buffer setup, streaming, parameter extraction, and processing methods
-
     private async Task ExtractAndSetParameterSetsAsync(string filePath, CancellationToken cancellationToken = default)
     {
         var sps = await _parameterSetParser.ExtractSpsAsync(filePath);
@@ -237,8 +228,6 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
         if (sps.HasValue && pps.HasValue)
         {
             await _controlManager.SetParameterSetsAsync(_device.fd, sps.Value, pps.Value);
-            _currentSps = sps.Value;
-            _currentPps = pps.Value;
             _hasValidParameterSets = true;
         }
         else
