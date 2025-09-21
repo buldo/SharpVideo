@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 namespace SharpVideo.Linux.Native;
@@ -205,4 +206,26 @@ public static class V4L2Constants
     // Other useful constants
     public const uint VIDEO_MAX_FRAME = 32;
     public const uint VIDEO_MAX_PLANES = 8;
+
+    // V4L2 Control constants
+    public const uint V4L2_CTRL_CLASS_USER = 0x00980000;
+    public const uint V4L2_CTRL_CLASS_CODEC = 0x00990000;
+
+    // V4L2 Control IDs for H.264 Stateless Decoder
+    public const uint V4L2_CID_CODEC_BASE = V4L2_CTRL_CLASS_CODEC | 0x900;
+    public const uint V4L2_CID_STATELESS_H264_START_CODE = V4L2_CID_CODEC_BASE + 306;
+
+    // V4L2 Control values for H.264 start code
+    public const uint V4L2_STATELESS_H264_START_CODE_NONE = 0;
+    public const uint V4L2_STATELESS_H264_START_CODE_ANNEX_B = 1;
+}
+
+/// <summary>
+/// V4L2 control structure
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct V4L2Control
+{
+    public uint Id;
+    public int Value;
 }

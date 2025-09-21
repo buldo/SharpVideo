@@ -59,6 +59,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     private readonly Dictionary<uint, byte[]> _spsParameters = new();
     private readonly Dictionary<uint, byte[]> _ppsParameters = new();
     private bool _hasValidParameterSets;
+    private bool _useStartCodes = true; // Default to Annex-B format
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
@@ -200,6 +201,9 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             // Configure decoder formats
             await ConfigureFormatsAsync(cancellationToken);
 
+            // Configure stateless decoder controls
+            await ConfigureStatelessControlsAsync(cancellationToken);
+
             // Setup buffers
             await SetupBuffersAsync(cancellationToken);
 
@@ -332,6 +336,57 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             captureFormat.Pix_mp.PixelFormat, captureFormat.Pix_mp.NumPlanes);
 
         await Task.CompletedTask; // Make method async for consistency
+    }
+
+    /// <summary>
+    /// Configure stateless decoder controls, particularly the start code control
+    /// </summary>
+    private async Task ConfigureStatelessControlsAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Configuring stateless decoder controls...");
+
+        try
+        {
+            // Try to configure the start code control for stateless H.264 decoder
+            var startCodeControl = new V4L2Control
+            {
+                Id = V4L2Constants.V4L2_CID_STATELESS_H264_START_CODE,
+                Value = (int)V4L2Constants.V4L2_STATELESS_H264_START_CODE_ANNEX_B // We'll use Annex-B format
+            };
+
+            var result = LibV4L2.SetControl(_deviceFd, ref startCodeControl);
+            if (result.Success)
+            {
+                _useStartCodes = true;
+                _logger.LogInformation("Successfully configured stateless decoder for Annex-B format (with start codes)");
+            }
+            else
+            {
+                _logger.LogWarning("Failed to set start code control: {Error}. Trying without start codes.", result.ErrorMessage);
+
+                // Try setting to no start codes
+                startCodeControl.Value = (int)V4L2Constants.V4L2_STATELESS_H264_START_CODE_NONE;
+                result = LibV4L2.SetControl(_deviceFd, ref startCodeControl);
+
+                if (result.Success)
+                {
+                    _useStartCodes = false;
+                    _logger.LogInformation("Successfully configured stateless decoder for raw NALUs (without start codes)");
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to configure start code control. Using default Annex-B format: {Error}", result.ErrorMessage);
+                    _useStartCodes = true; // Default fallback
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error configuring stateless decoder controls. Using default Annex-B format");
+            _useStartCodes = true; // Default fallback
+        }
+
+        await Task.CompletedTask;
     }
 
     #endregion
@@ -535,7 +590,10 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         _logger.LogInformation("Extracting H.264 parameter sets from {FilePath}", filePath);
 
         using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider();
+        var naluOutputMode = _useStartCodes ? NaluOutputMode.WithStartCode : NaluOutputMode.WithoutStartCode;
+        using var naluProvider = new H264NaluProvider(naluOutputMode);
+
+        _logger.LogDebug("Using NALU provider in {Mode} mode for parameter extraction", naluOutputMode);
 
         // Extract first 1MB to find parameter sets
         int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
@@ -589,24 +647,27 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
     /// <summary>
     /// Gets the position of the NALU header after the start code
     /// </summary>
-    private static int GetNaluHeaderPosition(byte[] naluData)
+    private int GetNaluHeaderPosition(byte[] naluData)
     {
-        // Check for 4-byte start code
-        if (naluData.Length >= 4 &&
-            naluData[0] == 0x00 && naluData[1] == 0x00 &&
-            naluData[2] == 0x00 && naluData[3] == 0x01)
+        if (_useStartCodes)
         {
-            return 4;
+            // Check for 4-byte start code
+            if (naluData.Length >= 4 &&
+                naluData[0] == 0x00 && naluData[1] == 0x00 &&
+                naluData[2] == 0x00 && naluData[3] == 0x01)
+            {
+                return 4;
+            }
+
+            // Check for 3-byte start code
+            if (naluData.Length >= 3 &&
+                naluData[0] == 0x00 && naluData[1] == 0x00 && naluData[2] == 0x01)
+            {
+                return 3;
+            }
         }
 
-        // Check for 3-byte start code
-        if (naluData.Length >= 3 &&
-            naluData[0] == 0x00 && naluData[1] == 0x00 && naluData[2] == 0x01)
-        {
-            return 3;
-        }
-
-        // No start code found, assume data starts immediately
+        // No start code found or not using start codes, assume data starts immediately
         return 0;
     }
 
@@ -628,10 +689,11 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         var stopwatch = Stopwatch.StartNew();
 
         using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider();
+        var naluOutputMode = _useStartCodes ? NaluOutputMode.WithStartCode : NaluOutputMode.WithoutStartCode;
+        using var naluProvider = new H264NaluProvider(naluOutputMode);
         uint outputBufferIndex = 0;
 
-        _logger.LogInformation("Starting stateless decode loop...");
+        _logger.LogInformation("Starting stateless decode loop with {Mode} mode...", naluOutputMode);
 
         // Start a task to feed data to the NALU provider
         var feedTask = Task.Run(async () =>
@@ -711,7 +773,9 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
         _logger.LogInformation("Starting stateless NALU-by-NALU decode loop...");
 
         using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider();
+        var naluOutputMode = _useStartCodes ? NaluOutputMode.WithStartCode : NaluOutputMode.WithoutStartCode;
+        using var naluProvider = new H264NaluProvider(naluOutputMode);
+        _logger.LogInformation("Using NALU provider with {Mode} mode", naluOutputMode);
 
         // Collect NALUs that belong to the same frame
         var currentFrame = new List<byte[]>();

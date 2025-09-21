@@ -330,4 +330,15 @@ public static unsafe class LibV4L2
 
         return DecoderCommand(fd, ref cmd);
     }
+
+    /// <summary>
+    /// Set a single control value.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="control">Control structure with ID and value to set</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult SetControl(int fd, ref V4L2Control control)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_S_CTRL, ref control);
+    }
 }
