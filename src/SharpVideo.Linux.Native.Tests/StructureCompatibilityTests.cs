@@ -548,5 +548,59 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal("Test error", failureResult.ErrorMessage);
         Assert.Equal("Test suggestion", failureResult.ErrorSuggestion);
     }
+
+    [Fact]
+    public void TestV4L2ExtControl_NativeSizeCompatibility()
+    {
+        // Test that our V4L2ExtControl structure has the same size as the native v4l2_ext_control structure
+        int csharpSize = Marshal.SizeOf<V4L2ExtControl>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2ExtControlSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2ExtControl_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2ExtControl();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2ExtControl(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Id);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Size);
+        Assert.Equal(0x12345678u, nativeFilledStruct.Reserved2);
+        Assert.Equal(new IntPtr(0x87654321), nativeFilledStruct.Ptr);
+    }
+
+    [Fact]
+    public void TestV4L2ExtControl_StructSize()
+    {
+        // Test that V4L2ExtControl structure has expected size for marshaling compatibility
+        int csharpSize = Marshal.SizeOf<V4L2ExtControl>();
+        int expectedSize = 20; // 4 + 4 + 4 + 8 = 20 bytes on 64-bit platforms
+
+        Assert.Equal(expectedSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2ExtControl_FieldLayout()
+    {
+        // Test that V4L2ExtControl fields can be set and read correctly
+        var extControl = new V4L2ExtControl
+        {
+            Id = 0xAABBCCDD,
+            Size = 1024,
+            Reserved2 = 0,
+            Ptr = new IntPtr(0x12345678)
+        };
+
+        Assert.Equal(0xAABBCCDDu, extControl.Id);
+        Assert.Equal(1024u, extControl.Size);
+        Assert.Equal(0u, extControl.Reserved2);
+        Assert.Equal(new IntPtr(0x12345678), extControl.Ptr);
+    }
 }
 

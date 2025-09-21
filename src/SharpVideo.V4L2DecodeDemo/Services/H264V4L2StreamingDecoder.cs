@@ -817,8 +817,7 @@ public class H264V4L2StreamingDecoder : IVideoDecoder
             Log2MaxPicOrderCntLsbMinus4 = 0,
             MaxNumRefFrames = 1, // Conservative default
             NumRefFramesInPicOrderCntCycle = 0,
-            OffsetForRefFrame0 = 0,
-            OffsetForRefFrame1 = 0,
+            OffsetForRefFrame = new int[255], // Initialize the array (all zeros)
             OffsetForTopToBottomField = 0,
             OffsetForNonRefPic = 0,
             PicWidthInMbsMinus1 = (ushort)((_configuration.InitialWidth / 16) - 1),

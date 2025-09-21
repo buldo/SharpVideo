@@ -61,10 +61,9 @@ public class H264ParameterSetParser : IH264ParameterSetParser
             Log2MaxPicOrderCntLsbMinus4 = 0, // For POC type 0
             MaxNumRefFrames = 1, // Single reference frame (conservative)
             NumRefFramesInPicOrderCntCycle = 0, // Not used for POC type 0
-            OffsetForRefFrame0 = 0, // Only used for POC type 1
-            OffsetForRefFrame1 = 0, // Only used for POC type 1
-            OffsetForTopToBottomField = 0, // Only used for POC type 1
+            OffsetForRefFrame = new int[255], // Initialize the reference frame offset array
             OffsetForNonRefPic = 0, // Only used for POC type 1
+            OffsetForTopToBottomField = 0, // Only used for POC type 1
             PicWidthInMbsMinus1 = (ushort)((_initialWidth / 16) - 1),
             PicHeightInMapUnitsMinus1 = (ushort)((_initialHeight / 16) - 1),
             Flags = 0 // Additional flags can be set here if needed

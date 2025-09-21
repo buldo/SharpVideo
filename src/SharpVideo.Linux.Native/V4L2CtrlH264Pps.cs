@@ -6,7 +6,7 @@ namespace SharpVideo.Linux.Native;
 /// <summary>
 /// Stateless H.264 PPS structure
 /// </summary>
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
 [SupportedOSPlatform("linux")]
 public struct V4L2CtrlH264Pps
 {

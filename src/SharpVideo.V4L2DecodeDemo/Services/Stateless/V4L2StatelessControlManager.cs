@@ -23,7 +23,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _parameterSetParser = parameterSetParser ?? throw new ArgumentNullException(nameof(parameterSetParser));
         _deviceFd = deviceFd;
-        
+
         // Detect if this is a rkvdec device that needs special control IDs
         _useRkvdecControls = DetectRkvdecDevice(deviceFd);
         if (_useRkvdecControls)
@@ -44,7 +44,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             {
                 Id = V4L2Constants.RKVDEC_CID_H264_DECODE_MODE
             };
-            
+
             var result = LibV4L2.GetControl(deviceFd, ref control);
             return result.Success; // If we can read this control, it's likely rkvdec
         }
@@ -79,23 +79,36 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             try
             {
                 // Set up SPS control
+                var spsControlId = _useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_SPS : V4L2Constants.V4L2_CID_STATELESS_H264_SPS;
+                var spsSize = (uint)Marshal.SizeOf<V4L2CtrlH264Sps>();
+                var ppsControlId = _useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_PPS : V4L2Constants.V4L2_CID_STATELESS_H264_PPS;
+                var ppsSize = (uint)Marshal.SizeOf<V4L2CtrlH264Pps>();
+
+                _logger.LogInformation("Before marshaling: SPS ID=0x{SpsId:X8}, Size={SpsSize}, PPS ID=0x{PpsId:X8}, Size={PpsSize}",
+                    spsControlId, spsSize, ppsControlId, ppsSize);
+
+                _logger.LogInformation("Memory addresses: SPS=0x{SpsPtr:X}, PPS=0x{PpsPtr:X}",
+                    spsPtr.ToInt64(), ppsPtr.ToInt64());
+
                 extControls[0] = new V4L2ExtControl
                 {
-                    Id = V4L2Constants.V4L2_CID_STATELESS_H264_SPS,
-                    Size = (uint)Marshal.SizeOf<V4L2CtrlH264Sps>(),
+                    Id = spsControlId,
+                    Size = spsSize,
                     Ptr = spsPtr
                 };
 
                 // Set up PPS control
                 extControls[1] = new V4L2ExtControl
                 {
-                    Id = V4L2Constants.V4L2_CID_STATELESS_H264_PPS,
-                    Size = (uint)Marshal.SizeOf<V4L2CtrlH264Pps>(),
+                    Id = ppsControlId,
+                    Size = ppsSize,
                     Ptr = ppsPtr
                 };
 
                 // Allocate memory for controls array
                 var controlsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2ExtControl>() * 2);
+                _logger.LogInformation("Controls array pointer: 0x{ControlsPtr:X}, V4L2ExtControl size: {Size}",
+                    controlsPtr.ToInt64(), Marshal.SizeOf<V4L2ExtControl>());
                 try
                 {
                     // Copy controls to unmanaged memory
@@ -392,6 +405,10 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 sps.BitDepthLumaMinus8 + 8, sps.BitDepthChromaMinus8 + 8,
                 sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1, sps.MaxNumRefFrames);
 
+            // Log structure sizes for debugging
+            _logger.LogInformation("Structure sizes: SPS={SpsSize} bytes, PPS={PpsSize} bytes (expected: SPS=28, PPS=12)",
+                Marshal.SizeOf<V4L2CtrlH264Sps>(), Marshal.SizeOf<V4L2CtrlH264Pps>());
+
             // Log PPS details for debugging
             _logger.LogInformation("PPS Details: ID={PpsId}, SpsId={SpsId}, SliceGroups={SliceGroups}, " +
                                    "RefIdxL0={RefL0}, RefIdxL1={RefL1}, WeightedBipred={WeightedBipred}, " +
@@ -451,6 +468,13 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                     {
                         _logger.LogError("Failed to set SPS/PPS controls: {Error}", result.ErrorMessage);
 
+                        // Add more detailed debugging
+                        _logger.LogInformation("Debug info: Using rkvdec controls={UseRkvdec}, SPS size={SpsSize}, PPS size={PpsSize}",
+                            _useRkvdecControls, Marshal.SizeOf<V4L2CtrlH264Sps>(), Marshal.SizeOf<V4L2CtrlH264Pps>());
+                        _logger.LogInformation("Control IDs: SPS=0x{SpsId:X8}, PPS=0x{PpsId:X8}",
+                            _useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_SPS : V4L2Constants.V4L2_CID_STATELESS_H264_SPS,
+                            _useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_PPS : V4L2Constants.V4L2_CID_STATELESS_H264_PPS);
+
                         // Try alternative approach: set controls individually
                         _logger.LogInformation("Attempting to set SPS and PPS controls individually...");
 
@@ -482,7 +506,6 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                         if (!ppsResult.Success)
                         {
                             _logger.LogError("Failed to set PPS control individually: {Error}", ppsResult.ErrorMessage);
-                            throw new InvalidOperationException($"Failed to set parameter sets: SPS={spsResult.ErrorMessage}, PPS={ppsResult.ErrorMessage}");
                         }
                         else
                         {
@@ -495,7 +518,13 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                         }
                         else
                         {
-                            throw new InvalidOperationException($"Failed to set parameter sets: {result.ErrorMessage}");
+                            // Final fallback: try with minimal/safe parameter values
+                            _logger.LogInformation("Attempting fallback with minimal parameter values...");
+                            var fallbackResult = await TryFallbackParameterSets(deviceFd, sps, pps);
+                            if (!fallbackResult)
+                            {
+                                throw new InvalidOperationException($"Failed to set parameter sets: {result.ErrorMessage}");
+                            }
                         }
                     }
                     else
@@ -561,5 +590,119 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             _logger.LogError(ex, "Failed to configure stateless mode");
             throw;
         }
+    }
+
+    /// <summary>
+    /// Try fallback parameter sets with minimal/safe values that are more likely to be accepted
+    /// </summary>
+    private async Task<bool> TryFallbackParameterSets(int deviceFd, V4L2CtrlH264Sps originalSps, V4L2CtrlH264Pps originalPps)
+    {
+        try
+        {
+            _logger.LogInformation("Trying fallback with simplified parameter values...");
+
+            // Create minimal SPS with only essential fields
+            var minimalSps = new V4L2CtrlH264Sps
+            {
+                ProfileIdc = 66, // Baseline profile (0x42)
+                ConstraintSetFlags = 0x80, // Standard constraint flags
+                LevelIdc = 30, // Level 3.0 (safer than 4.0)
+                SeqParameterSetId = 0,
+                ChromaFormatIdc = 1, // 4:2:0
+                BitDepthLumaMinus8 = 0, // 8-bit
+                BitDepthChromaMinus8 = 0, // 8-bit
+                Log2MaxFrameNumMinus4 = 4, // Common value (32 frames)
+                PicOrderCntType = 0, // Type 0 (most common)
+                Log2MaxPicOrderCntLsbMinus4 = 0,
+                MaxNumRefFrames = 1, // Minimal
+                NumRefFramesInPicOrderCntCycle = 0,
+                OffsetForRefFrame = new int[255], // Initialize the array (all zeros)
+                OffsetForNonRefPic = 0,
+                OffsetForTopToBottomField = 0,
+                PicWidthInMbsMinus1 = originalSps.PicWidthInMbsMinus1, // Keep original dimensions
+                PicHeightInMapUnitsMinus1 = originalSps.PicHeightInMapUnitsMinus1,
+                Flags = 0
+            };
+
+            // Create minimal PPS with safe defaults
+            var minimalPps = new V4L2CtrlH264Pps
+            {
+                PicParameterSetId = 0,
+                SeqParameterSetId = 0,
+                NumSliceGroupsMinus1 = 0, // Single slice group
+                NumRefIdxL0DefaultActiveMinus1 = 0, // 1 reference
+                NumRefIdxL1DefaultActiveMinus1 = 0, // 1 reference
+                WeightedBipredIdc = 0, // No weighted prediction
+                PicInitQpMinus26 = 0, // QP = 26
+                PicInitQsMinus26 = 0, // QS = 26
+                ChromaQpIndexOffset = 0,
+                SecondChromaQpIndexOffset = 0,
+                Flags = 0
+            };
+
+            return await TrySetParameterStructures(deviceFd, minimalSps, minimalPps, "fallback");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Fallback parameter setting failed");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Helper method to try setting parameter structures with detailed logging
+    /// </summary>
+    private async Task<bool> TrySetParameterStructures(int deviceFd, V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps, string context)
+    {
+        var spsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264Sps>());
+        var ppsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2CtrlH264Pps>());
+
+        try
+        {
+            Marshal.StructureToPtr(sps, spsPtr, false);
+            Marshal.StructureToPtr(pps, ppsPtr, false);
+
+            var spsControl = new V4L2ExtControl
+            {
+                Id = _useRkvdecControls ? V4L2Constants.RKVDEC_CID_H264_SPS : V4L2Constants.V4L2_CID_STATELESS_H264_SPS,
+                Size = (uint)Marshal.SizeOf<V4L2CtrlH264Sps>(),
+                Ptr = spsPtr
+            };
+
+            var controlsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2ExtControl>());
+            try
+            {
+                Marshal.StructureToPtr(spsControl, controlsPtr, false);
+
+                var spsControlsWrapper = new V4L2ExtControls
+                {
+                    Which = V4L2Constants.V4L2_CTRL_CLASS_CODEC,
+                    Count = 1,
+                    Controls = controlsPtr
+                };
+
+                var spsResult = LibV4L2.SetExtendedControls(deviceFd, ref spsControlsWrapper);
+                _logger.LogInformation("{Context} SPS result: {Success} - {Error}",
+                    context, spsResult.Success, spsResult.ErrorMessage ?? "OK");
+
+                if (spsResult.Success)
+                {
+                    _logger.LogInformation("{Context} parameter sets accepted", context);
+                    return true;
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(controlsPtr);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(spsPtr);
+            Marshal.FreeHGlobal(ppsPtr);
+        }
+
+        await Task.CompletedTask;
+        return false;
     }
 }

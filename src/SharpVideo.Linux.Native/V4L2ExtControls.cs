@@ -6,7 +6,7 @@ namespace SharpVideo.Linux.Native;
 /// <summary>
 /// V4L2 extended controls container
 /// </summary>
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
 [SupportedOSPlatform("linux")]
 public struct V4L2ExtControls
 {

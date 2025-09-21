@@ -360,3 +360,18 @@ void fill_native_v4l2_decoder_cmd(struct v4l2_decoder_cmd* s) {
 int get_native_v4l2_decoder_cmd_size(void) {
     return sizeof(struct v4l2_decoder_cmd);
 }
+
+// Function to fill v4l2_ext_control structure with test data
+void fill_native_v4l2_ext_control(struct v4l2_ext_control* s) {
+    if (!s) return;
+
+    s->id = 0xDEADBEEF;          // Distinctive pattern for id
+    s->size = 0xCAFEBABE;        // Distinctive pattern for size
+    s->reserved2[0] = 0x12345678; // Distinctive pattern for reserved2[0]
+    s->ptr = (void*)0x87654321UL; // Distinctive pattern for ptr (cast to avoid warnings)
+}
+
+// Function to get v4l2_ext_control structure size for verification
+int get_native_v4l2_ext_control_size(void) {
+    return sizeof(struct v4l2_ext_control);
+}

@@ -138,4 +138,12 @@ public static unsafe partial class NativeTestLibrary
     // Function to get v4l2_decoder_cmd structure size for verification
     [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_decoder_cmd_size")]
     public static partial int GetNativeV4L2DecoderCmdSize();
+
+    // Function to fill v4l2_ext_control structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_ext_control")]
+    public static partial void FillNativeV4L2ExtControl(V4L2ExtControl* structure);
+
+    // Function to get v4l2_ext_control structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ext_control_size")]
+    public static partial int GetNativeV4L2ExtControlSize();
 }
