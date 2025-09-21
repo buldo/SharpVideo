@@ -68,27 +68,28 @@ namespace SharpVideo.V4L2PrintInfo
         {
             Console.WriteLine("\n  Available Controls:");
 
-            foreach (var control in device.Controls)
+            if (device.ExtendedControls.Count > 0)
             {
-                Console.WriteLine($"    - {control.Name} (ID: 0x{control.Id:X8})");
-                Console.WriteLine($"      Type: {control.Type}, Flags: {control.Flags}");
-                Console.WriteLine($"      Min: {control.Minimum}, Max: {control.Maximum}, Step: {control.Step}, Default: {control.DefaultValue}");
-
-                if (control.ElemSize.HasValue)
+                foreach (var control in device.ExtendedControls)
                 {
-                    Console.WriteLine($"      ElemSize: {control.ElemSize}, Elems: {control.Elems}, Dims: {(control.Dims != null ? string.Join("x", control.Dims) : "-")}");
-                }
+                    Console.WriteLine($"    - {control.Name} (ID: 0x{control.Id:X8})");
+                    Console.WriteLine($"      Type: {control.Type}, Flags: {control.Flags}");
+                    Console.WriteLine($"      Min: {control.Minimum}, Max: {control.Maximum}, Step: {control.Step}, Default: {control.DefaultValue}");
 
-                if (control.MenuItems != null)
-                {
-                    Console.WriteLine("      Menu:");
-                    foreach (var item in control.MenuItems)
+                    if (control.ElemSize > 0)
                     {
-                        if (item.Name != null)
-                            Console.WriteLine($"        {item.Index}: {item.Name}");
-                        else if (item.Value.HasValue)
-                            Console.WriteLine($"        {item.Index}: {item.Value.Value}");
+                        Console.WriteLine($"      ElemSize: {control.ElemSize}, Elems: {control.Elems}, Dims: {(control.Dims != null ? string.Join("x", control.Dims) : "-")}");
                     }
+                }
+            }
+            else
+            {
+
+                foreach (var control in device.Controls)
+                {
+                    Console.WriteLine($"    - {control.Name} (ID: 0x{control.Id:X8})");
+                    Console.WriteLine($"      Type: {control.Type}, Flags: {control.Flags}");
+                    Console.WriteLine($"      Min: {control.Minimum}, Max: {control.Maximum}, Step: {control.Step}, Default: {control.DefaultValue}");
                 }
             }
         }

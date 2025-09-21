@@ -297,7 +297,7 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal("TEST_CARD_CAFE", nativeFilledStruct.CardString);
         Assert.Equal("TEST_BUS_12345", nativeFilledStruct.BusInfoString);
         Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Version);
-        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Capabilities);
+        Assert.Equal((V4L2Capabilities)0xCAFEBABEu, nativeFilledStruct.Capabilities);
         Assert.Equal((V4L2Capabilities)0x12345678, nativeFilledStruct.DeviceCaps);
     }
 

@@ -243,7 +243,7 @@ public class IoctlTests
                         Assert.NotEmpty(capability.DriverString);
                         Assert.NotEmpty(capability.CardString);
                         Assert.NotEqual(0u, capability.Version);
-                        Assert.NotEqual(0u, capability.Capabilities);
+                        Assert.NotEqual((V4L2Capabilities)0u, capability.Capabilities);
 
                         // If device supports multiplanar capture, test format operations
                         if ((capability.DeviceCaps & V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0)

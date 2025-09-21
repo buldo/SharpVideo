@@ -1,6 +1,4 @@
-﻿using System.Runtime.InteropServices;
-using SharpVideo.Drm;
-using SharpVideo.Linux.Native;
+﻿using SharpVideo.Linux.Native;
 
 namespace SharpVideo.V4L2;
 
@@ -9,22 +7,25 @@ public class V4L2Device : IDisposable
     private readonly int _deviceFd;
     private bool _disposed = false;
 
-    internal V4L2Device(int deviceFd, List<V4L2DeviceControl> controls)
+    internal V4L2Device(int deviceFd, List<V4L2DeviceControl> controls, List<V4L2DeviceExtendedControl> extendedControls)
     {
         _deviceFd = deviceFd;
         Controls = controls.AsReadOnly();
+        ExtendedControls = extendedControls.AsReadOnly();
     }
 
     public IReadOnlyCollection<V4L2DeviceControl> Controls { get; }
 
+    public IReadOnlyCollection<V4L2DeviceExtendedControl> ExtendedControls { get; }
+
     // TODO: Remove
-    public int fd 
-    { 
-        get 
-        { 
+    public int fd
+    {
+        get
+        {
             ThrowIfDisposed();
-            return _deviceFd; 
-        } 
+            return _deviceFd;
+        }
     }
 
     /// <summary>
