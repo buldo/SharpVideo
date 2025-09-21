@@ -32,7 +32,7 @@ public unsafe struct V4L2Capability
     /// <summary>
     /// Available capabilities of the physical device
     /// </summary>
-    public uint Capabilities;
+    public V4L2Capabilities Capabilities;
 
     /// <summary>
     /// Available capabilities of the opened device node

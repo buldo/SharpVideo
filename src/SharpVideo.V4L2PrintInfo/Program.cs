@@ -40,23 +40,19 @@ namespace SharpVideo.V4L2PrintInfo
                 var queryResult = LibV4L2.QueryCapabilities(device.fd, out var capability);
                 if (!queryResult.Success) return false;
 
-                bool isM2mDevice = ((uint)capability.Capabilities & ((uint)V4L2Capabilities.VIDEO_M2M_MPLANE | (uint)V4L2Capabilities.VIDEO_M2M)) != 0;
-
-                if (!isM2mDevice) return false;
-
                 Console.WriteLine($"\n--- Found V4L2 M2M Device: {device} ---");
                 Console.WriteLine($"  Driver: {capability.DriverString}");
                 Console.WriteLine($"  Card: {capability.CardString}");
                 Console.WriteLine($"  Bus Info: {capability.BusInfoString}");
                 Console.WriteLine($"  Capabilities: 0x{(uint)capability.Capabilities:X8}");
-                Console.WriteLine($"    {FormatCapabilities((V4L2Capabilities)capability.Capabilities)}");
+                Console.WriteLine($"    {capability.Capabilities}");
 
                 PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_OUTPUT, "OUTPUT formats (single-planar)");
                 PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_OUTPUT_MPLANE, "OUTPUT formats (multi-planar)");
                 PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_CAPTURE, "CAPTURE formats (single-planar)");
                 PrintFormatsSection(device.fd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, "CAPTURE formats (multi-planar)");
 
-                PrintControls(device.fd);
+                PrintControls(device);
 
                 Console.WriteLine("--- End of Info ---");
                 return true;
@@ -68,47 +64,15 @@ namespace SharpVideo.V4L2PrintInfo
             }
         }
 
-        private static unsafe void PrintControls(int fd)
+        private static unsafe void PrintControls(V4L2Device device)
         {
             Console.WriteLine("\n  Available Controls:");
 
-            var queryCtrl = new V4L2QueryCtrl { Id = (uint)V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL };
-
-            while (LibV4L2.QueryControl(fd, ref queryCtrl).Success)
+            foreach (var control in device.Controls)
             {
-                if ((queryCtrl.Flags & V4L2ControlFlags.DISABLED) != 0)
-                {
-                    queryCtrl.Id |= (uint)V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL;
-                    continue;
-                }
-
-                Console.WriteLine($"    - {queryCtrl.Name} (ID: 0x{queryCtrl.Id:X8})");
-                Console.WriteLine($"      Type: {queryCtrl.Type}, Flags: {queryCtrl.Flags}");
-                Console.WriteLine($"      Min: {queryCtrl.Minimum}, Max: {queryCtrl.Maximum}, Step: {queryCtrl.Step}, Default: {queryCtrl.DefaultValue}");
-
-                if (queryCtrl.Type == V4L2CtrlType.Menu || queryCtrl.Type == V4L2CtrlType.IntegerMenu)
-                {
-                    Console.WriteLine("      Menu Items:");
-                    var queryMenuItem = new V4L2QueryMenuItem();
-                    for (uint i = (uint)queryCtrl.Minimum; i <= queryCtrl.Maximum; i++)
-                    {
-                        queryMenuItem.Id = queryCtrl.Id;
-                        queryMenuItem.Index = i;
-                        if (LibV4L2.QueryMenuItem(fd, ref queryMenuItem).Success)
-                        {
-                            if (queryCtrl.Type == V4L2CtrlType.Menu)
-                            {
-                                Console.WriteLine($"        {queryMenuItem.Index}: {queryMenuItem.Name}");
-                            }
-                            else // IntegerMenu
-                            {
-                                Console.WriteLine($"        {queryMenuItem.Index}: {queryMenuItem.Value}");
-                            }
-                        }
-                    }
-                }
-
-                queryCtrl.Id |= (uint)V4L2Constants.V4L2_CTRL_FLAG_NEXT_CTRL;
+                Console.WriteLine($"    - {control.Name} (ID: 0x{control.Id:X8})");
+                Console.WriteLine($"      Type: {control.Type}, Flags: {control.Flags}");
+                Console.WriteLine($"      Min: {control.Minimum}, Max: {control.Maximum}, Step: {control.Step}, Default: {control.DefaultValue}");
             }
         }
 
@@ -144,74 +108,6 @@ namespace SharpVideo.V4L2PrintInfo
                     Console.WriteLine(format);
                 }
             }
-        }
-
-        private static string FormatCapabilities(V4L2Capabilities capabilities)
-        {
-            var capList = new List<string>();
-
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_CAPTURE))
-                capList.Add("VIDEO_CAPTURE");
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_OUTPUT))
-                capList.Add("VIDEO_OUTPUT");
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_OVERLAY))
-                capList.Add("VIDEO_OVERLAY");
-            if (capabilities.HasFlag(V4L2Capabilities.VBI_CAPTURE))
-                capList.Add("VBI_CAPTURE");
-            if (capabilities.HasFlag(V4L2Capabilities.VBI_OUTPUT))
-                capList.Add("VBI_OUTPUT");
-            if (capabilities.HasFlag(V4L2Capabilities.SLICED_VBI_CAPTURE))
-                capList.Add("SLICED_VBI_CAPTURE");
-            if (capabilities.HasFlag(V4L2Capabilities.SLICED_VBI_OUTPUT))
-                capList.Add("SLICED_VBI_OUTPUT");
-            if (capabilities.HasFlag(V4L2Capabilities.RDS_CAPTURE))
-                capList.Add("RDS_CAPTURE");
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_OUTPUT_OVERLAY))
-                capList.Add("VIDEO_OUTPUT_OVERLAY");
-            if (capabilities.HasFlag(V4L2Capabilities.HW_FREQ_SEEK))
-                capList.Add("HW_FREQ_SEEK");
-            if (capabilities.HasFlag(V4L2Capabilities.RDS_OUTPUT))
-                capList.Add("RDS_OUTPUT");
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_CAPTURE_MPLANE))
-                capList.Add("VIDEO_CAPTURE_MPLANE");
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_OUTPUT_MPLANE))
-                capList.Add("VIDEO_OUTPUT_MPLANE");
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_M2M_MPLANE))
-                capList.Add("VIDEO_M2M_MPLANE");
-            if (capabilities.HasFlag(V4L2Capabilities.VIDEO_M2M))
-                capList.Add("VIDEO_M2M");
-            if (capabilities.HasFlag(V4L2Capabilities.TUNER))
-                capList.Add("TUNER");
-            if (capabilities.HasFlag(V4L2Capabilities.AUDIO))
-                capList.Add("AUDIO");
-            if (capabilities.HasFlag(V4L2Capabilities.RADIO))
-                capList.Add("RADIO");
-            if (capabilities.HasFlag(V4L2Capabilities.MODULATOR))
-                capList.Add("MODULATOR");
-            if (capabilities.HasFlag(V4L2Capabilities.SDR_CAPTURE))
-                capList.Add("SDR_CAPTURE");
-            if (capabilities.HasFlag(V4L2Capabilities.EXT_PIX_FORMAT))
-                capList.Add("EXT_PIX_FORMAT");
-            if (capabilities.HasFlag(V4L2Capabilities.SDR_OUTPUT))
-                capList.Add("SDR_OUTPUT");
-            if (capabilities.HasFlag(V4L2Capabilities.META_CAPTURE))
-                capList.Add("META_CAPTURE");
-            if (capabilities.HasFlag(V4L2Capabilities.READWRITE))
-                capList.Add("READWRITE");
-            if (capabilities.HasFlag(V4L2Capabilities.ASYNCIO))
-                capList.Add("ASYNCIO");
-            if (capabilities.HasFlag(V4L2Capabilities.STREAMING))
-                capList.Add("STREAMING");
-            if (capabilities.HasFlag(V4L2Capabilities.META_OUTPUT))
-                capList.Add("META_OUTPUT");
-            if (capabilities.HasFlag(V4L2Capabilities.TOUCH))
-                capList.Add("TOUCH");
-            if (capabilities.HasFlag(V4L2Capabilities.IO_MC))
-                capList.Add("IO_MC");
-            if (capabilities.HasFlag(V4L2Capabilities.DEVICE_CAPS))
-                capList.Add("DEVICE_CAPS");
-
-            return string.Join(", ", capList);
         }
     }
 }
