@@ -341,4 +341,26 @@ public static unsafe class LibV4L2
     {
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_S_CTRL, ref control);
     }
+
+    /// <summary>
+    /// Set extended V4L2 controls (for complex data structures).
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="extControls">Extended controls structure</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult SetExtendedControls(int fd, ref V4L2ExtControls extControls)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_S_EXT_CTRLS, ref extControls);
+    }
+
+    /// <summary>
+    /// Get extended V4L2 controls (for complex data structures).
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="extControls">Extended controls structure</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult GetExtendedControls(int fd, ref V4L2ExtControls extControls)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_G_EXT_CTRLS, ref extControls);
+    }
 }

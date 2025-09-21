@@ -213,19 +213,153 @@ public static class V4L2Constants
 
     // V4L2 Control IDs for H.264 Stateless Decoder
     public const uint V4L2_CID_CODEC_BASE = V4L2_CTRL_CLASS_CODEC | 0x900;
+    public const uint V4L2_CID_STATELESS_H264_SPS = V4L2_CID_CODEC_BASE + 302;
+    public const uint V4L2_CID_STATELESS_H264_PPS = V4L2_CID_CODEC_BASE + 303;
+    public const uint V4L2_CID_STATELESS_H264_SLICE_PARAMS = V4L2_CID_CODEC_BASE + 304;
+    public const uint V4L2_CID_STATELESS_H264_DECODE_PARAMS = V4L2_CID_CODEC_BASE + 305;
     public const uint V4L2_CID_STATELESS_H264_START_CODE = V4L2_CID_CODEC_BASE + 306;
+    public const uint V4L2_CID_STATELESS_H264_DPB = V4L2_CID_CODEC_BASE + 307;
+    public const uint V4L2_CID_STATELESS_H264_DECODE_MODE = V4L2_CID_CODEC_BASE + 308;
 
     // V4L2 Control values for H.264 start code
     public const uint V4L2_STATELESS_H264_START_CODE_NONE = 0;
     public const uint V4L2_STATELESS_H264_START_CODE_ANNEX_B = 1;
+
+    // V4L2 Control values for H.264 decode mode
+    public const uint V4L2_STATELESS_H264_DECODE_MODE_SLICE_BASED = 0;
+    public const uint V4L2_STATELESS_H264_DECODE_MODE_FRAME_BASED = 1;
 }
 
 /// <summary>
 /// V4L2 control structure
 /// </summary>
+/// <summary>
+/// V4L2 control structure for setting controls
+/// </summary>
 [StructLayout(LayoutKind.Sequential)]
+[SupportedOSPlatform("linux")]
 public struct V4L2Control
 {
     public uint Id;
     public int Value;
+}
+
+/// <summary>
+/// V4L2 extended control structure for complex data
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+[SupportedOSPlatform("linux")]
+public struct V4L2ExtControl
+{
+    public uint Id;
+    public uint Size;
+    public uint Reserved2;
+    public IntPtr Ptr;
+}
+
+/// <summary>
+/// V4L2 extended controls container
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+[SupportedOSPlatform("linux")]
+public struct V4L2ExtControls
+{
+    public uint Which;
+    public uint Count;
+    public uint ErrorIdx;
+    public uint Reserved1;
+    public uint Reserved2;
+    public IntPtr Controls;
+}
+
+/// <summary>
+/// Stateless H.264 SPS structure
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+[SupportedOSPlatform("linux")]
+public struct V4L2CtrlH264Sps
+{
+    public byte ProfileIdc;
+    public byte ConstraintSetFlags;
+    public byte LevelIdc;
+    public byte SeqParameterSetId;
+    public byte ChromaFormatIdc;
+    public byte BitDepthLumaMinus8;
+    public byte BitDepthChromaMinus8;
+    public byte Log2MaxFrameNumMinus4;
+    public byte PicOrderCntType;
+    public byte Log2MaxPicOrderCntLsbMinus4;
+    public byte MaxNumRefFrames;
+    public byte NumRefFramesInPicOrderCntCycle;
+    public short OffsetForRefFrame0;
+    public short OffsetForRefFrame1;
+    public short OffsetForTopToBottomField;
+    public short OffsetForNonRefPic;
+    public ushort PicWidthInMbsMinus1;
+    public ushort PicHeightInMapUnitsMinus1;
+    public uint Flags;
+}
+
+/// <summary>
+/// Stateless H.264 PPS structure
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+[SupportedOSPlatform("linux")]
+public struct V4L2CtrlH264Pps
+{
+    public byte PicParameterSetId;
+    public byte SeqParameterSetId;
+    public byte NumSliceGroupsMinus1;
+    public byte NumRefIdxL0DefaultActiveMinus1;
+    public byte NumRefIdxL1DefaultActiveMinus1;
+    public byte WeightedBipredIdc;
+    public sbyte PicInitQpMinus26;
+    public sbyte PicInitQsMinus26;
+    public sbyte ChromaQpIndexOffset;
+    public sbyte SecondChromaQpIndexOffset;
+    public ushort Flags;
+}
+
+/// <summary>
+/// Stateless H.264 slice parameters structure
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+[SupportedOSPlatform("linux")]
+public struct V4L2CtrlH264SliceParams
+{
+    public uint HeaderBitSize;
+    public uint FirstMbInSlice;
+    public byte SliceType;
+    public byte ColourPlaneId;
+    public byte RedundantPicCnt;
+    public byte CabacInitIdc;
+    public sbyte SliceQpDelta;
+    public sbyte SliceQsDelta;
+    public byte DisableDeblockingFilterIdc;
+    public sbyte SliceAlphaC0OffsetDiv2;
+    public sbyte SliceBetaOffsetDiv2;
+    public byte NumRefIdxL0ActiveMinus1;
+    public byte NumRefIdxL1ActiveMinus1;
+    public uint Flags;
+    // Note: Reference lists would go here in a complete implementation
+}
+
+/// <summary>
+/// Stateless H.264 decode parameters structure
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+[SupportedOSPlatform("linux")]
+public struct V4L2CtrlH264DecodeParams
+{
+    public ushort FrameNum;
+    public ushort IdrPicId;
+    public ushort PicOrderCntLsb;
+    public int DeltaPicOrderCntBottom;
+    public int DeltaPicOrderCnt0;
+    public int DeltaPicOrderCnt1;
+    public uint DecRefPicMarkingBitSize;
+    public uint PicOrderCntBitSize;
+    public uint SliceGroupChangeCycle;
+    public uint Flags;
+    // Note: DPB entries would go here in a complete implementation
 }
