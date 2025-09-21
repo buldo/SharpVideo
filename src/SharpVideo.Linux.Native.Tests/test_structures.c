@@ -11,18 +11,18 @@
 void fill_native_drm_mode_res(drmModeRes* s) {
     if (!s) return;
 
-    s->count_fbs = 2;
+    s->count_fbs = 0xDEAD;        // Distinctive pattern for count_fbs
     s->fbs = NULL; // We'll handle pointer arrays separately in tests
-    s->count_crtcs = 3;
+    s->count_crtcs = 0xBEEF;      // Distinctive pattern for count_crtcs
     s->crtcs = NULL;
-    s->count_connectors = 4;
+    s->count_connectors = 0xCAFE; // Distinctive pattern for count_connectors
     s->connectors = NULL;
-    s->count_encoders = 5;
+    s->count_encoders = 0xBABE;   // Distinctive pattern for count_encoders
     s->encoders = NULL;
-    s->min_width = 640;
-    s->max_width = 1920;
-    s->min_height = 480;
-    s->max_height = 1080;
+    s->min_width = 0x12345678;    // Distinctive pattern for min_width
+    s->max_width = 0x87654321;    // Distinctive pattern for max_width
+    s->min_height = 0xFEDCBA98;   // Distinctive pattern for min_height
+    s->max_height = 0x89ABCDEF;   // Distinctive pattern for max_height
 }
 
 // Function to get drmModeRes structure size for verification
@@ -34,11 +34,11 @@ int get_native_drm_mode_res_size(void) {
 void fill_native_drm_mode_encoder(drmModeEncoder* s) {
     if (!s) return;
 
-    s->encoder_id = 100;
-    s->encoder_type = 1; // DRM_MODE_ENCODER_DAC
-    s->crtc_id = 200;
-    s->possible_crtcs = 0x07; // Bitmask: can connect to CRTCs 0, 1, 2
-    s->possible_clones = 0x03; // Bitmask: can clone encoders 0, 1
+    s->encoder_id = 0xDEADBEEF;       // Distinctive pattern for encoder_id
+    s->encoder_type = 0xCAFE;         // Distinctive pattern for encoder_type
+    s->crtc_id = 0xBABEFACE;          // Distinctive pattern for crtc_id
+    s->possible_crtcs = 0x12345678;   // Distinctive bitmask pattern
+    s->possible_clones = 0x87654321;  // Distinctive bitmask pattern
 }
 
 // Function to get drmModeEncoder structure size for verification
@@ -50,20 +50,20 @@ int get_native_drm_mode_encoder_size(void) {
 void fill_native_drm_mode_connector(drmModeConnector* s) {
     if (!s) return;
 
-    s->connector_id = 300;
-    s->encoder_id = 100;
-    s->connector_type = 11; // DRM_MODE_CONNECTOR_HDMIA
-    s->connector_type_id = 1;
-    s->connection = 1; // DRM_MODE_CONNECTED
-    s->mmWidth = 510; // 510mm width
-    s->mmHeight = 287; // 287mm height
-    s->subpixel = 2; // DRM_MODE_SUBPIXEL_HORIZONTAL_RGB
-    s->count_modes = 0;
+    s->connector_id = 0xFEEDFACE;     // Distinctive pattern for connector_id
+    s->encoder_id = 0xDEADBEEF;       // Distinctive pattern for encoder_id
+    s->connector_type = 0xCAFEBABE;   // Distinctive pattern for connector_type
+    s->connector_type_id = 0x12345;   // Distinctive pattern for connector_type_id
+    s->connection = 0xABCD;           // Distinctive pattern for connection
+    s->mmWidth = 0x11223344;          // Distinctive pattern for mmWidth
+    s->mmHeight = 0x55667788;         // Distinctive pattern for mmHeight
+    s->subpixel = 0x9900AABB;         // Distinctive pattern for subpixel
+    s->count_modes = 0xCCDDEEFF;      // Distinctive pattern for count_modes
     s->modes = NULL;
-    s->count_props = 0;
+    s->count_props = 0x13579BDF;      // Distinctive pattern for count_props
     s->props = NULL;
     s->prop_values = NULL;
-    s->count_encoders = 0;
+    s->count_encoders = 0x2468ACE0;   // Distinctive pattern for count_encoders
     s->encoders = NULL;
 }
 
@@ -76,30 +76,30 @@ int get_native_drm_mode_connector_size(void) {
 void fill_native_drm_mode_crtc(drmModeCrtc* s) {
     if (!s) return;
 
-    s->crtc_id = 400;
-    s->buffer_id = 500;
-    s->x = 0;
-    s->y = 0;
-    s->width = 1920;
-    s->height = 1080;
-    s->mode_valid = 1;
+    s->crtc_id = 0xDEADBEEF;      // Distinctive pattern for crtc_id
+    s->buffer_id = 0xCAFEBABE;    // Distinctive pattern for buffer_id
+    s->x = 0x12345678;            // Distinctive pattern for x
+    s->y = 0x87654321;            // Distinctive pattern for y
+    s->width = 0xFEDCBA98;        // Distinctive pattern for width
+    s->height = 0x89ABCDEF;       // Distinctive pattern for height
+    s->mode_valid = 0xABCDEF01;   // Distinctive pattern for mode_valid
     // Fill mode info with test data
-    s->mode.clock = 148500;
-    s->mode.hdisplay = 1920;
-    s->mode.hsync_start = 2008;
-    s->mode.hsync_end = 2052;
-    s->mode.htotal = 2200;
-    s->mode.hskew = 0;
-    s->mode.vdisplay = 1080;
-    s->mode.vsync_start = 1084;
-    s->mode.vsync_end = 1089;
-    s->mode.vtotal = 1125;
-    s->mode.vscan = 0;
-    s->mode.vrefresh = 60;
-    s->mode.flags = 0x5; // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
-    s->mode.type = 0x40; // DRM_MODE_TYPE_PREFERRED
-    strcpy(s->mode.name, "1920x1080");
-    s->gamma_size = 256;
+    s->mode.clock = 0x12345678;         // Distinctive pattern for clock
+    s->mode.hdisplay = 0x1111;          // Distinctive pattern for hdisplay
+    s->mode.hsync_start = 0x2222;       // Distinctive pattern for hsync_start
+    s->mode.hsync_end = 0x3333;         // Distinctive pattern for hsync_end
+    s->mode.htotal = 0x4444;            // Distinctive pattern for htotal
+    s->mode.hskew = 0x5555;             // Distinctive pattern for hskew
+    s->mode.vdisplay = 0x6666;          // Distinctive pattern for vdisplay
+    s->mode.vsync_start = 0x7777;       // Distinctive pattern for vsync_start
+    s->mode.vsync_end = 0x8888;         // Distinctive pattern for vsync_end
+    s->mode.vtotal = 0x9999;            // Distinctive pattern for vtotal
+    s->mode.vscan = 0xAAAA;             // Distinctive pattern for vscan
+    s->mode.vrefresh = 0xBBBB;          // Distinctive pattern for vrefresh
+    s->mode.flags = 0xCCCCCCCC;         // Distinctive flag pattern
+    s->mode.type = 0xDDDDDDDD;          // Distinctive type pattern
+    strcpy(s->mode.name, "TEST_MODE_PATTERN_12345"); // Distinctive test string
+    s->gamma_size = 0xEEEEEEEE;         // Distinctive pattern for gamma_size
 }
 
 // Function to get drmModeCrtc structure size for verification
@@ -111,21 +111,21 @@ int get_native_drm_mode_crtc_size(void) {
 void fill_native_drm_mode_mode_info(drmModeModeInfo* s) {
     if (!s) return;
 
-    s->clock = 148500;
-    s->hdisplay = 1920;
-    s->hsync_start = 2008;
-    s->hsync_end = 2052;
-    s->htotal = 2200;
-    s->hskew = 0;
-    s->vdisplay = 1080;
-    s->vsync_start = 1084;
-    s->vsync_end = 1089;
-    s->vtotal = 1125;
-    s->vscan = 0;
-    s->vrefresh = 60;
-    s->flags = 0xA; // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
-    s->type = 0x8; // DRM_MODE_TYPE_PREFERRED
-    strcpy(s->name, "1920x1080");
+    s->clock = 0x11111111;         // Distinctive pattern for clock
+    s->hdisplay = 0x2222;          // Distinctive pattern for hdisplay
+    s->hsync_start = 0x3333;       // Distinctive pattern for hsync_start
+    s->hsync_end = 0x4444;         // Distinctive pattern for hsync_end
+    s->htotal = 0x5555;            // Distinctive pattern for htotal
+    s->hskew = 0x6666;             // Distinctive pattern for hskew
+    s->vdisplay = 0x7777;          // Distinctive pattern for vdisplay
+    s->vsync_start = 0x8888;       // Distinctive pattern for vsync_start
+    s->vsync_end = 0x9999;         // Distinctive pattern for vsync_end
+    s->vtotal = 0xAAAA;            // Distinctive pattern for vtotal
+    s->vscan = 0xBBBB;             // Distinctive pattern for vscan
+    s->vrefresh = 0xCCCC;          // Distinctive pattern for vrefresh
+    s->flags = 0xDDDDDDDD;         // Distinctive flag pattern
+    s->type = 0xEEEEEEEE;          // Distinctive type pattern
+    strcpy(s->name, "TEST_MODE_INFO_ABCDEF");  // Distinctive test string
 }
 
 // Function to get drmModeModeInfo structure size for verification
@@ -141,17 +141,17 @@ int get_native_drm_mode_mode_info_size(void) {
 void fill_native_drm_mode_plane(drmModePlane* s) {
     if (!s) return;
 
-    s->count_formats = 0;
+    s->count_formats = 0xDEADC0DE;     // Distinctive pattern for count_formats
     s->formats = NULL;
-    s->plane_id = 600;
-    s->crtc_id = 400;
-    s->fb_id = 500;
-    s->crtc_x = 0;
-    s->crtc_y = 0;
-    s->x = 0;
-    s->y = 0;
-    s->possible_crtcs = 0x07; // Can be used with CRTCs 0, 1, 2
-    s->gamma_size = 256;
+    s->plane_id = 0xFEEDBEEF;          // Distinctive pattern for plane_id
+    s->crtc_id = 0xCAFED00D;           // Distinctive pattern for crtc_id
+    s->fb_id = 0xBADDCAFE;             // Distinctive pattern for fb_id
+    s->crtc_x = 0x12121212;            // Distinctive pattern for crtc_x
+    s->crtc_y = 0x34343434;            // Distinctive pattern for crtc_y
+    s->x = 0x56565656;                 // Distinctive pattern for x
+    s->y = 0x78787878;                 // Distinctive pattern for y
+    s->possible_crtcs = 0x9ABCDEF0;    // Distinctive bitmask pattern
+    s->gamma_size = 0x13579BDF;        // Distinctive pattern for gamma_size
 }
 
 // Function to get drmModePlane structure size for verification
@@ -163,13 +163,13 @@ int get_native_drm_mode_plane_size(void) {
 void fill_native_drm_mode_fb(drmModeFB* s) {
     if (!s) return;
 
-    s->fb_id = 700;
-    s->width = 1920;
-    s->height = 1080;
-    s->pitch = 7680; // 1920 * 4 bytes per pixel
-    s->bpp = 32;
-    s->depth = 24;
-    s->handle = 800;
+    s->fb_id = 0xFACADE00;        // Distinctive pattern for fb_id
+    s->width = 0xDEADBEEF;        // Distinctive pattern for width
+    s->height = 0xCAFEBABE;       // Distinctive pattern for height
+    s->pitch = 0x12345678;        // Distinctive pattern for pitch
+    s->bpp = 0x87654321;          // Distinctive pattern for bpp
+    s->depth = 0xFEDCBA98;        // Distinctive pattern for depth
+    s->handle = 0x89ABCDEF;       // Distinctive pattern for handle
 }
 
 // Function to get drmModeFB structure size for verification
@@ -181,10 +181,10 @@ int get_native_drm_mode_fb_size(void) {
 void fill_native_dma_heap_allocation_data(struct dma_heap_allocation_data* s) {
     if (!s) return;
 
-    s->len = 4096; // 4KB allocation
-    s->fd = 42; // Test file descriptor
-    s->fd_flags = 0x80002; // O_RDWR | O_CLOEXEC
-    s->heap_flags = 0; // No heap flags defined yet
+    s->len = 0xDEADBEEFCAFEBABE;  // Distinctive 64-bit pattern for len
+    s->fd = 0x12345678;           // Distinctive 32-bit pattern for fd
+    s->fd_flags = 0x87654321;     // Distinctive 32-bit pattern for fd_flags
+    s->heap_flags = 0xFEDCBA98;   // Distinctive 64-bit pattern for heap_flags
 }
 
 // Function to get dma_heap_allocation_data structure size for verification
@@ -203,15 +203,15 @@ uint32_t get_native_dma_heap_ioctl_alloc(void) {
 void fill_native_v4l2_capability(struct v4l2_capability* s) {
     if (!s) return;
 
-    strcpy((char*)s->driver, "test_driver");
-    strcpy((char*)s->card, "Test Video Device");
-    strcpy((char*)s->bus_info, "platform:test-video");
-    s->version = 0x050C00; // Kernel version 5.12.0
-    s->capabilities = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_STREAMING;
-    s->device_caps = V4L2_CAP_VIDEO_CAPTURE_MPLANE | V4L2_CAP_STREAMING;
-    s->reserved[0] = 0;
-    s->reserved[1] = 0;
-    s->reserved[2] = 0;
+    strcpy((char*)s->driver, "TEST_DRV_DEAD");        // Distinctive test driver name (fits in 16 chars)
+    strcpy((char*)s->card, "TEST_CARD_CAFE");         // Distinctive test card name (fits in 32 chars)
+    strcpy((char*)s->bus_info, "TEST_BUS_12345");     // Distinctive test bus info (fits in 32 chars)
+    s->version = 0xDEADBEEF;           // Distinctive pattern for version
+    s->capabilities = 0xCAFEBABE;      // Distinctive pattern for capabilities
+    s->device_caps = 0x12345678;       // Distinctive pattern for device_caps
+    s->reserved[0] = 0x87654321;       // Distinctive pattern for reserved[0]
+    s->reserved[1] = 0xFEDCBA98;       // Distinctive pattern for reserved[1]
+    s->reserved[2] = 0x13579BDF;       // Distinctive pattern for reserved[2]
 }
 
 // Function to get v4l2_capability structure size for verification
@@ -223,26 +223,32 @@ int get_native_v4l2_capability_size(void) {
 void fill_native_v4l2_pix_format_mplane(struct v4l2_pix_format_mplane* s) {
     if (!s) return;
 
-    s->width = 1920;
-    s->height = 1080;
-    s->pixelformat = V4L2_PIX_FMT_NV12M;
-    s->field = V4L2_FIELD_NONE;
-    s->colorspace = V4L2_COLORSPACE_REC709;
-    s->num_planes = 2;
-    s->flags = 0;
-    s->ycbcr_enc = V4L2_YCBCR_ENC_DEFAULT;
-    s->quantization = V4L2_QUANTIZATION_DEFAULT;
-    s->xfer_func = V4L2_XFER_FUNC_DEFAULT;
+    s->width = 0xDEADBEEF;              // Distinctive pattern for width
+    s->height = 0xCAFEBABE;             // Distinctive pattern for height
+    s->pixelformat = 0x12345678;        // Distinctive pattern for pixelformat
+    s->field = 0x87654321;              // Distinctive pattern for field
+    s->colorspace = 0xFEDCBA98;         // Distinctive pattern for colorspace
+    s->num_planes = 0xAB;               // Distinctive pattern for num_planes (byte)
+    s->flags = 0xCD;                    // Distinctive pattern for flags (byte)
+    s->ycbcr_enc = 0xEF;                // Distinctive pattern for ycbcr_enc (byte)
+    s->quantization = 0x12;             // Distinctive pattern for quantization (byte)
+    s->xfer_func = 0x34;                // Distinctive pattern for xfer_func (byte)
 
-    // Fill plane format info
-    s->plane_fmt[0].sizeimage = 1920 * 1080;
-    s->plane_fmt[0].bytesperline = 1920;
-    s->plane_fmt[1].sizeimage = 1920 * 1080 / 2;
-    s->plane_fmt[1].bytesperline = 1920;
+    // Fill plane format info with distinctive patterns
+    s->plane_fmt[0].sizeimage = 0xDEADC0DE;     // Distinctive pattern for plane 0 sizeimage
+    s->plane_fmt[0].bytesperline = 0xFEEDFACE;  // Distinctive pattern for plane 0 bytesperline
+    s->plane_fmt[1].sizeimage = 0xBADDCAFE;     // Distinctive pattern for plane 1 sizeimage
+    s->plane_fmt[1].bytesperline = 0x13579BDF;  // Distinctive pattern for plane 1 bytesperline
 
-    // Reserved fields
+    // Fill remaining plane formats with patterns
+    for (int i = 2; i < 8; i++) {
+        s->plane_fmt[i].sizeimage = 0x11111111 + i;     // Sequential pattern
+        s->plane_fmt[i].bytesperline = 0x22222222 + i;  // Sequential pattern
+    }
+
+    // Reserved fields with distinctive patterns
     for (int i = 0; i < 7; i++) {
-        s->reserved[i] = 0;
+        s->reserved[i] = 0x99 + i;    // Sequential distinctive pattern (byte values)
     }
 }
 
@@ -255,7 +261,7 @@ int get_native_v4l2_pix_format_mplane_size(void) {
 void fill_native_v4l2_format(struct v4l2_format* s) {
     if (!s) return;
 
-    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+    s->type = 0xFACADE00;      // Distinctive pattern for type
     fill_native_v4l2_pix_format_mplane(&s->fmt.pix_mp);
 }
 
@@ -268,14 +274,14 @@ int get_native_v4l2_format_size(void) {
 void fill_native_v4l2_requestbuffers(struct v4l2_requestbuffers* s) {
     if (!s) return;
 
-    s->count = 4;
-    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    s->memory = V4L2_MEMORY_DMABUF;
-    s->capabilities = 0; // Don't use V4L2_BUF_CAP_SUPPORTS_DMABUF as it might not be available
-    s->flags = 0;
-    s->reserved[0] = 0;
-    s->reserved[1] = 0;
-    s->reserved[2] = 0;
+    s->count = 0xDEADBEEF;        // Distinctive pattern for count
+    s->type = 0xCAFEBABE;         // Distinctive pattern for type
+    s->memory = 0x12345678;       // Distinctive pattern for memory
+    s->capabilities = 0x87654321; // Distinctive pattern for capabilities
+    s->flags = 0xFEDCBA98;        // Distinctive pattern for flags
+    s->reserved[0] = 0x11223344;  // Distinctive pattern for reserved[0]
+    s->reserved[1] = 0x55667788;  // Distinctive pattern for reserved[1]
+    s->reserved[2] = 0x99AABBCC;  // Distinctive pattern for reserved[2]
 }
 
 // Function to get v4l2_requestbuffers structure size for verification
@@ -287,28 +293,28 @@ int get_native_v4l2_requestbuffers_size(void) {
 void fill_native_v4l2_buffer(struct v4l2_buffer* s) {
     if (!s) return;
 
-    s->index = 0;
-    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    s->bytesused = 0; // Not used for multiplanar
-    s->flags = V4L2_BUF_FLAG_MAPPED | V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
-    s->field = V4L2_FIELD_NONE;
-    s->timestamp.tv_sec = 12345;
-    s->timestamp.tv_usec = 67890;
-    s->timecode.type = 0;
-    s->timecode.flags = 0;
-    s->timecode.frames = 0;
-    s->timecode.seconds = 0;
-    s->timecode.minutes = 0;
-    s->timecode.hours = 0;
-    s->timecode.userbits[0] = 0;
-    s->timecode.userbits[1] = 0;
-    s->timecode.userbits[2] = 0;
-    s->timecode.userbits[3] = 0;
-    s->sequence = 123;
-    s->memory = V4L2_MEMORY_DMABUF;
-    s->length = 2; // Number of planes
-    s->reserved2 = 0;
-    s->request_fd = -1;
+    s->index = 0xDEADBEEF;            // Distinctive pattern for index
+    s->type = 0xCAFEBABE;             // Distinctive pattern for type
+    s->bytesused = 0x12345678;        // Distinctive pattern for bytesused
+    s->flags = 0x87654321;            // Distinctive pattern for flags
+    s->field = 0xFEDCBA98;            // Distinctive pattern for field
+    s->timestamp.tv_sec = 0x11111111; // Distinctive pattern for timestamp seconds
+    s->timestamp.tv_usec = 0x22222222; // Distinctive pattern for timestamp microseconds
+    s->timecode.type = 0x33;          // Distinctive pattern for timecode type
+    s->timecode.flags = 0x44;         // Distinctive pattern for timecode flags
+    s->timecode.frames = 0x55;        // Distinctive pattern for timecode frames
+    s->timecode.seconds = 0x66;       // Distinctive pattern for timecode seconds
+    s->timecode.minutes = 0x77;       // Distinctive pattern for timecode minutes
+    s->timecode.hours = 0x88;         // Distinctive pattern for timecode hours
+    s->timecode.userbits[0] = 0x99;   // Distinctive pattern for userbits[0]
+    s->timecode.userbits[1] = 0xAA;   // Distinctive pattern for userbits[1]
+    s->timecode.userbits[2] = 0xBB;   // Distinctive pattern for userbits[2]
+    s->timecode.userbits[3] = 0xCC;   // Distinctive pattern for userbits[3]
+    s->sequence = 0x33333333;         // Distinctive pattern for sequence
+    s->memory = 0x44444444;           // Distinctive pattern for memory
+    s->length = 0x55555555;           // Distinctive pattern for length
+    s->reserved2 = 0x66666666;        // Distinctive pattern for reserved2
+    s->request_fd = 0x77777777;       // Distinctive pattern for request_fd
 
     // Note: planes pointer would be set separately in real usage
     s->m.planes = NULL;
@@ -323,14 +329,14 @@ int get_native_v4l2_buffer_size(void) {
 void fill_native_v4l2_exportbuffer(struct v4l2_exportbuffer* s) {
     if (!s) return;
 
-    s->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-    s->index = 0;
-    s->plane = 0;
-    s->flags = O_RDWR | O_CLOEXEC;
-    s->fd = 42; // Test file descriptor
+    s->type = 0xDEADBEEF;        // Distinctive pattern for type
+    s->index = 0xCAFEBABE;       // Distinctive pattern for index
+    s->plane = 0x12345678;       // Distinctive pattern for plane
+    s->flags = 0x87654321;       // Distinctive pattern for flags
+    s->fd = 0xFEDCBA98;          // Distinctive pattern for fd
 
     for (int i = 0; i < 11; i++) {
-        s->reserved[i] = 0;
+        s->reserved[i] = 0x11223344 + i;  // Sequential distinctive pattern
     }
 }
 
@@ -343,11 +349,11 @@ int get_native_v4l2_exportbuffer_size(void) {
 void fill_native_v4l2_decoder_cmd(struct v4l2_decoder_cmd* s) {
     if (!s) return;
 
-    s->cmd = V4L2_DEC_CMD_START;
-    s->flags = 0;
+    s->cmd = 0xDEADBEEF;      // Distinctive pattern for cmd
+    s->flags = 0xCAFEBABE;    // Distinctive pattern for flags
 
-    // Initialize the union data
-    memset(&s->start, 0, sizeof(s->start));
+    // Initialize the union data with a distinctive pattern
+    memset(&s->start, 0xAB, sizeof(s->start));  // Fill with 0xAB pattern
 }
 
 // Function to get v4l2_decoder_cmd structure size for verification

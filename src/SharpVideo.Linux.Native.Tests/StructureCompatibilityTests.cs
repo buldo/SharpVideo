@@ -29,15 +29,15 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDrmModeRes(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(2, nativeFilledStruct.CountFbs);
-        Assert.Equal(3, nativeFilledStruct.CountCrtcs);
-        Assert.Equal(4, nativeFilledStruct.CountConnectors);
-        Assert.Equal(5, nativeFilledStruct.CountEncoders);
-        Assert.Equal(640, nativeFilledStruct.MinWidth);
-        Assert.Equal(1920, nativeFilledStruct.MaxWidth);
-        Assert.Equal(480, nativeFilledStruct.MinHeight);
-        Assert.Equal(1080, nativeFilledStruct.MaxHeight);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEAD, nativeFilledStruct.CountFbs);
+        Assert.Equal(0xBEEF, nativeFilledStruct.CountCrtcs);
+        Assert.Equal(0xCAFE, nativeFilledStruct.CountConnectors);
+        Assert.Equal(0xBABE, nativeFilledStruct.CountEncoders);
+        Assert.Equal(0x12345678, nativeFilledStruct.MinWidth);
+        Assert.Equal(unchecked((int)0x87654321), nativeFilledStruct.MaxWidth);
+        Assert.Equal(unchecked((int)0xFEDCBA98), nativeFilledStruct.MinHeight);
+        Assert.Equal(unchecked((int)0x89ABCDEF), nativeFilledStruct.MaxHeight);
     }
 
     [Fact]
@@ -59,12 +59,12 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDrmModeEncoder(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(100u, nativeFilledStruct.EncoderId);
-        Assert.Equal(DrmModeEncoderType.DAC, nativeFilledStruct.EncoderType);
-        Assert.Equal(200u, nativeFilledStruct.CrtcId);
-        Assert.Equal(0x07u, nativeFilledStruct.PossibleCrtcs);
-        Assert.Equal(0x03u, nativeFilledStruct.PossibleClones);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.EncoderId);
+        Assert.Equal((DrmModeEncoderType)0xCAFE, nativeFilledStruct.EncoderType);
+        Assert.Equal(0xBABEFACEu, nativeFilledStruct.CrtcId);
+        Assert.Equal(0x12345678u, nativeFilledStruct.PossibleCrtcs);
+        Assert.Equal(0x87654321u, nativeFilledStruct.PossibleClones);
     }
 
     [Fact]
@@ -86,18 +86,18 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDrmModeConnector(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(300u, nativeFilledStruct.ConnectorId);
-        Assert.Equal(100u, nativeFilledStruct.EncoderId);
-        Assert.Equal(ConnectorType.HDMIA, nativeFilledStruct.ConnectorType); // DRM_MODE_CONNECTOR_HDMIA
-        Assert.Equal(1u, nativeFilledStruct.ConnectorTypeId);
-        Assert.Equal(DrmModeConnection.Connected, nativeFilledStruct.Connection);
-        Assert.Equal(510u, nativeFilledStruct.MmWidth);
-        Assert.Equal(287u, nativeFilledStruct.MmHeight);
-        Assert.Equal(DrmModeSubPixel.HorizontalRgb, nativeFilledStruct.SubPixel);
-        Assert.Equal(0, nativeFilledStruct.CountModes);
-        Assert.Equal(0, nativeFilledStruct.CountProps);
-        Assert.Equal(0, nativeFilledStruct.CountEncoders);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xFEEDFACEu, nativeFilledStruct.ConnectorId);
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.EncoderId);
+        Assert.Equal((ConnectorType)0xCAFEBABE, nativeFilledStruct.ConnectorType);
+        Assert.Equal(0x12345u, nativeFilledStruct.ConnectorTypeId);
+        Assert.Equal((DrmModeConnection)0xABCD, nativeFilledStruct.Connection);
+        Assert.Equal(0x11223344u, nativeFilledStruct.MmWidth);
+        Assert.Equal(0x55667788u, nativeFilledStruct.MmHeight);
+        Assert.Equal((DrmModeSubPixel)0x9900AABB, nativeFilledStruct.SubPixel);
+        Assert.Equal(unchecked((int)0xCCDDEEFF), nativeFilledStruct.CountModes);
+        Assert.Equal(unchecked((int)0x13579BDF), nativeFilledStruct.CountProps);
+        Assert.Equal(unchecked((int)0x2468ACE0), nativeFilledStruct.CountEncoders);
     }
 
     [Fact]
@@ -119,22 +119,22 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDrmModeCrtc(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(400u, nativeFilledStruct.CrtcId);
-        Assert.Equal(500u, nativeFilledStruct.BufferId);
-        Assert.Equal(0u, nativeFilledStruct.X);
-        Assert.Equal(0u, nativeFilledStruct.Y);
-        Assert.Equal(1920u, nativeFilledStruct.Width);
-        Assert.Equal(1080u, nativeFilledStruct.Height);
-        Assert.Equal(1, nativeFilledStruct.ModeValid);
-        Assert.Equal(256, nativeFilledStruct.GammaSize);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.CrtcId);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.BufferId);
+        Assert.Equal(0x12345678u, nativeFilledStruct.X);
+        Assert.Equal(0x87654321u, nativeFilledStruct.Y);
+        Assert.Equal(0xFEDCBA98u, nativeFilledStruct.Width);
+        Assert.Equal(0x89ABCDEFu, nativeFilledStruct.Height);
+        Assert.Equal(unchecked((int)0xABCDEF01), nativeFilledStruct.ModeValid);
+        Assert.Equal(unchecked((int)0xEEEEEEEE), nativeFilledStruct.GammaSize);
 
-        // Verify embedded mode info
-        Assert.Equal(148500u, nativeFilledStruct.Mode.Clock);
-        Assert.Equal(1920, nativeFilledStruct.Mode.HDisplay);
-        Assert.Equal(1080, nativeFilledStruct.Mode.VDisplay);
-        Assert.Equal(60u, nativeFilledStruct.Mode.VRefresh);
-        Assert.Equal("1920x1080", nativeFilledStruct.Mode.NameString);
+        // Verify embedded mode info with distinctive patterns
+        Assert.Equal(0x12345678u, nativeFilledStruct.Mode.Clock);
+        Assert.Equal(0x1111, nativeFilledStruct.Mode.HDisplay);
+        Assert.Equal(0x6666, nativeFilledStruct.Mode.VDisplay);
+        Assert.Equal(0xBBBBu, nativeFilledStruct.Mode.VRefresh);
+        Assert.Equal("TEST_MODE_PATTERN_12345", nativeFilledStruct.Mode.NameString);
     }
 
     [Fact]
@@ -156,22 +156,22 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDrmModeModeInfo(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(148500u, nativeFilledStruct.Clock);
-        Assert.Equal(1920, nativeFilledStruct.HDisplay);
-        Assert.Equal(2008, nativeFilledStruct.HSyncStart);
-        Assert.Equal(2052, nativeFilledStruct.HSyncEnd);
-        Assert.Equal(2200, nativeFilledStruct.HTotal);
-        Assert.Equal(0, nativeFilledStruct.HSkew);
-        Assert.Equal(1080, nativeFilledStruct.VDisplay);
-        Assert.Equal(1084, nativeFilledStruct.VSyncStart);
-        Assert.Equal(1089, nativeFilledStruct.VSyncEnd);
-        Assert.Equal(1125, nativeFilledStruct.VTotal);
-        Assert.Equal(0, nativeFilledStruct.VScan);
-        Assert.Equal(60u, nativeFilledStruct.VRefresh);
-        Assert.Equal(DrmModeFlag.DRM_MODE_FLAG_NHSYNC | DrmModeFlag.DRM_MODE_FLAG_NVSYNC, nativeFilledStruct.Flags); // DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
-        Assert.Equal(DrmModeType.PREFERRED, nativeFilledStruct.Type); // DRM_MODE_TYPE_PREFERRED
-        Assert.Equal("1920x1080", nativeFilledStruct.NameString);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0x11111111u, nativeFilledStruct.Clock);
+        Assert.Equal(0x2222, nativeFilledStruct.HDisplay);
+        Assert.Equal(0x3333, nativeFilledStruct.HSyncStart);
+        Assert.Equal(0x4444, nativeFilledStruct.HSyncEnd);
+        Assert.Equal(0x5555, nativeFilledStruct.HTotal);
+        Assert.Equal(0x6666, nativeFilledStruct.HSkew);
+        Assert.Equal(0x7777, nativeFilledStruct.VDisplay);
+        Assert.Equal(0x8888, nativeFilledStruct.VSyncStart);
+        Assert.Equal(0x9999, nativeFilledStruct.VSyncEnd);
+        Assert.Equal(0xAAAA, nativeFilledStruct.VTotal);
+        Assert.Equal(0xBBBB, nativeFilledStruct.VScan);
+        Assert.Equal(0xCCCCu, nativeFilledStruct.VRefresh);
+        Assert.Equal((DrmModeFlag)0xDDDDDDDD, nativeFilledStruct.Flags);
+        Assert.Equal((DrmModeType)0xEEEEEEEE, nativeFilledStruct.Type);
+        Assert.Equal("TEST_MODE_INFO_ABCDEF", nativeFilledStruct.NameString);
     }
 
     [Fact]
@@ -193,17 +193,17 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDrmModePlane(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(0u, nativeFilledStruct.CountFormats);
-        Assert.Equal(600u, nativeFilledStruct.PlaneId);
-        Assert.Equal(400u, nativeFilledStruct.CrtcId);
-        Assert.Equal(500u, nativeFilledStruct.FbId);
-        Assert.Equal(0u, nativeFilledStruct.CrtcX);
-        Assert.Equal(0u, nativeFilledStruct.CrtcY);
-        Assert.Equal(0u, nativeFilledStruct.X);
-        Assert.Equal(0u, nativeFilledStruct.Y);
-        Assert.Equal(0x07u, nativeFilledStruct.PossibleCrtcs);
-        Assert.Equal(256u, nativeFilledStruct.GammaSize);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADC0DEu, nativeFilledStruct.CountFormats);
+        Assert.Equal(0xFEEDBEEFu, nativeFilledStruct.PlaneId);
+        Assert.Equal(0xCAFED00Du, nativeFilledStruct.CrtcId);
+        Assert.Equal(0xBADDCAFEu, nativeFilledStruct.FbId);
+        Assert.Equal(0x12121212u, nativeFilledStruct.CrtcX);
+        Assert.Equal(0x34343434u, nativeFilledStruct.CrtcY);
+        Assert.Equal(0x56565656u, nativeFilledStruct.X);
+        Assert.Equal(0x78787878u, nativeFilledStruct.Y);
+        Assert.Equal(0x9ABCDEF0u, nativeFilledStruct.PossibleCrtcs);
+        Assert.Equal(0x13579BDFu, nativeFilledStruct.GammaSize);
     }
 
     [Fact]
@@ -225,14 +225,14 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDrmModeFB(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(700u, nativeFilledStruct.FbId);
-        Assert.Equal(1920u, nativeFilledStruct.Width);
-        Assert.Equal(1080u, nativeFilledStruct.Height);
-        Assert.Equal(7680u, nativeFilledStruct.Pitch); // 1920 * 4 bytes per pixel
-        Assert.Equal(32u, nativeFilledStruct.Bpp);
-        Assert.Equal(24u, nativeFilledStruct.Depth);
-        Assert.Equal(800u, nativeFilledStruct.Handle);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xFACADE00u, nativeFilledStruct.FbId);
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Width);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Height);
+        Assert.Equal(0x12345678u, nativeFilledStruct.Pitch);
+        Assert.Equal(0x87654321u, nativeFilledStruct.Bpp);
+        Assert.Equal(0xFEDCBA98u, nativeFilledStruct.Depth);
+        Assert.Equal(0x89ABCDEFu, nativeFilledStruct.Handle);
     }
 
     [Fact]
@@ -254,11 +254,11 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeDmaHeapAllocationData(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(4096ul, nativeFilledStruct.len);
-        Assert.Equal(42u, nativeFilledStruct.fd);
-        Assert.Equal(0x80002u, nativeFilledStruct.fd_flags); // O_RDWR | O_CLOEXEC
-        Assert.Equal(0ul, nativeFilledStruct.heap_flags); // No heap flags defined yet
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFCAFEBABEul, nativeFilledStruct.len);
+        Assert.Equal(0x12345678u, nativeFilledStruct.fd);
+        Assert.Equal(0x87654321u, nativeFilledStruct.fd_flags);
+        Assert.Equal(0xFEDCBA98ul, nativeFilledStruct.heap_flags);
     }
 
     [Fact]
@@ -292,16 +292,13 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeV4L2Capability(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal("test_driver", nativeFilledStruct.DriverString);
-        Assert.Equal("Test Video Device", nativeFilledStruct.CardString);
-        Assert.Equal("platform:test-video", nativeFilledStruct.BusInfoString);
-        Assert.Equal(0x050C00u, nativeFilledStruct.Version); // Kernel version 5.12.0
-        Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.VIDEO_CAPTURE) != 0);
-        Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0);
-        Assert.True((nativeFilledStruct.Capabilities & (uint)V4L2Capabilities.STREAMING) != 0);
-        Assert.True((nativeFilledStruct.DeviceCaps & V4L2Capabilities.VIDEO_CAPTURE_MPLANE) != 0);
-        Assert.True((nativeFilledStruct.DeviceCaps & V4L2Capabilities.STREAMING) != 0);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal("TEST_DRV_DEAD", nativeFilledStruct.DriverString);
+        Assert.Equal("TEST_CARD_CAFE", nativeFilledStruct.CardString);
+        Assert.Equal("TEST_BUS_12345", nativeFilledStruct.BusInfoString);
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Version);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Capabilities);
+        Assert.Equal((V4L2Capabilities)0x12345678, nativeFilledStruct.DeviceCaps);
     }
 
     [Fact]
@@ -323,19 +320,19 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeV4L2PixFormatMplane(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(1920u, nativeFilledStruct.Width);
-        Assert.Equal(1080u, nativeFilledStruct.Height);
-        Assert.Equal(V4L2PixelFormats.NV12M, nativeFilledStruct.PixelFormat);
-        Assert.Equal((uint)V4L2Field.NONE, nativeFilledStruct.Field);
-        Assert.Equal(2, nativeFilledStruct.NumPlanes);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Width);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Height);
+        Assert.Equal(0x12345678u, nativeFilledStruct.PixelFormat);
+        Assert.Equal(0x87654321u, nativeFilledStruct.Field);
+        Assert.Equal(0xAB, nativeFilledStruct.NumPlanes);
 
-        // Check plane format information
+        // Check plane format information with distinctive patterns
         var planeFormats = nativeFilledStruct.PlaneFormats;
-        Assert.Equal(1920u * 1080u, planeFormats[0].SizeImage);
-        Assert.Equal(1920u, planeFormats[0].BytesPerLine);
-        Assert.Equal(1920u * 1080u / 2u, planeFormats[1].SizeImage);
-        Assert.Equal(1920u, planeFormats[1].BytesPerLine);
+        Assert.Equal(0xDEADC0DEu, planeFormats[0].SizeImage);
+        Assert.Equal(0xFEEDFACEu, planeFormats[0].BytesPerLine);
+        Assert.Equal(0xBADDCAFEu, planeFormats[1].SizeImage);
+        Assert.Equal(0x13579BDFu, planeFormats[1].BytesPerLine);
     }
 
     [Fact]
@@ -357,12 +354,12 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeV4L2Format(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
-        Assert.Equal(1920u, nativeFilledStruct.Pix_mp.Width);
-        Assert.Equal(1080u, nativeFilledStruct.Pix_mp.Height);
-        Assert.Equal(V4L2PixelFormats.NV12M, nativeFilledStruct.Pix_mp.PixelFormat);
-        Assert.Equal(2, nativeFilledStruct.Pix_mp.NumPlanes);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xFACADE00u, nativeFilledStruct.Type);
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Pix_mp.Width);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Pix_mp.Height);
+        Assert.Equal(0x12345678u, nativeFilledStruct.Pix_mp.PixelFormat);
+        Assert.Equal(0xAB, nativeFilledStruct.Pix_mp.NumPlanes);
     }
 
     [Fact]
@@ -384,10 +381,10 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeV4L2RequestBuffers(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(4u, nativeFilledStruct.Count);
-        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
-        Assert.Equal(V4L2Constants.V4L2_MEMORY_DMABUF, nativeFilledStruct.Memory);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Count);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Type);
+        Assert.Equal(0x12345678u, nativeFilledStruct.Memory);
     }
 
     [Fact]
@@ -409,15 +406,15 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeV4L2Buffer(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(0u, nativeFilledStruct.Index);
-        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
-        Assert.Equal((uint)V4L2Field.NONE, nativeFilledStruct.Field);
-        Assert.Equal(12345L, nativeFilledStruct.Timestamp.TvSec);
-        Assert.Equal(67890L, nativeFilledStruct.Timestamp.TvUsec);
-        Assert.Equal(123u, nativeFilledStruct.Sequence);
-        Assert.Equal(V4L2Constants.V4L2_MEMORY_DMABUF, nativeFilledStruct.Memory);
-        Assert.Equal(2u, nativeFilledStruct.Length); // Number of planes
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Index);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Type);
+        Assert.Equal(0xFEDCBA98u, nativeFilledStruct.Field);
+        Assert.Equal(0x11111111L, nativeFilledStruct.Timestamp.TvSec);
+        Assert.Equal(0x22222222L, nativeFilledStruct.Timestamp.TvUsec);
+        Assert.Equal(0x33333333u, nativeFilledStruct.Sequence);
+        Assert.Equal(0x44444444u, nativeFilledStruct.Memory);
+        Assert.Equal(0x55555555u, nativeFilledStruct.Length);
     }
 
     [Fact]
@@ -439,11 +436,11 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeV4L2ExportBuffer(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal(V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, nativeFilledStruct.Type);
-        Assert.Equal(0u, nativeFilledStruct.Index);
-        Assert.Equal(0u, nativeFilledStruct.Plane);
-        Assert.Equal(42, nativeFilledStruct.Fd);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Type);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Index);
+        Assert.Equal(0x12345678u, nativeFilledStruct.Plane);
+        Assert.Equal(unchecked((int)0xFEDCBA98), nativeFilledStruct.Fd);
     }
 
     [Fact]
@@ -465,9 +462,9 @@ public unsafe class StructureCompatibilityTests
         // Fill structure using native C code
         NativeTestLibrary.FillNativeV4L2DecoderCmd(&nativeFilledStruct);
 
-        // Verify that the managed structure fields have the expected values
-        Assert.Equal((uint)V4L2DecoderCommand.START, nativeFilledStruct.Cmd);
-        Assert.Equal(0u, nativeFilledStruct.Flags);
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Cmd);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Flags);
     }
 
     [Fact]
