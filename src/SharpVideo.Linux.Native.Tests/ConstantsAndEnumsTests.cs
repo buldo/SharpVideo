@@ -120,6 +120,22 @@ public class ConstantsAndEnumsTests
     }
 
     [Fact]
+    public void TestV4L2FormatFlags_HasExpectedValues()
+    {
+        // Test that V4L2 format flags have expected numeric values
+        Assert.Equal(0x0001u, (uint)V4L2FormatFlags.COMPRESSED);
+        Assert.Equal(0x0002u, (uint)V4L2FormatFlags.EMULATED);
+        Assert.Equal(0x0004u, (uint)V4L2FormatFlags.CONTINUOUS_BYTESTREAM);
+        Assert.Equal(0x0008u, (uint)V4L2FormatFlags.DYN_RESOLUTION);
+        Assert.Equal(0x0010u, (uint)V4L2FormatFlags.ENC_CAP_FRAME_INTERVAL);
+        Assert.Equal(0x0020u, (uint)V4L2FormatFlags.CSC_COLORSPACE);
+        Assert.Equal(0x0040u, (uint)V4L2FormatFlags.CSC_XFER_FUNC);
+        Assert.Equal(0x0080u, (uint)V4L2FormatFlags.CSC_YCBCR_ENC);
+        Assert.Equal(0x0080u, (uint)V4L2FormatFlags.CSC_HSV_ENC); // Same as CSC_YCBCR_ENC
+        Assert.Equal(0x0100u, (uint)V4L2FormatFlags.CSC_QUANTIZATION);
+    }
+
+    [Fact]
     public void TestOpenFlags_HasExpectedValues()
     {
         // Test that open flags have expected numeric values (POSIX standard)
@@ -128,9 +144,12 @@ public class ConstantsAndEnumsTests
         Assert.Equal(0x002, (int)OpenFlags.O_RDWR);
         Assert.Equal(0x040, (int)OpenFlags.O_CREAT);
         Assert.Equal(0x080, (int)OpenFlags.O_EXCL);
+        Assert.Equal(0x100, (int)OpenFlags.O_NOCTTY);
         Assert.Equal(0x200, (int)OpenFlags.O_TRUNC);
         Assert.Equal(0x400, (int)OpenFlags.O_APPEND);
         Assert.Equal(0x800, (int)OpenFlags.O_NONBLOCK);
+        Assert.Equal(0x1000, (int)OpenFlags.O_DSYNC);
+        Assert.Equal(0x80000, (int)OpenFlags.O_CLOEXEC);
     }
 
     [Fact]
@@ -163,6 +182,38 @@ public class ConstantsAndEnumsTests
 
     #endregion
 
+    #region V4L2BufferFlags Tests
+
+    [Fact]
+    public void TestV4L2BufferFlags_HasExpectedValues()
+    {
+        // Test that V4L2 buffer flags have expected numeric values
+        Assert.Equal(0x00000001u, (uint)V4L2BufferFlags.MAPPED);
+        Assert.Equal(0x00000002u, (uint)V4L2BufferFlags.QUEUED);
+        Assert.Equal(0x00000004u, (uint)V4L2BufferFlags.DONE);
+        Assert.Equal(0x00000008u, (uint)V4L2BufferFlags.KEYFRAME);
+        Assert.Equal(0x00000010u, (uint)V4L2BufferFlags.PFRAME);
+        Assert.Equal(0x00000020u, (uint)V4L2BufferFlags.BFRAME);
+        Assert.Equal(0x00000040u, (uint)V4L2BufferFlags.ERROR);
+        Assert.Equal(0x00000080u, (uint)V4L2BufferFlags.IN_REQUEST);
+        Assert.Equal(0x00000100u, (uint)V4L2BufferFlags.TIMECODE);
+        Assert.Equal(0x00000200u, (uint)V4L2BufferFlags.M2M_HOLD_CAPTURE_BUF);
+        Assert.Equal(0x00000400u, (uint)V4L2BufferFlags.PREPARED);
+        Assert.Equal(0x00000800u, (uint)V4L2BufferFlags.NO_CACHE_INVALIDATE);
+        Assert.Equal(0x00001000u, (uint)V4L2BufferFlags.NO_CACHE_CLEAN);
+        Assert.Equal(0x0000e000u, (uint)V4L2BufferFlags.TIMESTAMP_MASK);
+        Assert.Equal(0x00000000u, (uint)V4L2BufferFlags.TIMESTAMP_UNKNOWN);
+        Assert.Equal(0x00002000u, (uint)V4L2BufferFlags.TIMESTAMP_MONOTONIC);
+        Assert.Equal(0x00004000u, (uint)V4L2BufferFlags.TIMESTAMP_COPY);
+        Assert.Equal(0x00070000u, (uint)V4L2BufferFlags.TSTAMP_SRC_MASK);
+        Assert.Equal(0x00000000u, (uint)V4L2BufferFlags.TSTAMP_SRC_EOF);
+        Assert.Equal(0x00010000u, (uint)V4L2BufferFlags.TSTAMP_SRC_SOE);
+        Assert.Equal(0x00100000u, (uint)V4L2BufferFlags.LAST);
+        Assert.Equal(0x00800000u, (uint)V4L2BufferFlags.REQUEST_FD);
+    }
+
+    #endregion
+
     #region Flag Combinations Tests
 
     [Fact]
@@ -176,6 +227,42 @@ public class ConstantsAndEnumsTests
         Assert.True((combined & mapped) != 0);
         Assert.True((combined & queued) != 0);
         Assert.NotEqual(mapped, queued);
+    }
+
+    [Fact]
+    public void TestV4L2Capabilities_HasExpectedValues()
+    {
+        // Test that V4L2 capabilities have expected numeric values
+        Assert.Equal(0x00000001u, (uint)V4L2Capabilities.VIDEO_CAPTURE);
+        Assert.Equal(0x00000002u, (uint)V4L2Capabilities.VIDEO_OUTPUT);
+        Assert.Equal(0x00000004u, (uint)V4L2Capabilities.VIDEO_OVERLAY);
+        Assert.Equal(0x00000010u, (uint)V4L2Capabilities.VBI_CAPTURE);
+        Assert.Equal(0x00000020u, (uint)V4L2Capabilities.VBI_OUTPUT);
+        Assert.Equal(0x00000040u, (uint)V4L2Capabilities.SLICED_VBI_CAPTURE);
+        Assert.Equal(0x00000080u, (uint)V4L2Capabilities.SLICED_VBI_OUTPUT);
+        Assert.Equal(0x00000100u, (uint)V4L2Capabilities.RDS_CAPTURE);
+        Assert.Equal(0x00000200u, (uint)V4L2Capabilities.VIDEO_OUTPUT_OVERLAY);
+        Assert.Equal(0x00000400u, (uint)V4L2Capabilities.HW_FREQ_SEEK);
+        Assert.Equal(0x00000800u, (uint)V4L2Capabilities.RDS_OUTPUT);
+        Assert.Equal(0x00001000u, (uint)V4L2Capabilities.VIDEO_CAPTURE_MPLANE);
+        Assert.Equal(0x00002000u, (uint)V4L2Capabilities.VIDEO_OUTPUT_MPLANE);
+        Assert.Equal(0x00004000u, (uint)V4L2Capabilities.VIDEO_M2M_MPLANE);
+        Assert.Equal(0x00008000u, (uint)V4L2Capabilities.VIDEO_M2M);
+        Assert.Equal(0x00010000u, (uint)V4L2Capabilities.TUNER);
+        Assert.Equal(0x00020000u, (uint)V4L2Capabilities.AUDIO);
+        Assert.Equal(0x00040000u, (uint)V4L2Capabilities.RADIO);
+        Assert.Equal(0x00080000u, (uint)V4L2Capabilities.MODULATOR);
+        Assert.Equal(0x00100000u, (uint)V4L2Capabilities.SDR_CAPTURE);
+        Assert.Equal(0x00200000u, (uint)V4L2Capabilities.EXT_PIX_FORMAT);
+        Assert.Equal(0x00400000u, (uint)V4L2Capabilities.SDR_OUTPUT);
+        Assert.Equal(0x00800000u, (uint)V4L2Capabilities.META_CAPTURE);
+        Assert.Equal(0x01000000u, (uint)V4L2Capabilities.READWRITE);
+        Assert.Equal(0x02000000u, (uint)V4L2Capabilities.ASYNCIO);
+        Assert.Equal(0x04000000u, (uint)V4L2Capabilities.STREAMING);
+        Assert.Equal(0x08000000u, (uint)V4L2Capabilities.META_OUTPUT);
+        Assert.Equal(0x10000000u, (uint)V4L2Capabilities.TOUCH);
+        Assert.Equal(0x20000000u, (uint)V4L2Capabilities.IO_MC);
+        Assert.Equal(0x80000000u, (uint)V4L2Capabilities.DEVICE_CAPS);
     }
 
     [Fact]
@@ -757,10 +844,15 @@ public class ConstantsAndEnumsTests
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(V4L2BufferType)));
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(V4L2Memory)));
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(V4L2Capabilities)));
+        Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(V4L2BufferFlags)));
+        Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(V4L2FormatFlags)));
         Assert.Equal(typeof(int), Enum.GetUnderlyingType(typeof(OpenFlags)));
         Assert.Equal(typeof(int), Enum.GetUnderlyingType(typeof(ProtFlags)));
+        Assert.Equal(typeof(int), Enum.GetUnderlyingType(typeof(MapFlags)));
+        Assert.Equal(typeof(int), Enum.GetUnderlyingType(typeof(MsyncFlags)));
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(DrmModeFlag)));
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(PropertyType)));
+        Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(DrmModeType)));
     }
 
     [Fact]
