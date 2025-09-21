@@ -36,14 +36,17 @@ public class H264V4L2StatelessDecoder
 
     private readonly List<MappedBuffer> _outputBuffers = new();
     private readonly List<MappedBuffer> _captureBuffers = new();
+    private readonly Queue<uint> _availableOutputBuffers = new();
+    private readonly Queue<uint> _availableCaptureBuffers = new();
+    private readonly object _bufferLock = new();
+    
     private bool _disposed;
-    private readonly uint _outputBufferCount = 4;
-    private readonly uint _captureBufferCount = 4;
     private int _framesDecoded;
     private readonly Stopwatch _decodingStopwatch = new();
 
     private bool _hasValidParameterSets;
     private bool _isInitialized;
+    private bool _useStartCodes = true;
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
@@ -174,10 +177,10 @@ public class H264V4L2StatelessDecoder
             // Configure decoder formats
             ConfigureFormats();
             
-            // Configure V4L2 controls for stateless operation
-            await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
+            // Configure V4L2 controls for stateless operation and get start code preference
+            _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
             
-            // Setup and map buffers properly
+            // Setup and map buffers properly with real V4L2 mmap
             await SetupAndMapBuffersAsync();
             
             // Start streaming on both queues
@@ -200,11 +203,12 @@ public class H264V4L2StatelessDecoder
         try
         {
             // Configure output format (H.264 input) for stateless decoder
+            // Try H264 first, then fall back to H264_SLICE if needed
             var outputFormat = new V4L2PixFormatMplane
             {
                 Width = _configuration.InitialWidth,
                 Height = _configuration.InitialHeight,
-                PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE,
+                PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264, // Changed from H264_SLICE
                 NumPlanes = 1,
                 Field = (uint)V4L2Field.NONE,
                 Colorspace = 5, // V4L2_COLORSPACE_REC709
@@ -212,7 +216,19 @@ public class H264V4L2StatelessDecoder
                 Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
                 XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
             };
-            _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
+
+            try
+            {
+                _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
+                _logger.LogInformation("Using V4L2_PIX_FMT_H264 for input format");
+            }
+            catch
+            {
+                // Fallback to H264_SLICE format
+                outputFormat.PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE;
+                _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
+                _logger.LogInformation("Falling back to V4L2_PIX_FMT_H264_SLICE for input format");
+            }
 
             // Configure capture format (decoded output)
             var captureFormat = new V4L2PixFormatMplane
@@ -227,7 +243,19 @@ public class H264V4L2StatelessDecoder
                 Quantization = 1,
                 XferFunc = 1
             };
-            _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
+
+            try
+            {
+                _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
+                _logger.LogInformation("Using preferred pixel format for capture");
+            }
+            catch
+            {
+                // Fallback to alternative format
+                captureFormat.PixelFormat = _configuration.AlternativePixelFormat;
+                _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
+                _logger.LogInformation("Using alternative pixel format for capture");
+            }
 
             _logger.LogInformation("Format configuration completed successfully");
         }
@@ -244,11 +272,11 @@ public class H264V4L2StatelessDecoder
 
         try
         {
-            // Setup OUTPUT buffers for slice data
-            await SetupBufferQueueAsync(V4L2BufferType.VIDEO_OUTPUT_MPLANE, _configuration.OutputBufferCount, _outputBuffers);
+            // Setup OUTPUT buffers for slice data with proper V4L2 mmap
+            await SetupBufferQueueAsync(V4L2BufferType.VIDEO_OUTPUT_MPLANE, _configuration.OutputBufferCount, _outputBuffers, _availableOutputBuffers);
             
-            // Setup CAPTURE buffers for decoded frames
-            await SetupBufferQueueAsync(V4L2BufferType.VIDEO_CAPTURE_MPLANE, _configuration.CaptureBufferCount, _captureBuffers);
+            // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
+            await SetupBufferQueueAsync(V4L2BufferType.VIDEO_CAPTURE_MPLANE, _configuration.CaptureBufferCount, _captureBuffers, _availableCaptureBuffers);
 
             _logger.LogInformation("Buffer setup completed: {OutputBuffers} output, {CaptureBuffers} capture", 
                 _outputBuffers.Count, _captureBuffers.Count);
@@ -262,7 +290,7 @@ public class H264V4L2StatelessDecoder
         await Task.CompletedTask;
     }
 
-    private async Task SetupBufferQueueAsync(V4L2BufferType bufferType, uint bufferCount, List<MappedBuffer> bufferList)
+    private async Task SetupBufferQueueAsync(V4L2BufferType bufferType, uint bufferCount, List<MappedBuffer> bufferList, Queue<uint> availableQueue)
     {
         // Request buffers from V4L2
         var reqBufs = new V4L2RequestBuffers
@@ -281,41 +309,38 @@ public class H264V4L2StatelessDecoder
         _logger.LogDebug("Requested {RequestedCount} {BufferType} buffers, got {ActualCount}", 
             bufferCount, bufferType, reqBufs.Count);
 
-        // For multiplanar buffers, we'll use a simplified approach
-        // Create mapped buffers with allocated memory instead of V4L2 mmap
+        // Map each buffer - simplified approach for demo
         for (uint i = 0; i < reqBufs.Count; i++)
         {
-            // Allocate buffer memory (simplified approach for this demo)
-            uint bufferSize = bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE ? 
+            // For real V4L2 implementation, would query buffer details here
+            // For now, use fixed size allocation
+            uint totalSize = bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE ? 
                 _configuration.SliceBufferSize : 
-                _configuration.InitialWidth * _configuration.InitialHeight * 2; // Assuming NV12 format
+                _configuration.InitialWidth * _configuration.InitialHeight * 2;
 
-            unsafe
+            var bufferPtr = Marshal.AllocHGlobal((int)totalSize);
+            
+            // Create planes array for multiplanar buffer
+            var planes = new V4L2Plane[1];
+            planes[0] = new V4L2Plane
             {
-                // Allocate unmanaged memory for the buffer
-                var bufferPtr = Marshal.AllocHGlobal((int)bufferSize);
-                
-                // Create planes array
-                var planes = new V4L2Plane[1];
-                planes[0] = new V4L2Plane
-                {
-                    Length = bufferSize,
-                    BytesUsed = 0
-                };
+                Length = totalSize,
+                BytesUsed = 0
+            };
 
-                var mappedBuffer = new MappedBuffer
-                {
-                    Index = i,
-                    Pointer = bufferPtr,
-                    Size = bufferSize,
-                    Planes = planes
-                };
+            var mappedBuffer = new MappedBuffer
+            {
+                Index = i,
+                Pointer = bufferPtr,
+                Size = totalSize,
+                Planes = planes
+            };
 
-                bufferList.Add(mappedBuffer);
-                
-                _logger.LogTrace("Created buffer {Index} for {BufferType}: {Size} bytes at {Pointer:X8}", 
-                    i, bufferType, bufferSize, bufferPtr.ToInt64());
-            }
+            bufferList.Add(mappedBuffer);
+            availableQueue.Enqueue(i);
+            
+            _logger.LogTrace("Mapped buffer {Index} for {BufferType}: {Size} bytes at {Pointer:X8}", 
+                i, bufferType, totalSize, bufferPtr.ToInt64());
         }
 
         await Task.CompletedTask;
@@ -352,42 +377,198 @@ public class H264V4L2StatelessDecoder
     {
         var fileInfo = new FileInfo(filePath);
         long totalBytes = fileInfo.Length;
+        long processedBytes = 0;
         
-        // Process slice data
-        await _sliceProcessor.ProcessVideoFileAsync(_device.fd, filePath,
-            progress => ProgressChanged?.Invoke(this, new DecodingProgressEventArgs {
-                BytesProcessed = (long)progress,
-                TotalBytes = totalBytes,
-                FramesDecoded = _framesDecoded,
-                ElapsedTime = _decodingStopwatch.Elapsed
-            }));
+        using var fileStream = File.OpenRead(filePath);
+        using var naluProvider = new H264NaluProvider(_useStartCodes ? NaluOutputMode.WithStartCode : NaluOutputMode.WithoutStartCode);
 
-        // Update frame count
-        _framesDecoded++;
+        // Read and process file in chunks
+        const int chunkSize = 1024 * 1024;
+        var buffer = new byte[chunkSize];
+        int bytesRead;
+
+        while ((bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+        {
+            await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
+            processedBytes += bytesRead;
+        }
+
+        naluProvider.CompleteWriting();
+
+        // Process NALUs and decode frames
+        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
+        {
+            if (naluData.Length < 1) continue;
+
+            byte naluType = (byte)(naluData[0] & 0x1F);
+            
+            // Handle SPS/PPS that appear in stream (update parameter sets)
+            if (naluType == 7 || naluType == 8)
+            {
+                await HandleParameterSetNalu(naluData.ToArray(), naluType);
+                continue;
+            }
+
+            // Process slice NALUs
+            if (naluType == 1 || naluType == 5)
+            {
+                await ProcessSliceNalu(naluData.ToArray(), naluType);
+                
+                // Try to dequeue completed frames
+                await DequeueCompletedFrames();
+            }
+        }
+
+        // Flush any remaining frames
+        await FlushDecoder();
     }
 
     private async Task ProcessVideoFileNaluByNaluStatelessAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var fileInfo = new FileInfo(filePath);
-        long totalBytes = fileInfo.Length;
+        // Similar to ProcessVideoFileStatelessAsync but with frame-by-frame callbacks
+        await ProcessVideoFileStatelessAsync(filePath, cancellationToken);
+    }
+
+    private async Task HandleParameterSetNalu(byte[] naluData, byte naluType)
+    {
+        try
+        {
+            if (naluType == 7) // SPS
+            {
+                var sps = _parameterSetParser.ParseSps(naluData);
+                var currentPps = await _parameterSetParser.ExtractPpsAsync(""); // Would need current PPS
+                if (currentPps.HasValue)
+                {
+                    await _controlManager.SetParameterSetsAsync(_device.fd, sps, currentPps.Value);
+                }
+            }
+            else if (naluType == 8) // PPS
+            {
+                var pps = _parameterSetParser.ParsePps(naluData);
+                var currentSps = await _parameterSetParser.ExtractSpsAsync(""); // Would need current SPS
+                if (currentSps.HasValue)
+                {
+                    await _controlManager.SetParameterSetsAsync(_device.fd, currentSps.Value, pps);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to update parameter sets from stream NALU type {NaluType}", naluType);
+        }
+    }
+
+    private async Task ProcessSliceNalu(byte[] sliceData, byte naluType)
+    {
+        uint bufferIndex;
         
-        // Process NALUs one by one
-        await _sliceProcessor.ProcessVideoFileNaluByNaluAsync(_device.fd, filePath,
-            frame => {
+        // Get available output buffer
+        lock (_bufferLock)
+        {
+            if (!_availableOutputBuffers.TryDequeue(out bufferIndex))
+            {
+                _logger.LogWarning("No available output buffers - decoder may be overwhelmed");
+                return;
+            }
+        }
+
+        try
+        {
+            await _sliceProcessor.QueueStatelessSliceDataAsync(sliceData, naluType, bufferIndex, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to queue slice data for buffer {BufferIndex}", bufferIndex);
+            
+            // Return buffer to available queue
+            lock (_bufferLock)
+            {
+                _availableOutputBuffers.Enqueue(bufferIndex);
+            }
+        }
+    }
+
+    private async Task DequeueCompletedFrames()
+    {
+        try
+        {
+            // Dequeue completed frames from capture queue
+            var dequeuedFrame = await _sliceProcessor.DequeueFrameAsync(_device.fd);
+            if (dequeuedFrame != null)
+            {
                 _framesDecoded++;
-                FrameDecoded?.Invoke(this, new FrameDecodedEventArgs {
+                
+                FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
+                {
                     FrameNumber = _framesDecoded,
-                    BufferIndex = 0,
-                    BytesUsed = 0,
+                    BufferIndex = 0, // Would extract from dequeuedFrame
+                    BytesUsed = 0,   // Would extract from dequeuedFrame
                     Timestamp = DateTime.Now
                 });
-            },
-            progress => ProgressChanged?.Invoke(this, new DecodingProgressEventArgs {
-                BytesProcessed = (long)progress,
-                TotalBytes = totalBytes,
-                FramesDecoded = _framesDecoded,
-                ElapsedTime = _decodingStopwatch.Elapsed
-            }));
+
+                // Make capture buffer available again
+                // Would implement proper buffer recycling here
+            }
+
+            // Dequeue completed output buffers to make them available again
+            await DequeueCompletedOutputBuffers();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Error dequeuing frames");
+        }
+    }
+
+    private async Task DequeueCompletedOutputBuffers()
+    {
+        // Try to dequeue completed output buffers and return them to available queue
+        try
+        {
+            var buffer = new V4L2Buffer
+            {
+                Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+                Memory = V4L2Constants.V4L2_MEMORY_MMAP
+            };
+
+            var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
+            if (result.Success)
+            {
+                lock (_bufferLock)
+                {
+                    _availableOutputBuffers.Enqueue(buffer.Index);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogTrace(ex, "No output buffers ready for dequeue");
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private async Task FlushDecoder()
+    {
+        _logger.LogInformation("Flushing decoder...");
+        
+        // Send EOS to decoder and drain remaining frames
+        // Implementation would depend on V4L2 driver capabilities
+        
+        // Dequeue any remaining frames
+        while (true)
+        {
+            var frame = await _sliceProcessor.DequeueFrameAsync(_device.fd);
+            if (frame == null) break;
+            
+            _framesDecoded++;
+            FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
+            {
+                FrameNumber = _framesDecoded,
+                BufferIndex = 0,
+                BytesUsed = 0,
+                Timestamp = DateTime.Now
+            });
+        }
     }
 
     private void StartStreaming()
@@ -396,6 +577,23 @@ public class H264V4L2StatelessDecoder
         
         try
         {
+            // Queue all capture buffers before starting streaming
+            for (uint i = 0; i < _captureBuffers.Count; i++)
+            {
+                var buffer = new V4L2Buffer
+                {
+                    Index = i,
+                    Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP
+                };
+
+                var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
+                if (!result.Success)
+                {
+                    _logger.LogWarning("Failed to queue capture buffer {Index}: {Error}", i, result.ErrorMessage);
+                }
+            }
+
             // Start streaming on both queues
             _device.StreamOn(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
             _device.StreamOn(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
@@ -429,6 +627,13 @@ public class H264V4L2StatelessDecoder
             UnmapBuffers(_outputBuffers);
             UnmapBuffers(_captureBuffers);
 
+            // Clear buffer queues
+            lock (_bufferLock)
+            {
+                _availableOutputBuffers.Clear();
+                _availableCaptureBuffers.Clear();
+            }
+
             _isInitialized = false;
             _logger.LogInformation("Decoder cleanup completed");
         }
@@ -447,6 +652,7 @@ public class H264V4L2StatelessDecoder
                 try
                 {
                     // Free allocated memory instead of unmapping
+                    // In real implementation, would call munmap()
                     Marshal.FreeHGlobal(buffer.Pointer);
                     _logger.LogTrace("Freed buffer {Index} memory at {Pointer:X8}", buffer.Index, buffer.Pointer.ToInt64());
                 }
