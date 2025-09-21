@@ -21,4 +21,14 @@ public interface IV4L2StatelessControlManager
     /// Configure stateless decoder mode and settings
     /// </summary>
     Task ConfigureStatelessModeAsync(int deviceFd);
+
+    /// <summary>
+    /// Set slice parameters controls (legacy method)
+    /// </summary>
+    Task SetSliceParamsControlsAsync(byte[] sliceData, byte sliceType, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Configure stateless controls (legacy method)
+    /// </summary>
+    Task<bool> ConfigureStatelessControlsAsync(CancellationToken cancellationToken);
 }

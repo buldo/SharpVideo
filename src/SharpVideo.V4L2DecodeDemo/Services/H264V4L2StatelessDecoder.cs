@@ -43,13 +43,13 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
     private readonly List<MappedBuffer> _outputBuffers = new();
     private readonly List<MappedBuffer> _captureBuffers = new();
     private bool _disposed;
-    private uint _outputBufferCount;
-    private uint _captureBufferCount;
+    private uint _outputBufferCount = 4;
+    private uint _captureBufferCount = 4;
     private int _framesDecoded;
 
     // Stateless decoder specific state
-    private byte[]? _currentSps;
-    private byte[]? _currentPps;
+    private V4L2CtrlH264Sps? _currentSps;
+    private V4L2CtrlH264Pps? _currentPps;
     private bool _hasValidParameterSets;
     private bool _useStartCodes = true;
 
@@ -345,9 +345,14 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
 
     private async Task ProcessVideoFileStatelessAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        // Process slice data
+                // Process slice data
         await _sliceProcessor.ProcessVideoFileAsync(_deviceFd, filePath,
-            progress => ProgressChanged?.Invoke(progress));
+            progress => ProgressChanged?.Invoke(this, new DecodingProgressEventArgs {
+                BytesProcessed = (long)progress,
+                TotalBytes = 100,
+                FramesDecoded = _framesDecoded,
+                ElapsedTime = TimeSpan.Zero
+            }));
 
         // Update frame count
         _framesDecoded++;
@@ -359,9 +364,19 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
         await _sliceProcessor.ProcessVideoFileNaluByNaluAsync(_deviceFd, filePath,
             frame => {
                 _framesDecoded++;
-                FrameDecoded?.Invoke(frame);
+                FrameDecoded?.Invoke(this, new FrameDecodedEventArgs {
+                    FrameNumber = _framesDecoded,
+                    BufferIndex = 0,
+                    BytesUsed = 0,
+                    Timestamp = DateTime.Now
+                });
             },
-            progress => ProgressChanged?.Invoke(progress));
+            progress => ProgressChanged?.Invoke(this, new DecodingProgressEventArgs {
+                BytesProcessed = (long)progress,
+                TotalBytes = 100,
+                FramesDecoded = _framesDecoded,
+                ElapsedTime = TimeSpan.Zero
+            }));
     }
 
     private async Task SetupBuffersAsync(CancellationToken cancellationToken = default)
@@ -374,9 +389,10 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
             Memory = V4L2Constants.V4L2_MEMORY_MMAP
         };
 
-        if (LibV4L2.RequestBuffers(_deviceFd, ref outputReqBufs) < 0)
+        var outputResult = LibV4L2.RequestBuffers(_deviceFd, ref outputReqBufs);
+        if (!outputResult.Success)
         {
-            throw new InvalidOperationException("Failed to request OUTPUT buffers");
+            throw new InvalidOperationException($"Failed to request OUTPUT buffers: {outputResult.ErrorMessage}");
         }
 
         // Request CAPTURE buffers for decoded frames
@@ -387,26 +403,31 @@ public class H264V4L2StatelessDecoder : IVideoDecoder
             Memory = V4L2Constants.V4L2_MEMORY_MMAP
         };
 
-        if (LibV4L2.RequestBuffers(_deviceFd, ref captureReqBufs) < 0)
+        var captureResult = LibV4L2.RequestBuffers(_deviceFd, ref captureReqBufs);
+        if (!captureResult.Success)
         {
-            throw new InvalidOperationException("Failed to request CAPTURE buffers");
+            throw new InvalidOperationException($"Failed to request CAPTURE buffers: {captureResult.ErrorMessage}");
         }
+
+        await Task.CompletedTask;
     }
 
     private async Task StartStreamingAsync(CancellationToken cancellationToken = default)
     {
         // Start streaming on both queues
-        var outputType = V4L2Constants.V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-        if (LibV4L2.StreamOn(_deviceFd, ref outputType) < 0)
+        var outputResult = LibV4L2.StreamOn(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE);
+        if (!outputResult.Success)
         {
-            throw new InvalidOperationException("Failed to start OUTPUT streaming");
+            throw new InvalidOperationException($"Failed to start OUTPUT streaming: {outputResult.ErrorMessage}");
         }
 
-        var captureType = V4L2Constants.V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-        if (LibV4L2.StreamOn(_deviceFd, ref captureType) < 0)
+        var captureResult = LibV4L2.StreamOn(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE);
+        if (!captureResult.Success)
         {
-            throw new InvalidOperationException("Failed to start CAPTURE streaming");
+            throw new InvalidOperationException($"Failed to start CAPTURE streaming: {captureResult.ErrorMessage}");
         }
+
+        await Task.CompletedTask;
     }
 
     #endregion

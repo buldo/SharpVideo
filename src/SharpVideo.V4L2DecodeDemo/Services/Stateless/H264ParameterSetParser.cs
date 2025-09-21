@@ -302,4 +302,13 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         // For now, delegate to existing method
         return ParseSliceHeaderToControl(sliceData.ToArray(), 0); // Using frame number 0 for simplicity
     }
+
+    /// <summary>
+    /// Parse slice header to create V4L2 slice parameters (legacy method)
+    /// </summary>
+    public V4L2CtrlH264SliceParams ParseSliceHeaderToControl(byte[] sliceData, uint frameNum)
+    {
+        // Convert to byte and delegate to existing method
+        return ParseSliceHeaderToControl(sliceData, (byte)frameNum);
+    }
 }

@@ -31,4 +31,24 @@ public interface IH264ParameterSetParser
     /// Parse slice header to create V4L2 slice parameters
     /// </summary>
     V4L2CtrlH264SliceParams ParseSliceHeader(ReadOnlySpan<byte> sliceData, V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps);
+
+    /// <summary>
+    /// Parse SPS NALU data into V4L2 control structure (legacy method)
+    /// </summary>
+    V4L2CtrlH264Sps ParseSpsToControl(byte[] spsData);
+
+    /// <summary>
+    /// Parse PPS NALU data into V4L2 control structure (legacy method)
+    /// </summary>
+    V4L2CtrlH264Pps ParsePpsToControl(byte[] ppsData);
+
+    /// <summary>
+    /// Parse slice header to create V4L2 slice parameters (legacy method)
+    /// </summary>
+    V4L2CtrlH264SliceParams ParseSliceHeaderToControl(byte[] sliceData, uint frameNum);
+
+    /// <summary>
+    /// Get NALU header position in data
+    /// </summary>
+    int GetNaluHeaderPosition(byte[] data, bool skipStartCode = true);
 }
