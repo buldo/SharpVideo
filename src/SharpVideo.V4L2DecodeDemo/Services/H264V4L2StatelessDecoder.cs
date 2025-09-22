@@ -97,18 +97,40 @@ public class H264V4L2StatelessDecoder
             throw new FileNotFoundException($"Video file not found: {filePath}");
 
         _logger.LogInformation("Starting H.264 stateless decode of {FilePath}", filePath);
+
+        using var fileStream = File.OpenRead(filePath);
+        await DecodeStreamAsync(fileStream, cancellationToken);
+    }
+
+    /// <summary>
+    /// Decodes H.264 stream using V4L2 hardware acceleration with efficient stream processing
+    /// </summary>
+    public async Task DecodeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
+    {
+        if (stream == null)
+            throw new ArgumentNullException(nameof(stream));
+
+        if (!stream.CanRead)
+            throw new ArgumentException("Stream must be readable", nameof(stream));
+
+        _logger.LogInformation("Starting H.264 stateless stream decode");
         _decodingStopwatch.Start();
+
+        using var naluProvider = new H264NaluProvider(_useStartCodes ? NaluMode.WithStartCode : NaluMode.WithoutStartCode);
 
         try
         {
             // Initialize decoder and dependencies
             await InitializeDecoderAsync(cancellationToken);
 
-            // Extract and set parameter sets
-            await ExtractAndSetParameterSetsAsync(filePath, cancellationToken);
+            // Start NALU processing task
+            var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
 
-            // Process the file with stateless decoding
-            await ProcessVideoFileStatelessAsync(filePath, cancellationToken);
+            // Feed stream data to NaluProvider
+            await FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
+
+            // Wait for NALU processing to complete
+            await naluProcessingTask;
 
             _decodingStopwatch.Stop();
             _logger.LogInformation("Stateless decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
@@ -126,33 +148,207 @@ public class H264V4L2StatelessDecoder
     }
 
     /// <summary>
+    /// Feeds stream data to NaluProvider in chunks
+    /// </summary>
+    private async Task FeedStreamToNaluProviderAsync(Stream stream, H264NaluProvider naluProvider, CancellationToken cancellationToken)
+    {
+        const int bufferSize = 64 * 1024; // 64KB buffer
+        var buffer = new byte[bufferSize];
+
+        try
+        {
+            int bytesRead;
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+            {
+                await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
+
+                // Report progress periodically
+                if (stream.CanSeek)
+                {
+                    ProgressChanged?.Invoke(this, new DecodingProgressEventArgs
+                    {
+                        BytesProcessed = stream.Position,
+                        TotalBytes = stream.Length,
+                        FramesDecoded = _framesDecoded,
+                        ElapsedTime = _decodingStopwatch.Elapsed
+                    });
+                }
+            }
+        }
+        finally
+        {
+            naluProvider.CompleteWriting();
+        }
+    }
+
+    /// <summary>
+    /// Processes NALUs asynchronously as they become available
+    /// </summary>
+    private async Task ProcessNalusAsync(H264NaluProvider naluProvider, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
+            {
+                if (naluData.Length < 1) continue;
+
+                byte naluType = (byte)(naluData[0] & 0x1F);
+                var naluBytes = naluData.ToArray();
+
+                _logger.LogTrace("Processing NALU type {NaluType}, size: {Size} bytes", naluType, naluBytes.Length);
+
+                await ProcessNaluByTypeAsync(naluBytes, naluType, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing NALUs");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Processes individual NALU based on its type
+    /// </summary>
+    private async Task ProcessNaluByTypeAsync(byte[] naluData, byte naluType, CancellationToken cancellationToken)
+    {
+        switch (naluType)
+        {
+            case 7: // SPS
+                _logger.LogDebug("Processing SPS NALU");
+                await HandleSpsNaluAsync(naluData, cancellationToken);
+                break;
+
+            case 8: // PPS
+                _logger.LogDebug("Processing PPS NALU");
+                await HandlePpsNaluAsync(naluData, cancellationToken);
+                break;
+
+            case 1: // Non-IDR slice
+            case 5: // IDR slice
+                _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
+                await HandleSliceNaluAsync(naluData, naluType, cancellationToken);
+                break;
+
+            case 6: // SEI
+                _logger.LogTrace("Skipping SEI NALU");
+                break;
+
+            case 9: // Access Unit Delimiter
+                _logger.LogTrace("Processing AUD NALU");
+                break;
+
+            default:
+                _logger.LogTrace("Skipping unknown NALU type {NaluType}", naluType);
+                break;
+        }
+    }
+
+    private V4L2CtrlH264Sps? _currentSps;
+    private V4L2CtrlH264Pps? _currentPps;
+
+    /// <summary>
+    /// Handles SPS (Sequence Parameter Set) NALU
+    /// </summary>
+    private async Task HandleSpsNaluAsync(byte[] spsData, CancellationToken cancellationToken)
+    {
+        try
+        {
+            _currentSps = _parameterSetParser.ParseSps(spsData);
+            _logger.LogDebug("Parsed and stored SPS from stream");
+
+            // If we also have PPS, configure the decoder
+            if (_currentPps.HasValue)
+            {
+                await _controlManager.SetParameterSetsAsync(_device.fd, _currentSps.Value, _currentPps.Value);
+                _hasValidParameterSets = true;
+                _logger.LogInformation("Successfully configured parameter sets from stream");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse SPS from stream");
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Handles PPS (Picture Parameter Set) NALU
+    /// </summary>
+    private async Task HandlePpsNaluAsync(byte[] ppsData, CancellationToken cancellationToken)
+    {
+        try
+        {
+            _currentPps = _parameterSetParser.ParsePps(ppsData);
+            _logger.LogDebug("Parsed and stored PPS from stream");
+
+            // If we also have SPS, configure the decoder
+            if (_currentSps.HasValue)
+            {
+                await _controlManager.SetParameterSetsAsync(_device.fd, _currentSps.Value, _currentPps.Value);
+                _hasValidParameterSets = true;
+                _logger.LogInformation("Successfully configured parameter sets from stream");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse PPS from stream");
+        }
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Handles slice NALUs (actual video data)
+    /// </summary>
+    private async Task HandleSliceNaluAsync(byte[] sliceData, byte naluType, CancellationToken cancellationToken)
+    {
+        if (!_hasValidParameterSets)
+        {
+            _logger.LogWarning("Skipping slice NALU - no valid parameter sets configured yet");
+            return;
+        }
+
+        uint bufferIndex;
+
+        // Get available output buffer
+        lock (_bufferLock)
+        {
+            if (!_availableOutputBuffers.TryDequeue(out bufferIndex))
+            {
+                _logger.LogWarning("No available output buffers - decoder may be overwhelmed");
+                return;
+            }
+        }
+
+        try
+        {
+            await _sliceProcessor.QueueStatelessSliceDataAsync(sliceData, naluType, bufferIndex, cancellationToken);
+
+            // Try to dequeue completed frames
+            await DequeueCompletedFrames();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to queue slice data for buffer {BufferIndex}", bufferIndex);
+
+            // Return buffer to available queue
+            lock (_bufferLock)
+            {
+                _availableOutputBuffers.Enqueue(bufferIndex);
+            }
+        }
+    }
+
+    /// <summary>
     /// Decodes an H.264 file using V4L2 hardware acceleration, processing data NALU by NALU
+    /// This method is now just an alias for DecodeFileAsync for backward compatibility
     /// </summary>
     public async Task DecodeFileNaluByNaluAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(filePath))
-            throw new ArgumentException("File path cannot be null or empty", nameof(filePath));
-
-        if (!File.Exists(filePath))
-            throw new FileNotFoundException($"Video file not found: {filePath}");
-
-        _logger.LogInformation("Starting H.264 stateless NALU-by-NALU decode of {FilePath}", filePath);
-        _decodingStopwatch.Start();
-
-        // Initialize decoder and dependencies
-        await InitializeDecoderAsync(cancellationToken);
-
-        // Extract and set parameter sets
-        await ExtractAndSetParameterSetsAsync(filePath, cancellationToken);
-
-        // Process the file NALU by NALU with stateless decoding
-        await ProcessVideoFileStatelessAsync(filePath, cancellationToken);
-
-        _decodingStopwatch.Stop();
-        _logger.LogInformation(
-            "Stateless NALU-by-NALU decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
-            _framesDecoded, _decodingStopwatch.Elapsed.TotalSeconds, _framesDecoded / _decodingStopwatch.Elapsed.TotalSeconds);
-
+        _logger.LogInformation("Starting H.264 stateless NALU-by-NALU decode of {FilePath} (using new streaming implementation)", filePath);
+        await DecodeFileAsync(filePath, cancellationToken);
     }
 
     private async Task InitializeDecoderAsync(CancellationToken cancellationToken)
@@ -350,142 +546,6 @@ public class H264V4L2StatelessDecoder
         }
 
         await Task.CompletedTask;
-    }
-
-    private async Task ExtractAndSetParameterSetsAsync(string filePath, CancellationToken cancellationToken = default)
-    {
-        _logger.LogInformation("Extracting parameter sets from video file...");
-
-        try
-        {
-            var sps = await _parameterSetParser.ExtractSpsAsync(filePath);
-            var pps = await _parameterSetParser.ExtractPpsAsync(filePath);
-
-            if (sps.HasValue && pps.HasValue)
-            {
-                await _controlManager.SetParameterSetsAsync(_device.fd, sps.Value, pps.Value);
-                _hasValidParameterSets = true;
-                _logger.LogInformation("Parameter sets extracted and configured successfully");
-            }
-            else
-            {
-                throw new InvalidOperationException("Failed to extract valid SPS/PPS from video file");
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to extract or set parameter sets");
-            throw new InvalidOperationException($"Parameter set configuration failed: {ex.Message}", ex);
-        }
-    }
-
-    private async Task ProcessVideoFileStatelessAsync(string filePath, CancellationToken cancellationToken = default)
-    {
-        var fileInfo = new FileInfo(filePath);
-        long totalBytes = fileInfo.Length;
-        long processedBytes = 0;
-
-        using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider(_useStartCodes ? NaluMode.WithStartCode : NaluMode.WithoutStartCode);
-
-        // Read and process file in chunks
-        const int chunkSize = 1024 * 1024;
-        var buffer = new byte[chunkSize];
-        int bytesRead;
-
-        while ((bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
-        {
-            await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
-            processedBytes += bytesRead;
-        }
-
-        naluProvider.CompleteWriting();
-
-        // Process NALUs and decode frames
-        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
-        {
-            if (naluData.Length < 1) continue;
-
-            byte naluType = (byte)(naluData[0] & 0x1F);
-
-            // Handle SPS/PPS that appear in stream (update parameter sets)
-            if (naluType == 7 || naluType == 8)
-            {
-                await HandleParameterSetNalu(naluData.ToArray(), naluType);
-                continue;
-            }
-
-            // Process slice NALUs
-            if (naluType == 1 || naluType == 5)
-            {
-                await ProcessSliceNalu(naluData.ToArray(), naluType);
-
-                // Try to dequeue completed frames
-                await DequeueCompletedFrames();
-            }
-        }
-
-        // Flush any remaining frames
-        await FlushDecoder();
-    }
-
-    private async Task HandleParameterSetNalu(byte[] naluData, byte naluType)
-    {
-        try
-        {
-            if (naluType == 7) // SPS
-            {
-                var sps = _parameterSetParser.ParseSps(naluData);
-                var currentPps = await _parameterSetParser.ExtractPpsAsync(""); // Would need current PPS
-                if (currentPps.HasValue)
-                {
-                    await _controlManager.SetParameterSetsAsync(_device.fd, sps, currentPps.Value);
-                }
-            }
-            else if (naluType == 8) // PPS
-            {
-                var pps = _parameterSetParser.ParsePps(naluData);
-                var currentSps = await _parameterSetParser.ExtractSpsAsync(""); // Would need current SPS
-                if (currentSps.HasValue)
-                {
-                    await _controlManager.SetParameterSetsAsync(_device.fd, currentSps.Value, pps);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to update parameter sets from stream NALU type {NaluType}", naluType);
-        }
-    }
-
-    private async Task ProcessSliceNalu(byte[] sliceData, byte naluType)
-    {
-        uint bufferIndex;
-
-        // Get available output buffer
-        lock (_bufferLock)
-        {
-            if (!_availableOutputBuffers.TryDequeue(out bufferIndex))
-            {
-                _logger.LogWarning("No available output buffers - decoder may be overwhelmed");
-                return;
-            }
-        }
-
-        try
-        {
-            await _sliceProcessor.QueueStatelessSliceDataAsync(sliceData, naluType, bufferIndex, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to queue slice data for buffer {BufferIndex}", bufferIndex);
-
-            // Return buffer to available queue
-            lock (_bufferLock)
-            {
-                _availableOutputBuffers.Enqueue(bufferIndex);
-            }
-        }
     }
 
     private async Task DequeueCompletedFrames()
