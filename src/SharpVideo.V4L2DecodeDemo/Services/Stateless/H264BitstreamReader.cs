@@ -91,7 +91,9 @@ internal class H264BitstreamReader
 
     public bool HasMoreData()
     {
-        return _bytePosition < _data.Length;
+        // Check if we have at least one more bit available
+        return _bytePosition < _data.Length &&
+               (_bytePosition < _data.Length - 1 || _bitPosition < 8);
     }
 
     private bool HasEnoughBitsRemaining(int bitsNeeded)
