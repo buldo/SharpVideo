@@ -51,11 +51,13 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 Flags = 0
             };
 
-            // Set slice parameters and decode parameters
-            await SetExtendedControlsAsync(new[] {
-                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS, sliceParams),
-                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS, decodeParams)
-            });
+            // Set slice parameters control
+            _logger.LogDebug("Setting slice parameters control...");
+            SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS, sliceParams);
+
+            // Set decode parameters control
+            _logger.LogDebug("Setting decode parameters control...");
+            SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS, decodeParams);
 
             _logger.LogDebug("Successfully set slice and decode parameters controls");
         }
@@ -122,7 +124,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <summary>
-    /// Set SPS and PPS parameter sets via V4L2 extended controls
+    /// Set SPS and PPS parameter sets via V4L2 extended controls (simplified approach)
     /// </summary>
     public async Task SetParameterSetsAsync(int deviceFd, V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps)
     {
@@ -137,11 +139,13 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
 
         try
         {
-            // Set SPS and PPS controls together
-            await SetExtendedControlsAsync(new[] {
-                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, sps),
-                CreateExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, pps)
-            });
+            // Set SPS control first
+            _logger.LogDebug("Setting SPS control...");
+            SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, sps);
+
+            // Set PPS control second
+            _logger.LogDebug("Setting PPS control...");
+            SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, pps);
 
             _logger.LogInformation("Successfully set SPS and PPS controls");
         }
@@ -158,118 +162,75 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <summary>
-    /// Helper method to create an extended control structure for any data type
+    /// Set a single extended control - much simpler and more predictable
     /// </summary>
-    private static (V4L2ExtControl control, IntPtr dataPtr) CreateExtendedControl<T>(uint controlId, T data) where T : struct
+    private void SetSingleExtendedControl<T>(uint controlId, T data) where T : struct
     {
         var size = (uint)Marshal.SizeOf<T>();
         var dataPtr = Marshal.AllocHGlobal((int)size);
-        
-        // Clear the allocated memory to prevent garbage data
-        unsafe
-        {
-            byte* ptr = (byte*)dataPtr.ToPointer();
-            for (int i = 0; i < size; i++)
-            {
-                ptr[i] = 0;
-            }
-        }
-        
-        Marshal.StructureToPtr(data, dataPtr, false);
-
-        var control = new V4L2ExtControl
-        {
-            Id = controlId,
-            Size = size,
-            Ptr = dataPtr
-        };
-
-        return (control, dataPtr);
-    }
-
-    /// <summary>
-    /// Set multiple extended controls with proper memory management and alignment
-    /// </summary>
-    private async Task SetExtendedControlsAsync(IEnumerable<(V4L2ExtControl control, IntPtr dataPtr)> controls)
-    {
-        var controlList = controls.ToList();
-        if (controlList.Count == 0)
-        {
-            _logger.LogWarning("No controls to set");
-            return;
-        }
-
-        var controlArray = controlList.Select(c => c.control).ToArray();
-        var dataPtrs = controlList.Select(c => c.dataPtr).ToList();
-
-        // Allocate memory for controls array with proper alignment
-        var controlStructSize = Marshal.SizeOf<V4L2ExtControl>();
-        var totalSize = controlStructSize * controlArray.Length;
-        var controlsPtr = Marshal.AllocHGlobal(totalSize);
 
         try
         {
             // Clear the allocated memory
             unsafe
             {
-                byte* ptr = (byte*)controlsPtr.ToPointer();
-                for (int i = 0; i < totalSize; i++)
+                byte* ptr = (byte*)dataPtr.ToPointer();
+                for (int i = 0; i < size; i++)
                 {
                     ptr[i] = 0;
                 }
             }
 
-            // Copy controls to unmanaged memory with proper structure alignment
-            for (int i = 0; i < controlArray.Length; i++)
-            {
-                var controlOffset = IntPtr.Add(controlsPtr, i * controlStructSize);
-                Marshal.StructureToPtr(controlArray[i], controlOffset, false);
-            }
+            // Marshal the structure to unmanaged memory
+            Marshal.StructureToPtr(data, dataPtr, false);
 
-            // Set up extended controls structure
-            var extControlsWrapper = new V4L2ExtControls
+            // Create the control structure
+            var control = new V4L2ExtControl
             {
-                Which = V4l2ControlsConstants.V4L2_CTRL_CLASS_CODEC,
-                Count = (uint)controlArray.Length,
-                Controls = controlsPtr
+                Id = controlId,
+                Size = size,
+                Ptr = dataPtr
             };
 
-            _logger.LogDebug("Setting {Count} extended controls with total size {Size} bytes", 
-                controlArray.Length, totalSize);
+            // Allocate memory for single control
+            var controlPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2ExtControl>());
 
-            // Set the controls
-            var result = LibV4L2.SetExtendedControls(_device.fd, ref extControlsWrapper);
-            if (!result.Success)
+            try
             {
-                // Log detailed error information
-                var errorCode = Marshal.GetLastWin32Error();
-                _logger.LogError("Failed to set extended controls: {Error} (errno: {ErrorCode})", 
-                    result.ErrorMessage, errorCode);
-                
-                // Log control details for debugging
-                for (int i = 0; i < controlArray.Length; i++)
-                {
-                    var ctrl = controlArray[i];
-                    _logger.LogDebug("Control {Index}: ID=0x{Id:X8}, Size={Size}, Ptr=0x{Ptr:X8}", 
-                        i, ctrl.Id, ctrl.Size, ctrl.Ptr.ToInt64());
-                }
-                
-                throw new InvalidOperationException($"Failed to set extended controls: {result.ErrorMessage} (errno: {errorCode})");
-            }
+                Marshal.StructureToPtr(control, controlPtr, false);
 
-            _logger.LogDebug("Successfully set {Count} extended controls", controlArray.Length);
+                // Set up extended controls wrapper for single control
+                var extControlsWrapper = new V4L2ExtControls
+                {
+                    Which = V4l2ControlsConstants.V4L2_CTRL_CLASS_CODEC,
+                    Count = 1,
+                    Controls = controlPtr
+                };
+
+                _logger.LogDebug("Setting control 0x{ControlId:X8} with {Size} bytes", controlId, size);
+
+                // Set the control
+                var result = LibV4L2.SetExtendedControls(_device.fd, ref extControlsWrapper);
+                if (!result.Success)
+                {
+                    var errorCode = Marshal.GetLastWin32Error();
+                    _logger.LogError("Failed to set control 0x{ControlId:X8}: {Error} (errno: {ErrorCode})",
+                        controlId, result.ErrorMessage, errorCode);
+
+                    throw new InvalidOperationException($"Failed to set control 0x{controlId:X8}: {result.ErrorMessage} (errno: {errorCode})");
+                }
+
+                _logger.LogDebug("Successfully set control 0x{ControlId:X8}", controlId);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(controlPtr);
+            }
         }
         finally
         {
-            // Free all allocated memory
-            Marshal.FreeHGlobal(controlsPtr);
-            foreach (var dataPtr in dataPtrs)
-            {
-                Marshal.FreeHGlobal(dataPtr);
-            }
+            Marshal.FreeHGlobal(dataPtr);
         }
-
-        await Task.CompletedTask;
     }
 
     /// <summary>
@@ -348,7 +309,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <summary>
-    /// Validate PPS parameters before sending to V4L2  
+    /// Validate PPS parameters before sending to V4L2
     /// </summary>
     private static void ValidatePpsParameters(V4L2CtrlH264Pps pps)
     {

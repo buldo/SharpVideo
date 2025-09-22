@@ -203,12 +203,11 @@ public class H264V4L2StatelessDecoder
         try
         {
             // Configure output format (H.264 input) for stateless decoder
-            // Try H264 first, then fall back to H264_SLICE if needed
             var outputFormat = new V4L2PixFormatMplane
             {
                 Width = _configuration.InitialWidth,
                 Height = _configuration.InitialHeight,
-                PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264, // Changed from H264_SLICE
+                PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264, // Use standard H264 format
                 NumPlanes = 1,
                 Field = (uint)V4L2Field.NONE,
                 Colorspace = 5, // V4L2_COLORSPACE_REC709
@@ -217,25 +216,15 @@ public class H264V4L2StatelessDecoder
                 XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
             };
 
-            try
-            {
-                _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
-                _logger.LogInformation("Using V4L2_PIX_FMT_H264 for input format");
-            }
-            catch
-            {
-                // Fallback to H264_SLICE format
-                outputFormat.PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE;
-                _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
-                _logger.LogInformation("Falling back to V4L2_PIX_FMT_H264_SLICE for input format");
-            }
+            _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
+            _logger.LogInformation("Set output format: {Width}x{Height} H264", outputFormat.Width, outputFormat.Height);
 
             // Configure capture format (decoded output)
             var captureFormat = new V4L2PixFormatMplane
             {
                 Width = _configuration.InitialWidth,
                 Height = _configuration.InitialHeight,
-                PixelFormat = _configuration.PreferredPixelFormat,
+                PixelFormat = _configuration.PreferredPixelFormat, // Usually NV12
                 NumPlanes = 2, // NV12 typically has 2 planes
                 Field = (uint)V4L2Field.NONE,
                 Colorspace = 5,
@@ -244,18 +233,9 @@ public class H264V4L2StatelessDecoder
                 XferFunc = 1
             };
 
-            try
-            {
-                _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
-                _logger.LogInformation("Using preferred pixel format for capture");
-            }
-            catch
-            {
-                // Fallback to alternative format
-                captureFormat.PixelFormat = _configuration.AlternativePixelFormat;
-                _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
-                _logger.LogInformation("Using alternative pixel format for capture");
-            }
+            _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
+            _logger.LogInformation("Set capture format: {Width}x{Height} with {Planes} planes", 
+                captureFormat.Width, captureFormat.Height, captureFormat.NumPlanes);
 
             _logger.LogInformation("Format configuration completed successfully");
         }
