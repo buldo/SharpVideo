@@ -5,7 +5,6 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.H264;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2DecodeDemo.Interfaces;
 using SharpVideo.V4L2DecodeDemo.Models;
 using SharpVideo.V4L2DecodeDemo.Services.Stateless;
 
@@ -30,9 +29,9 @@ public class H264V4L2StatelessDecoder
     private readonly V4L2Device _device;
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
     private readonly DecoderConfiguration _configuration;
-    private readonly IH264ParameterSetParser _parameterSetParser;
-    private readonly IV4L2StatelessControlManager _controlManager;
-    private readonly IStatelessSliceProcessor _sliceProcessor;
+    private readonly H264ParameterSetParser _parameterSetParser;
+    private readonly V4L2StatelessControlManager _controlManager;
+    private readonly StatelessSliceProcessor _sliceProcessor;
 
     private readonly List<MappedBuffer> _outputBuffers = new();
     private readonly List<MappedBuffer> _captureBuffers = new();
@@ -55,9 +54,9 @@ public class H264V4L2StatelessDecoder
         V4L2Device device,
         ILogger<H264V4L2StatelessDecoder> logger,
         DecoderConfiguration? configuration = null,
-        IH264ParameterSetParser? parameterSetParser = null,
-        IV4L2StatelessControlManager? controlManager = null,
-        IStatelessSliceProcessor? sliceProcessor = null)
+        H264ParameterSetParser? parameterSetParser = null,
+        V4L2StatelessControlManager? controlManager = null,
+        StatelessSliceProcessor? sliceProcessor = null)
     {
         _device = device ?? throw new ArgumentNullException(nameof(device));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -243,7 +242,7 @@ public class H264V4L2StatelessDecoder
             // If we also have PPS, configure the decoder
             if (_currentPps.HasValue)
             {
-                await _controlManager.SetParameterSetsAsync(_device.fd, _currentSps.Value, _currentPps.Value);
+                await _controlManager.SetParameterSetsAsync(_currentSps.Value, _currentPps.Value);
                 _hasValidParameterSets = true;
                 _logger.LogInformation("Successfully configured parameter sets from stream");
             }
@@ -269,7 +268,7 @@ public class H264V4L2StatelessDecoder
             // If we also have SPS, configure the decoder
             if (_currentSps.HasValue)
             {
-                await _controlManager.SetParameterSetsAsync(_device.fd, _currentSps.Value, _currentPps.Value);
+                await _controlManager.SetParameterSetsAsync(_currentSps.Value, _currentPps.Value);
                 _hasValidParameterSets = true;
                 _logger.LogInformation("Successfully configured parameter sets from stream");
             }
@@ -337,7 +336,7 @@ public class H264V4L2StatelessDecoder
             ConfigureFormats();
 
             // Configure V4L2 controls for stateless operation and get start code preference
-            _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
+            _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync();
 
             // Setup and map buffers properly with real V4L2 mmap
             await SetupAndMapBuffersAsync();

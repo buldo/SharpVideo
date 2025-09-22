@@ -1,14 +1,13 @@
 using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
 using SharpVideo.H264;
-using SharpVideo.V4L2DecodeDemo.Interfaces;
 
 namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 
 /// <summary>
 /// Implementation of H.264 parameter set parser for stateless decoders
 /// </summary>
-public class H264ParameterSetParser : IH264ParameterSetParser
+public class H264ParameterSetParser
 {
     private readonly ILogger<H264ParameterSetParser> _logger;
     private readonly uint _initialWidth;
@@ -25,7 +24,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _initialWidth = initialWidth;
         _initialHeight = initialHeight;
-        
+
         // Initialize NALU parsers for both modes
         _naluParserWithStartCode = new H264NaluParser(NaluMode.WithStartCode);
         _naluParserWithoutStartCode = new H264NaluParser(NaluMode.WithoutStartCode);
@@ -36,7 +35,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
     {
         // Determine which parser to use based on data format
         var parser = HasStartCode(spsData) ? _naluParserWithStartCode : _naluParserWithoutStartCode;
-        
+
         // Validate NALU format
         if (!parser.HasValidFormat(spsData))
             throw new ArgumentException("Invalid SPS NALU data format");
@@ -48,13 +47,13 @@ public class H264ParameterSetParser : IH264ParameterSetParser
 
         // Get the raw NALU payload for bitstream parsing
         var naluPayload = parser.GetNaluPayload(spsData);
-        
+
         // Parse SPS bitstream for real parameters
         try
         {
             var sps = ParseSpsFromBitstream(naluPayload.ToArray(), 0); // Start from header since payload excludes start code
             _currentSps = sps;
-            
+
             _logger.LogDebug("Parsed SPS: Profile=0x{Profile:X2}, Level=0x{Level:X2}, Constraints=0x{Constraints:X2}, Width={Width}MB, Height={Height}MB",
                 sps.ProfileIdc, sps.LevelIdc, sps.ConstraintSetFlags, sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1);
 
@@ -72,7 +71,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
     {
         // Determine which parser to use based on data format
         var parser = HasStartCode(ppsData) ? _naluParserWithStartCode : _naluParserWithoutStartCode;
-        
+
         // Validate NALU format
         if (!parser.HasValidFormat(ppsData))
             throw new ArgumentException("Invalid PPS NALU data format");
@@ -89,7 +88,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         {
             var pps = ParsePpsFromBitstream(naluPayload.ToArray(), 0); // Start from header since payload excludes start code
             _currentPps = pps;
-            
+
             _logger.LogDebug("Parsed PPS: ID={PpsId}, SPS_ID={SpsId}, SliceGroups={SliceGroups}, QP={QP}",
                 pps.PicParameterSetId, pps.SeqParameterSetId, pps.NumSliceGroupsMinus1 + 1, pps.PicInitQpMinus26 + 26);
 
@@ -103,11 +102,11 @@ public class H264ParameterSetParser : IH264ParameterSetParser
     }
 
     /// <inheritdoc />
-    public V4L2CtrlH264SliceParams ParseSliceHeaderToControl(byte[] sliceData, byte sliceType)
+    public V4L2CtrlH264SliceParams ParseSliceHeaderToControl(byte[] sliceData)
     {
         // Determine which parser to use based on data format
         var parser = HasStartCode(sliceData) ? _naluParserWithStartCode : _naluParserWithoutStartCode;
-        
+
         // Validate NALU format
         if (!parser.HasValidFormat(sliceData))
             throw new ArgumentException("Invalid slice NALU data format");
@@ -136,10 +135,10 @@ public class H264ParameterSetParser : IH264ParameterSetParser
     {
         // Use the new parser API instead of manual detection
         var parser = useStartCodes ? _naluParserWithStartCode : _naluParserWithoutStartCode;
-        
+
         if (!parser.HasValidFormat(naluData))
             return naluData.Length; // Invalid format
-            
+
         var payload = parser.GetNaluPayload(naluData);
         return naluData.Length - payload.Length; // Offset to payload = start code length
     }
@@ -273,13 +272,13 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         {
             return true;
         }
-        
+
         if (naluData.Length >= 3 &&
             naluData[0] == 0x00 && naluData[1] == 0x00 && naluData[2] == 0x01)
         {
             return true;
         }
-        
+
         return false;
     }
 
@@ -307,22 +306,22 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         };
 
         // Parse chroma format
-        if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 244 || 
-            profileIdc == 44 || profileIdc == 83 || profileIdc == 86 || profileIdc == 118 || 
+        if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 244 ||
+            profileIdc == 44 || profileIdc == 83 || profileIdc == 86 || profileIdc == 118 ||
             profileIdc == 128 || profileIdc == 138 || profileIdc == 139 || profileIdc == 134)
         {
             sps.ChromaFormatIdc = (byte)reader.ReadUEG();
-            
+
             if (sps.ChromaFormatIdc == 3)
             {
                 reader.ReadBit(); // separate_colour_plane_flag
             }
-            
+
             sps.BitDepthLumaMinus8 = (byte)reader.ReadUEG();
             sps.BitDepthChromaMinus8 = (byte)reader.ReadUEG();
-            
+
             reader.ReadBit(); // qpprime_y_zero_transform_bypass_flag
-            
+
             var seqScalingMatrixPresentFlag = reader.ReadBit();
             if (seqScalingMatrixPresentFlag)
             {
@@ -362,7 +361,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
             sps.OffsetForNonRefPic = reader.ReadSEG();
             sps.OffsetForTopToBottomField = reader.ReadSEG();
             sps.NumRefFramesInPicOrderCntCycle = (byte)reader.ReadUEG();
-            
+
             for (int i = 0; i < sps.NumRefFramesInPicOrderCntCycle && i < 255; i++)
             {
                 sps.OffsetForRefFrame[i] = reader.ReadSEG();
@@ -485,7 +484,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
 
         if (!reader.HasMoreData()) return pps;
         pps.NumRefIdxL0DefaultActiveMinus1 = (byte)reader.ReadUEG();
-        
+
         if (!reader.HasMoreData()) return pps;
         pps.NumRefIdxL1DefaultActiveMinus1 = (byte)reader.ReadUEG();
 
@@ -498,10 +497,10 @@ public class H264ParameterSetParser : IH264ParameterSetParser
 
         if (!reader.HasMoreData()) return pps;
         pps.PicInitQpMinus26 = (sbyte)reader.ReadSEG();
-        
+
         if (!reader.HasMoreData()) return pps;
         pps.PicInitQsMinus26 = (sbyte)reader.ReadSEG();
-        
+
         if (!reader.HasMoreData()) return pps;
         pps.ChromaQpIndexOffset = (sbyte)reader.ReadSEG();
 
@@ -602,7 +601,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         sliceParams.SliceType = (byte)(sliceTypeFromHeader % 5); // Map slice type
 
         var picParameterSetId = reader.ReadUEG();
-        
+
         // Would continue parsing slice header parameters...
         // For now, use minimal parsing with safe defaults
 
@@ -659,109 +658,8 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         return naluType switch
         {
             1 => 0, // Non-IDR slice -> P slice (most common for type 1)
-            5 => 2, // IDR slice -> I slice  
+            5 => 2, // IDR slice -> I slice
             _ => 0  // Default to P slice
         };
-    }
-}
-
-/// <summary>
-/// Simple H.264 bitstream reader for parameter set parsing
-/// </summary>
-internal class H264BitstreamReader
-{
-    private readonly byte[] _data;
-    private int _bytePosition;
-    private int _bitPosition;
-
-    public int Position => _bytePosition * 8 + _bitPosition;
-
-    public H264BitstreamReader(byte[] data, int startOffset)
-    {
-        _data = data;
-        _bytePosition = startOffset;
-        _bitPosition = 0;
-    }
-
-    public byte ReadByte()
-    {
-        if (_bitPosition != 0)
-            throw new InvalidOperationException("Cannot read byte when not byte-aligned");
-        
-        if (_bytePosition >= _data.Length)
-            throw new EndOfStreamException("Attempted to read past end of stream");
-            
-        return _data[_bytePosition++];
-    }
-
-    public bool ReadBit()
-    {
-        if (_bytePosition >= _data.Length)
-            throw new EndOfStreamException("Attempted to read past end of stream");
-
-        var bit = (_data[_bytePosition] >> (7 - _bitPosition)) & 1;
-        _bitPosition++;
-        
-        if (_bitPosition == 8)
-        {
-            _bitPosition = 0;
-            _bytePosition++;
-        }
-        
-        return bit == 1;
-    }
-
-    public uint ReadBits(int count)
-    {
-        if (count <= 0) return 0;
-        
-        uint result = 0;
-        for (int i = 0; i < count; i++)
-        {
-            if (!HasMoreData())
-                throw new EndOfStreamException($"Not enough data to read {count} bits");
-                
-            result = (result << 1) | (ReadBit() ? 1u : 0u);
-        }
-        return result;
-    }
-
-    public uint ReadUEG()
-    {
-        int leadingZeroBits = 0;
-        
-        // Count leading zero bits
-        while (HasMoreData() && !ReadBit())
-        {
-            leadingZeroBits++;
-            if (leadingZeroBits > 32) // Prevent infinite loop
-                throw new InvalidDataException("Invalid UE(v) encoding - too many leading zeros");
-        }
-
-        if (leadingZeroBits == 0)
-            return 0;
-
-        // Check if we have enough bits remaining
-        if (!HasEnoughBitsRemaining(leadingZeroBits))
-            throw new EndOfStreamException($"Not enough data to read UE(v) with {leadingZeroBits} leading zeros");
-
-        return (1u << leadingZeroBits) - 1 + ReadBits(leadingZeroBits);
-    }
-
-    public int ReadSEG()
-    {
-        uint codeNum = ReadUEG();
-        return (codeNum % 2 == 0) ? -(int)(codeNum / 2) : (int)((codeNum + 1) / 2);
-    }
-
-    public bool HasMoreData()
-    {
-        return _bytePosition < _data.Length;
-    }
-
-    private bool HasEnoughBitsRemaining(int bitsNeeded)
-    {
-        var remainingBits = (_data.Length - _bytePosition) * 8 - _bitPosition;
-        return remainingBits >= bitsNeeded;
     }
 }

@@ -2,7 +2,6 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
-using SharpVideo.V4L2DecodeDemo.Interfaces;
 using SharpVideo.H264;
 using System.Runtime.Versioning;
 using SharpVideo.V4L2;
@@ -13,19 +12,19 @@ namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 /// Processes H.264 slice data for stateless decoders
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class StatelessSliceProcessor : IStatelessSliceProcessor
+public class StatelessSliceProcessor
 {
     private readonly ILogger<StatelessSliceProcessor> _logger;
-    private readonly IV4L2StatelessControlManager _controlManager;
-    private readonly IH264ParameterSetParser _parameterSetParser;
+    private readonly V4L2StatelessControlManager _controlManager;
+    private readonly H264ParameterSetParser _parameterSetParser;
     private readonly V4L2Device _device;
     private readonly List<MappedBuffer> _outputBuffers;
     private readonly Func<bool> _hasValidParameterSetsProvider;
 
     public StatelessSliceProcessor(
         ILogger<StatelessSliceProcessor> logger,
-        IV4L2StatelessControlManager controlManager,
-        IH264ParameterSetParser parameterSetParser,
+        V4L2StatelessControlManager controlManager,
+        H264ParameterSetParser parameterSetParser,
         V4L2Device device,
         List<MappedBuffer> outputBuffers,
         Func<bool> hasValidParameterSetsProvider)
@@ -80,7 +79,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         }
 
         // First, set the slice parameters controls
-        await _controlManager.SetSliceParamsControlsAsync(sliceData, naluType, cancellationToken);
+        await _controlManager.SetSliceParamsControlsAsync(sliceData, naluType);
 
         // Extract only the slice data (without start codes if configured)
         // TODO: Get useStartCodes from configuration

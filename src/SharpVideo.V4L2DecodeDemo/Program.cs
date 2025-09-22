@@ -1,8 +1,6 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2DecodeDemo.Services;
-using SharpVideo.V4L2DecodeDemo.Services.Stateless;
-using SharpVideo.V4L2DecodeDemo.Interfaces;
 
 namespace SharpVideo.V4L2DecodeDemo;
 

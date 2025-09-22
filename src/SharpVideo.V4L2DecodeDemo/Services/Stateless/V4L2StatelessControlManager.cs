@@ -2,7 +2,6 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2DecodeDemo.Interfaces;
 
 namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 
@@ -10,15 +9,15 @@ namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 /// Manages V4L2 extended controls for stateless H.264 decoders
 /// </summary>
 /// [SupportedOSPlatform("linux")]
-public class V4L2StatelessControlManager : IV4L2StatelessControlManager
+public class V4L2StatelessControlManager
 {
     private readonly ILogger<V4L2StatelessControlManager> _logger;
-    private readonly IH264ParameterSetParser _parameterSetParser;
+    private readonly H264ParameterSetParser _parameterSetParser;
     private readonly V4L2Device _device;
 
     public V4L2StatelessControlManager(
         ILogger<V4L2StatelessControlManager> logger,
-        IH264ParameterSetParser parameterSetParser,
+        H264ParameterSetParser parameterSetParser,
         V4L2Device device)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -27,14 +26,14 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <inheritdoc />
-    public async Task SetSliceParamsControlsAsync(byte[] sliceData, byte sliceType, CancellationToken cancellationToken)
+    public async Task SetSliceParamsControlsAsync(byte[] sliceData, byte sliceType)
     {
         _logger.LogDebug("Setting slice parameters controls for stateless decoder");
 
         try
         {
             // Parse slice header to control structure
-            var sliceParams = _parameterSetParser.ParseSliceHeaderToControl(sliceData, sliceType);
+            var sliceParams = _parameterSetParser.ParseSliceHeaderToControl(sliceData);
 
             // Create decode parameters (simplified for basic operation)
             var decodeParams = new V4L2CtrlH264DecodeParams
@@ -69,7 +68,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <inheritdoc />
-    public Task<bool> ConfigureStatelessControlsAsync(CancellationToken cancellationToken)
+    public Task<bool> ConfigureStatelessControlsAsync()
     {
         _logger.LogInformation("Configuring stateless decoder controls...");
 
@@ -126,7 +125,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     /// <summary>
     /// Set SPS and PPS parameter sets via V4L2 extended controls (simplified approach)
     /// </summary>
-    public async Task SetParameterSetsAsync(int deviceFd, V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps)
+    public async Task SetParameterSetsAsync(V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps)
     {
         _logger.LogInformation("Setting SPS/PPS controls for stateless decoder");
 
@@ -395,7 +394,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             _logger.LogInformation("Configuring stateless decoder mode");
 
             // Use existing method
-            await ConfigureStatelessControlsAsync(CancellationToken.None);
+            await ConfigureStatelessControlsAsync();
         }
         catch (Exception ex)
         {
