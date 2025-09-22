@@ -262,39 +262,63 @@ public class H264ParameterSetParser : IH264ParameterSetParser
             Flags = 0
         };
 
+        // Check if we have enough data to continue parsing
+        if (!reader.HasMoreData())
+        {
+            _logger.LogWarning("PPS data too short, using defaults for remaining fields");
+            return CreateFallbackPps();
+        }
+
         var entropyCodingModeFlag = reader.ReadBit();
         if (entropyCodingModeFlag) pps.Flags |= 0x01; // V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE
 
+        if (!reader.HasMoreData()) return pps;
         var bottomFieldPicOrderInFramePresentFlag = reader.ReadBit();
         if (bottomFieldPicOrderInFramePresentFlag) pps.Flags |= 0x02;
 
+        if (!reader.HasMoreData()) return pps;
         pps.NumSliceGroupsMinus1 = (byte)reader.ReadUEG();
 
         if (pps.NumSliceGroupsMinus1 > 0)
         {
+            if (!reader.HasMoreData()) return pps;
             // Skip slice group parsing for now
             var sliceGroupMapType = reader.ReadUEG();
             // Would need to parse slice group parameters based on map type
+            // For now, skip this complex parsing
         }
 
+        if (!reader.HasMoreData()) return pps;
         pps.NumRefIdxL0DefaultActiveMinus1 = (byte)reader.ReadUEG();
+        
+        if (!reader.HasMoreData()) return pps;
         pps.NumRefIdxL1DefaultActiveMinus1 = (byte)reader.ReadUEG();
 
+        if (!reader.HasMoreData()) return pps;
         var weightedPredFlag = reader.ReadBit();
         if (weightedPredFlag) pps.Flags |= 0x04;
 
+        if (!reader.HasMoreData()) return pps;
         pps.WeightedBipredIdc = (byte)reader.ReadBits(2);
 
+        if (!reader.HasMoreData()) return pps;
         pps.PicInitQpMinus26 = (sbyte)reader.ReadSEG();
+        
+        if (!reader.HasMoreData()) return pps;
         pps.PicInitQsMinus26 = (sbyte)reader.ReadSEG();
+        
+        if (!reader.HasMoreData()) return pps;
         pps.ChromaQpIndexOffset = (sbyte)reader.ReadSEG();
 
+        if (!reader.HasMoreData()) return pps;
         var deblockingFilterControlPresentFlag = reader.ReadBit();
         if (deblockingFilterControlPresentFlag) pps.Flags |= 0x08;
 
+        if (!reader.HasMoreData()) return pps;
         var constrainedIntraPredFlag = reader.ReadBit();
         if (constrainedIntraPredFlag) pps.Flags |= 0x10;
 
+        if (!reader.HasMoreData()) return pps;
         var redundantPicCntPresentFlag = reader.ReadBit();
         if (redundantPicCntPresentFlag) pps.Flags |= 0x20;
 
@@ -304,13 +328,27 @@ public class H264ParameterSetParser : IH264ParameterSetParser
             var transform8x8ModeFlag = reader.ReadBit();
             if (transform8x8ModeFlag) pps.Flags |= 0x40;
 
-            var picScalingMatrixPresentFlag = reader.ReadBit();
-            if (picScalingMatrixPresentFlag)
+            if (reader.HasMoreData())
             {
-                // Skip scaling matrix parsing
-            }
+                var picScalingMatrixPresentFlag = reader.ReadBit();
+                if (picScalingMatrixPresentFlag)
+                {
+                    // Skip scaling matrix parsing
+                }
 
-            pps.SecondChromaQpIndexOffset = (sbyte)reader.ReadSEG();
+                if (reader.HasMoreData())
+                {
+                    pps.SecondChromaQpIndexOffset = (sbyte)reader.ReadSEG();
+                }
+                else
+                {
+                    pps.SecondChromaQpIndexOffset = pps.ChromaQpIndexOffset;
+                }
+            }
+            else
+            {
+                pps.SecondChromaQpIndexOffset = pps.ChromaQpIndexOffset;
+            }
         }
         else
         {
@@ -624,7 +662,7 @@ internal class H264BitstreamReader
             throw new InvalidOperationException("Cannot read byte when not byte-aligned");
         
         if (_bytePosition >= _data.Length)
-            throw new EndOfStreamException();
+            throw new EndOfStreamException("Attempted to read past end of stream");
             
         return _data[_bytePosition++];
     }
@@ -632,7 +670,7 @@ internal class H264BitstreamReader
     public bool ReadBit()
     {
         if (_bytePosition >= _data.Length)
-            throw new EndOfStreamException();
+            throw new EndOfStreamException("Attempted to read past end of stream");
 
         var bit = (_data[_bytePosition] >> (7 - _bitPosition)) & 1;
         _bitPosition++;
@@ -648,9 +686,14 @@ internal class H264BitstreamReader
 
     public uint ReadBits(int count)
     {
+        if (count <= 0) return 0;
+        
         uint result = 0;
         for (int i = 0; i < count; i++)
         {
+            if (!HasMoreData())
+                throw new EndOfStreamException($"Not enough data to read {count} bits");
+                
             result = (result << 1) | (ReadBit() ? 1u : 0u);
         }
         return result;
@@ -659,15 +702,21 @@ internal class H264BitstreamReader
     public uint ReadUEG()
     {
         int leadingZeroBits = 0;
-        while (!ReadBit())
+        
+        // Count leading zero bits
+        while (HasMoreData() && !ReadBit())
         {
             leadingZeroBits++;
             if (leadingZeroBits > 32) // Prevent infinite loop
-                throw new InvalidDataException("Invalid UE(v) encoding");
+                throw new InvalidDataException("Invalid UE(v) encoding - too many leading zeros");
         }
 
         if (leadingZeroBits == 0)
             return 0;
+
+        // Check if we have enough bits remaining
+        if (!HasEnoughBitsRemaining(leadingZeroBits))
+            throw new EndOfStreamException($"Not enough data to read UE(v) with {leadingZeroBits} leading zeros");
 
         return (1u << leadingZeroBits) - 1 + ReadBits(leadingZeroBits);
     }
@@ -680,6 +729,12 @@ internal class H264BitstreamReader
 
     public bool HasMoreData()
     {
-        return _bytePosition < _data.Length || (_bytePosition == _data.Length - 1 && _bitPosition < 8);
+        return _bytePosition < _data.Length;
+    }
+
+    private bool HasEnoughBitsRemaining(int bitsNeeded)
+    {
+        var remainingBits = (_data.Length - _bytePosition) * 8 - _bitPosition;
+        return remainingBits >= bitsNeeded;
     }
 }

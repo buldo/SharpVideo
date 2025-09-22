@@ -312,21 +312,57 @@ public class H264V4L2StatelessDecoder
         // Map each buffer - simplified approach for demo
         for (uint i = 0; i < reqBufs.Count; i++)
         {
-            // For real V4L2 implementation, would query buffer details here
-            // For now, use fixed size allocation
-            uint totalSize = bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE ? 
-                _configuration.SliceBufferSize : 
-                _configuration.InitialWidth * _configuration.InitialHeight * 2;
+            // Determine plane count based on buffer type
+            int planeCount;
+            uint totalSize;
+            
+            if (bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE)
+            {
+                // Output buffer for H.264 slice data - single plane
+                planeCount = 1;
+                totalSize = _configuration.SliceBufferSize;
+            }
+            else
+            {
+                // Capture buffer for decoded frames - typically 2 planes for NV12
+                planeCount = 2;
+                uint yPlaneSize = _configuration.InitialWidth * _configuration.InitialHeight;
+                uint uvPlaneSize = yPlaneSize / 2; // NV12 UV plane is half the size
+                totalSize = yPlaneSize + uvPlaneSize;
+            }
 
             var bufferPtr = Marshal.AllocHGlobal((int)totalSize);
             
-            // Create planes array for multiplanar buffer
-            var planes = new V4L2Plane[1];
-            planes[0] = new V4L2Plane
+            // Create planes array with proper configuration
+            var planes = new V4L2Plane[planeCount];
+            
+            if (bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE)
             {
-                Length = totalSize,
-                BytesUsed = 0
-            };
+                // Single plane for slice data
+                planes[0] = new V4L2Plane
+                {
+                    Length = totalSize,
+                    BytesUsed = 0
+                };
+            }
+            else
+            {
+                // Two planes for NV12 format
+                uint yPlaneSize = _configuration.InitialWidth * _configuration.InitialHeight;
+                uint uvPlaneSize = totalSize - yPlaneSize;
+                
+                planes[0] = new V4L2Plane
+                {
+                    Length = yPlaneSize,
+                    BytesUsed = yPlaneSize // Pre-allocated size for capture
+                };
+                
+                planes[1] = new V4L2Plane
+                {
+                    Length = uvPlaneSize,
+                    BytesUsed = uvPlaneSize // Pre-allocated size for capture
+                };
+            }
 
             var mappedBuffer = new MappedBuffer
             {
@@ -339,8 +375,8 @@ public class H264V4L2StatelessDecoder
             bufferList.Add(mappedBuffer);
             availableQueue.Enqueue(i);
             
-            _logger.LogTrace("Mapped buffer {Index} for {BufferType}: {Size} bytes at {Pointer:X8}", 
-                i, bufferType, totalSize, bufferPtr.ToInt64());
+            _logger.LogTrace("Mapped buffer {Index} for {BufferType}: {Size} bytes, {PlaneCount} planes at {Pointer:X8}", 
+                i, bufferType, totalSize, planeCount, bufferPtr.ToInt64());
         }
 
         await Task.CompletedTask;
@@ -580,23 +616,49 @@ public class H264V4L2StatelessDecoder
             // Queue all capture buffers before starting streaming
             for (uint i = 0; i < _captureBuffers.Count; i++)
             {
+                var mappedBuffer = _captureBuffers[(int)i];
+                
                 var buffer = new V4L2Buffer
                 {
                     Index = i,
                     Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                    Memory = V4L2Constants.V4L2_MEMORY_MMAP
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = (uint)mappedBuffer.Planes.Length,
+                    Field = (uint)V4L2Field.NONE,
+                    BytesUsed = 0, // Output buffer, hardware will fill this
+                    Flags = 0,
+                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                    Sequence = 0
                 };
+
+                unsafe
+                {
+                    // Set up planes for multiplanar capture buffer
+                    fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+                    {
+                        buffer.Planes = planePtr;
+                    }
+                }
 
                 var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
                 if (!result.Success)
                 {
                     _logger.LogWarning("Failed to queue capture buffer {Index}: {Error}", i, result.ErrorMessage);
+                    // Don't throw here, continue with other buffers
+                }
+                else
+                {
+                    _logger.LogTrace("Successfully queued capture buffer {Index}", i);
                 }
             }
 
-            // Start streaming on both queues
+            // Start streaming on OUTPUT queue first
             _device.StreamOn(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
+            _logger.LogTrace("Started OUTPUT streaming");
+            
+            // Start streaming on CAPTURE queue
             _device.StreamOn(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
+            _logger.LogTrace("Started CAPTURE streaming");
             
             _logger.LogInformation("V4L2 streaming started successfully");
         }

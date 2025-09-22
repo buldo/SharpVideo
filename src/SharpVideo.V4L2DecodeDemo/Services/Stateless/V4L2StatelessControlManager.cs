@@ -128,8 +128,9 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     {
         _logger.LogInformation("Setting SPS/PPS controls for stateless decoder");
 
-        // Validate SPS parameters
+        // Validate SPS and PPS parameters
         ValidateSpsParameters(sps);
+        ValidatePpsParameters(pps);
 
         // Log structure details for debugging
         LogParameterDetails(sps, pps);
@@ -143,6 +144,11 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
             });
 
             _logger.LogInformation("Successfully set SPS and PPS controls");
+        }
+        catch (ArgumentException ex)
+        {
+            _logger.LogError(ex, "Parameter validation failed");
+            throw new InvalidOperationException($"Invalid parameter sets: {ex.Message}", ex);
         }
         catch (Exception ex)
         {
@@ -158,6 +164,17 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     {
         var size = (uint)Marshal.SizeOf<T>();
         var dataPtr = Marshal.AllocHGlobal((int)size);
+        
+        // Clear the allocated memory to prevent garbage data
+        unsafe
+        {
+            byte* ptr = (byte*)dataPtr.ToPointer();
+            for (int i = 0; i < size; i++)
+            {
+                ptr[i] = 0;
+            }
+        }
+        
         Marshal.StructureToPtr(data, dataPtr, false);
 
         var control = new V4L2ExtControl
@@ -171,23 +188,41 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <summary>
-    /// Set multiple extended controls with proper memory management
+    /// Set multiple extended controls with proper memory management and alignment
     /// </summary>
     private async Task SetExtendedControlsAsync(IEnumerable<(V4L2ExtControl control, IntPtr dataPtr)> controls)
     {
         var controlList = controls.ToList();
+        if (controlList.Count == 0)
+        {
+            _logger.LogWarning("No controls to set");
+            return;
+        }
+
         var controlArray = controlList.Select(c => c.control).ToArray();
         var dataPtrs = controlList.Select(c => c.dataPtr).ToList();
 
-        // Allocate memory for controls array
-        var controlsPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2ExtControl>() * controlArray.Length);
+        // Allocate memory for controls array with proper alignment
+        var controlStructSize = Marshal.SizeOf<V4L2ExtControl>();
+        var totalSize = controlStructSize * controlArray.Length;
+        var controlsPtr = Marshal.AllocHGlobal(totalSize);
 
         try
         {
-            // Copy controls to unmanaged memory
+            // Clear the allocated memory
+            unsafe
+            {
+                byte* ptr = (byte*)controlsPtr.ToPointer();
+                for (int i = 0; i < totalSize; i++)
+                {
+                    ptr[i] = 0;
+                }
+            }
+
+            // Copy controls to unmanaged memory with proper structure alignment
             for (int i = 0; i < controlArray.Length; i++)
             {
-                var controlOffset = IntPtr.Add(controlsPtr, i * Marshal.SizeOf<V4L2ExtControl>());
+                var controlOffset = IntPtr.Add(controlsPtr, i * controlStructSize);
                 Marshal.StructureToPtr(controlArray[i], controlOffset, false);
             }
 
@@ -199,12 +234,30 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
                 Controls = controlsPtr
             };
 
+            _logger.LogDebug("Setting {Count} extended controls with total size {Size} bytes", 
+                controlArray.Length, totalSize);
+
             // Set the controls
             var result = LibV4L2.SetExtendedControls(_device.fd, ref extControlsWrapper);
             if (!result.Success)
             {
-                throw new InvalidOperationException($"Failed to set extended controls: {result.ErrorMessage}");
+                // Log detailed error information
+                var errorCode = Marshal.GetLastWin32Error();
+                _logger.LogError("Failed to set extended controls: {Error} (errno: {ErrorCode})", 
+                    result.ErrorMessage, errorCode);
+                
+                // Log control details for debugging
+                for (int i = 0; i < controlArray.Length; i++)
+                {
+                    var ctrl = controlArray[i];
+                    _logger.LogDebug("Control {Index}: ID=0x{Id:X8}, Size={Size}, Ptr=0x{Ptr:X8}", 
+                        i, ctrl.Id, ctrl.Size, ctrl.Ptr.ToInt64());
+                }
+                
+                throw new InvalidOperationException($"Failed to set extended controls: {result.ErrorMessage} (errno: {errorCode})");
             }
+
+            _logger.LogDebug("Successfully set {Count} extended controls", controlArray.Length);
         }
         finally
         {
@@ -252,7 +305,7 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
     }
 
     /// <summary>
-    /// Validate SPS parameters
+    /// Validate SPS parameters before sending to V4L2
     /// </summary>
     private static void ValidateSpsParameters(V4L2CtrlH264Sps sps)
     {
@@ -264,6 +317,64 @@ public class V4L2StatelessControlManager : IV4L2StatelessControlManager
         if (sps.PicWidthInMbsMinus1 == 0xFFFF || sps.PicHeightInMapUnitsMinus1 == 0xFFFF)
         {
             throw new ArgumentException("Invalid SPS: Picture dimensions are invalid");
+        }
+
+        // Validate array is properly initialized
+        if (sps.OffsetForRefFrame == null)
+        {
+            throw new ArgumentException("Invalid SPS: OffsetForRefFrame array is null");
+        }
+
+        if (sps.OffsetForRefFrame.Length != 255)
+        {
+            throw new ArgumentException($"Invalid SPS: OffsetForRefFrame array must be 255 elements, got {sps.OffsetForRefFrame.Length}");
+        }
+
+        // Validate reasonable values
+        if (sps.MaxNumRefFrames > 16)
+        {
+            throw new ArgumentException($"Invalid SPS: MaxNumRefFrames ({sps.MaxNumRefFrames}) exceeds reasonable limit");
+        }
+
+        if (sps.ChromaFormatIdc > 3)
+        {
+            throw new ArgumentException($"Invalid SPS: ChromaFormatIdc ({sps.ChromaFormatIdc}) is invalid");
+        }
+
+        if (sps.BitDepthLumaMinus8 > 8 || sps.BitDepthChromaMinus8 > 8)
+        {
+            throw new ArgumentException($"Invalid SPS: Bit depth values too high (Luma: {sps.BitDepthLumaMinus8 + 8}, Chroma: {sps.BitDepthChromaMinus8 + 8})");
+        }
+    }
+
+    /// <summary>
+    /// Validate PPS parameters before sending to V4L2  
+    /// </summary>
+    private static void ValidatePpsParameters(V4L2CtrlH264Pps pps)
+    {
+        if (pps.NumSliceGroupsMinus1 > 7)
+        {
+            throw new ArgumentException($"Invalid PPS: NumSliceGroupsMinus1 ({pps.NumSliceGroupsMinus1}) exceeds maximum");
+        }
+
+        if (pps.NumRefIdxL0DefaultActiveMinus1 > 31)
+        {
+            throw new ArgumentException($"Invalid PPS: NumRefIdxL0DefaultActiveMinus1 ({pps.NumRefIdxL0DefaultActiveMinus1}) exceeds maximum");
+        }
+
+        if (pps.NumRefIdxL1DefaultActiveMinus1 > 31)
+        {
+            throw new ArgumentException($"Invalid PPS: NumRefIdxL1DefaultActiveMinus1 ({pps.NumRefIdxL1DefaultActiveMinus1}) exceeds maximum");
+        }
+
+        if (pps.WeightedBipredIdc > 2)
+        {
+            throw new ArgumentException($"Invalid PPS: WeightedBipredIdc ({pps.WeightedBipredIdc}) is invalid");
+        }
+
+        if (pps.PicInitQpMinus26 < -26 || pps.PicInitQpMinus26 > 25)
+        {
+            throw new ArgumentException($"Invalid PPS: PicInitQpMinus26 ({pps.PicInitQpMinus26}) is out of range");
         }
     }
 
