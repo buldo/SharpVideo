@@ -28,6 +28,7 @@ public class H264V4L2StatelessDecoder
 {
     private readonly V4L2Device _device;
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
+
     private readonly DecoderConfiguration _configuration;
     private readonly H264ParameterSetParser _parameterSetParser;
     private readonly V4L2StatelessControlManager _controlManager;
@@ -45,7 +46,9 @@ public class H264V4L2StatelessDecoder
 
     private bool _hasValidParameterSets;
     private bool _isInitialized;
-    private bool _useStartCodes = true;
+
+    private V4L2CtrlH264Sps? _currentSps;
+    private V4L2CtrlH264Pps? _currentPps;
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
@@ -98,7 +101,7 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Starting H.264 stateless stream decode");
         _decodingStopwatch.Start();
 
-        using var naluProvider = new H264NaluProvider(_useStartCodes ? NaluMode.WithStartCode : NaluMode.WithoutStartCode);
+        using var naluProvider = new H264NaluProvider(NaluMode.WithStartCode);
 
         try
         {
@@ -168,18 +171,18 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private async Task ProcessNalusAsync(H264NaluProvider naluProvider, CancellationToken cancellationToken)
     {
+        var naluParser = new H264NaluParser(NaluMode.WithStartCode);
         try
         {
             await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
             {
                 if (naluData.Length < 1) continue;
 
-                byte naluType = (byte)(naluData[0] & 0x1F);
-                var naluBytes = naluData.ToArray();
+                var naluType = naluParser.GetNaluType(naluData);
 
-                _logger.LogTrace("Processing NALU type {NaluType}, size: {Size} bytes", naluType, naluBytes.Length);
+                _logger.LogTrace("Processing NALU type {NaluType}, size: {Size} bytes", naluType, naluData.Length);
 
-                await ProcessNaluByTypeAsync(naluBytes, naluType, cancellationToken);
+                await ProcessNaluByTypeAsync(naluData, naluType, cancellationToken);
             }
         }
         catch (Exception ex)
@@ -192,42 +195,31 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Processes individual NALU based on its type
     /// </summary>
-    private async Task ProcessNaluByTypeAsync(byte[] naluData, byte naluType, CancellationToken cancellationToken)
+    private async Task ProcessNaluByTypeAsync(byte[] naluData, H264NaluType naluType, CancellationToken cancellationToken)
     {
         switch (naluType)
         {
-            case 7: // SPS
+            case H264NaluType.SequenceParameterSet: // SPS
                 _logger.LogDebug("Processing SPS NALU");
                 await HandleSpsNaluAsync(naluData, cancellationToken);
                 break;
 
-            case 8: // PPS
+            case H264NaluType.PictureParameterSet: // PPS
                 _logger.LogDebug("Processing PPS NALU");
                 await HandlePpsNaluAsync(naluData, cancellationToken);
                 break;
 
-            case 1: // Non-IDR slice
-            case 5: // IDR slice
+            case H264NaluType.CodedSliceNonIdr: // Non-IDR slice
+            case H264NaluType.CodedSliceIdr: // IDR slice
                 _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
                 await HandleSliceNaluAsync(naluData, naluType, cancellationToken);
                 break;
 
-            case 6: // SEI
-                _logger.LogTrace("Skipping SEI NALU");
-                break;
-
-            case 9: // Access Unit Delimiter
-                _logger.LogTrace("Processing AUD NALU");
-                break;
-
             default:
-                _logger.LogTrace("Skipping unknown NALU type {NaluType}", naluType);
+                _logger.LogTrace("Skipping NALU type {NaluType}", naluType);
                 break;
         }
     }
-
-    private V4L2CtrlH264Sps? _currentSps;
-    private V4L2CtrlH264Pps? _currentPps;
 
     /// <summary>
     /// Handles SPS (Sequence Parameter Set) NALU
@@ -284,7 +276,7 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles slice NALUs (actual video data)
     /// </summary>
-    private async Task HandleSliceNaluAsync(byte[] sliceData, byte naluType, CancellationToken cancellationToken)
+    private async Task HandleSliceNaluAsync(byte[] sliceData, H264NaluType naluType, CancellationToken cancellationToken)
     {
         if (!_hasValidParameterSets)
         {
@@ -336,7 +328,7 @@ public class H264V4L2StatelessDecoder
             ConfigureFormats();
 
             // Configure V4L2 controls for stateless operation and get start code preference
-            _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync();
+            _controlManager.ConfigureStatelessControls(V4L2StatelessH264DecodeMode.FRAME_BASED, V4L2StatelessH264StartCode.ANNEX_B);
 
             // Setup and map buffers properly with real V4L2 mmap
             await SetupAndMapBuffersAsync();
@@ -579,30 +571,6 @@ public class H264V4L2StatelessDecoder
         await Task.CompletedTask;
     }
 
-    private async Task FlushDecoder()
-    {
-        _logger.LogInformation("Flushing decoder...");
-
-        // Send EOS to decoder and drain remaining frames
-        // Implementation would depend on V4L2 driver capabilities
-
-        // Dequeue any remaining frames
-        while (true)
-        {
-            var frame = await _sliceProcessor.DequeueFrameAsync(_device.fd);
-            if (frame == null) break;
-
-            _framesDecoded++;
-            FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
-            {
-                FrameNumber = _framesDecoded,
-                BufferIndex = 0,
-                BytesUsed = 0,
-                Timestamp = DateTime.Now
-            });
-        }
-    }
-
     private void StartStreaming()
     {
         _logger.LogInformation("Starting V4L2 streaming...");
@@ -721,16 +689,6 @@ public class H264V4L2StatelessDecoder
             }
         }
         buffers.Clear();
-    }
-
-    public void Dispose()
-    {
-        if (!_disposed)
-        {
-            Cleanup();
-            _disposed = true;
-        }
-        GC.SuppressFinalize(this);
     }
 
     public async ValueTask DisposeAsync()

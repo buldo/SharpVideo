@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
+using SharpVideo.H264;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2;
 
@@ -26,7 +27,7 @@ public class V4L2StatelessControlManager
     }
 
     /// <inheritdoc />
-    public async Task SetSliceParamsControlsAsync(byte[] sliceData, byte sliceType)
+    public async Task SetSliceParamsControlsAsync(byte[] sliceData, H264NaluType sliceType)
     {
         _logger.LogDebug("Setting slice parameters controls for stateless decoder");
 
@@ -39,7 +40,7 @@ public class V4L2StatelessControlManager
             var decodeParams = new V4L2CtrlH264DecodeParams
             {
                 FrameNum = 0, // Would need proper frame numbering
-                IdrPicId = (ushort)(sliceType == 5 ? 1 : 0), // IDR picture ID
+                IdrPicId = (ushort)(sliceType == H264NaluType.CodedSliceIdr ? 1 : 0), // IDR picture ID
                 PicOrderCntLsb = 0, // Picture order count
                 DeltaPicOrderCntBottom = 0,
                 DeltaPicOrderCnt0 = 0,
@@ -67,58 +68,24 @@ public class V4L2StatelessControlManager
         }
     }
 
-    /// <inheritdoc />
-    public Task<bool> ConfigureStatelessControlsAsync()
+    public void ConfigureStatelessControls(V4L2StatelessH264DecodeMode decodeMode, V4L2StatelessH264StartCode startCode)
     {
-        _logger.LogInformation("Configuring stateless decoder controls...");
+        _logger.LogInformation("Configuring stateless decoder controls: {DecodeMode}, {StartCode}", decodeMode, startCode);
 
-        try
+        if (!TrySetSimpleControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
+                (int)decodeMode,
+                "stateless decoder to frame-based mode"))
         {
-            // Try standard V4L2 stateless controls
-            // First, try to set decode mode to frame-based (preferred)
-            if (TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
-                    (int)V4L2StatelessH264DecodeMode.FRAME_BASED,
-                    "stateless decoder to frame-based mode"))
-            {
-                _logger.LogInformation("Set stateless decoder to frame-based mode");
-            }
-            else
-            {
-                // Try slice-based mode as fallback
-                TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
-                    (int)V4L2StatelessH264DecodeMode.SLICE_BASED,
-                    "stateless decoder to slice-based mode");
-            }
-
-            // Configure start code format - try Annex-B first, then none
-            if (TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
-                    (int)V4L2StatelessH264StartCode.ANNEX_B,
-                    "start code format to Annex-B"))
-            {
-                _logger.LogInformation("Successfully configured stateless decoder for Annex-B format (with start codes)");
-                return Task.FromResult(true); // Use start codes
-            }
-            else
-            {
-                // Try setting to no start codes
-                if (TrySetSimpleControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
-                        (int)V4L2StatelessH264StartCode.NONE,
-                        "start code format to none"))
-                {
-                    _logger.LogInformation("Successfully configured stateless decoder for raw NALUs (without start codes)");
-                    return Task.FromResult(false); // Don't use start codes
-                }
-                else
-                {
-                    _logger.LogWarning("Failed to configure start code control. Using default Annex-B format");
-                    return Task.FromResult(true); // Default fallback to start codes
-                }
-            }
+            throw new Exception($"Failed to set decode mode to {decodeMode}");
         }
-        catch (Exception ex)
+
+        if (!TrySetSimpleControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
+                (int)startCode,
+                "start code format to Annex-B"))
         {
-            _logger.LogWarning(ex, "Error configuring stateless decoder controls. Using default settings");
-            return Task.FromResult(true); // Default fallback to start codes
+            throw new Exception($"Failed to set start code to {startCode}");
         }
     }
 
@@ -362,44 +329,5 @@ public class V4L2StatelessControlManager
             pps.PicParameterSetId, pps.SeqParameterSetId, pps.NumSliceGroupsMinus1 + 1,
             pps.NumRefIdxL0DefaultActiveMinus1 + 1, pps.NumRefIdxL1DefaultActiveMinus1 + 1,
             pps.WeightedBipredIdc, pps.PicInitQpMinus26 + 26, pps.ChromaQpIndexOffset);
-    }
-
-    /// <summary>
-    /// Set decode parameters for a frame
-    /// </summary>
-    public async Task SetDecodeParametersAsync(int deviceFd, V4L2CtrlH264DecodeParams decodeParams, V4L2CtrlH264SliceParams[] sliceParams)
-    {
-        try
-        {
-            _logger.LogInformation("Setting decode parameters for frame");
-
-            // For now, use simplified approach
-            // In a full implementation, we'd set all slice parameters
-            await Task.CompletedTask;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to set decode parameters");
-            throw;
-        }
-    }
-
-    /// <summary>
-    /// Configure stateless decoder mode and settings
-    /// </summary>
-    public async Task ConfigureStatelessModeAsync(int deviceFd)
-    {
-        try
-        {
-            _logger.LogInformation("Configuring stateless decoder mode");
-
-            // Use existing method
-            await ConfigureStatelessControlsAsync();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to configure stateless mode");
-            throw;
-        }
     }
 }

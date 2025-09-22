@@ -61,7 +61,7 @@ public class StatelessSliceProcessor
     /// <summary>
     /// Queue stateless slice data with proper control setup
     /// </summary>
-    public async Task QueueStatelessSliceDataAsync(byte[] sliceData, byte naluType, uint bufferIndex, CancellationToken cancellationToken)
+    public async Task QueueStatelessSliceDataAsync(byte[] sliceData, H264NaluType naluType, uint bufferIndex, CancellationToken cancellationToken)
     {
         if (!_hasValidParameterSetsProvider())
         {
@@ -90,7 +90,7 @@ public class StatelessSliceProcessor
 
         // Queue only the slice data to the hardware
         await QueueSliceDataToHardwareAsync(pureSliceData, bufferIndex, cancellationToken,
-            isKeyFrame: naluType == 5); // IDR slice is keyframe
+            isKeyFrame: naluType == H264NaluType.CodedSliceIdr); // IDR slice is keyframe
     }
 
     /// <summary>
@@ -221,197 +221,6 @@ public class StatelessSliceProcessor
     }
 
     /// <summary>
-    /// Process slice data from video file with proper error handling and retry logic
-    /// </summary>
-    public async Task ProcessVideoFileAsync(int deviceFd, string filePath, Action<double> progressCallback)
-    {
-        _logger.LogInformation("Processing video file for slice data: {FilePath}", filePath);
-        
-        var fileInfo = new FileInfo(filePath);
-        long totalBytes = fileInfo.Length;
-        long processedBytes = 0;
-
-        using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
-
-        // Read entire file for NALU processing
-        var buffer = new byte[fileStream.Length];
-        processedBytes = await fileStream.ReadAsync(buffer, 0, buffer.Length);
-
-        // Feed data to NALU provider
-        await naluProvider.AppendData(buffer, CancellationToken.None);
-        naluProvider.CompleteWriting();
-
-        int processedNalus = 0;
-        uint currentBufferIndex = 0;
-
-        // Process slice NALUs with proper buffer management
-        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
-        {
-            if (naluData.Length < 1) continue;
-
-            byte naluType = (byte)(naluData[0] & 0x1F);
-            if (naluType == 1 || naluType == 5) // Slice NALUs
-            {
-                try
-                {
-                    await QueueStatelessSliceDataAsync(naluData.ToArray(), naluType, currentBufferIndex, CancellationToken.None);
-                    
-                    // Cycle through available buffers - would be managed by buffer availability in real implementation
-                    currentBufferIndex = (currentBufferIndex + 1) % (uint)_outputBuffers.Count;
-                    processedNalus++;
-
-                    // Report progress for processing
-                    if (processedNalus % 10 == 0)
-                    {
-                        double processingProgress = Math.Min((double)processedNalus / Math.Max(processedNalus, 100) * 100, 100);
-                        progressCallback?.Invoke(processingProgress);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to process NALU {Index}, continuing with next", processedNalus);
-                    // Continue processing other NALUs even if one fails
-                }
-            }
-        }
-
-        _logger.LogInformation("Processed {NaluCount} slice NALUs from file", processedNalus);
-    }
-
-    /// <summary>
-    /// Process video file NALU by NALU with frame callbacks and proper error handling
-    /// </summary>
-    public async Task ProcessVideoFileNaluByNaluAsync(int deviceFd, string filePath, Action<object> frameCallback, Action<double> progressCallback)
-    {
-        _logger.LogInformation("Processing video file NALU by NALU: {FilePath}", filePath);
-        
-        var fileInfo = new FileInfo(filePath);
-        using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
-
-        // Read file data
-        var buffer = new byte[Math.Min(fileStream.Length, 10 * 1024 * 1024)]; // Limit to 10MB for large files
-        int bytesRead = await fileStream.ReadAsync(buffer, 0, buffer.Length);
-
-        // Feed data to NALU provider
-        await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), CancellationToken.None);
-        naluProvider.CompleteWriting();
-
-        int processedNalus = 0;
-        int frameCount = 0;
-        uint currentBufferIndex = 0;
-        var frameTimer = System.Diagnostics.Stopwatch.StartNew();
-
-        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
-        {
-            if (naluData.Length < 1) continue;
-
-            byte naluType = (byte)(naluData[0] & 0x1F);
-            if (naluType == 1 || naluType == 5) // Slice NALUs
-            {
-                try
-                {
-                    await QueueStatelessSliceDataAsync(naluData.ToArray(), naluType, currentBufferIndex, CancellationToken.None);
-
-                    // Try to dequeue a frame with timeout
-                    var frame = await DequeueFrameWithTimeoutAsync(deviceFd, TimeSpan.FromMilliseconds(100));
-                    if (frame != null)
-                    {
-                        frameCount++;
-                        frameCallback?.Invoke(new { 
-                            FrameNumber = frameCount, 
-                            NaluType = naluType,
-                            ProcessingTime = frameTimer.ElapsedMilliseconds,
-                            BufferIndex = currentBufferIndex
-                        });
-                        frameTimer.Restart();
-                    }
-
-                    currentBufferIndex = (currentBufferIndex + 1) % (uint)_outputBuffers.Count;
-                    processedNalus++;
-                    
-                    if (processedNalus % 10 == 0)
-                    {
-                        double progressPercentage = Math.Min((double)processedNalus / 100 * 100, 100); // Estimate progress
-                        progressCallback?.Invoke(progressPercentage);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to process NALU {Index} (type {Type}), continuing", processedNalus, naluType);
-                }
-            }
-        }
-
-        // Flush any remaining frames
-        await FlushRemainingFramesAsync(deviceFd, frameCallback, frameCount);
-
-        _logger.LogInformation("Processed {NaluCount} slice NALUs with {FrameCount} frames decoded", processedNalus, frameCount);
-    }
-
-    /// <summary>
-    /// Dequeue frame with timeout to avoid blocking indefinitely
-    /// </summary>
-    private async Task<object?> DequeueFrameWithTimeoutAsync(int deviceFd, TimeSpan timeout)
-    {
-        var cts = new CancellationTokenSource(timeout);
-        try
-        {
-            return await Task.Run(() => DequeueFrameAsync(deviceFd), cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            return null; // Timeout - no frame available
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Error dequeuing frame");
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Flush any remaining frames from the decoder
-    /// </summary>
-    private async Task FlushRemainingFramesAsync(int deviceFd, Action<object> frameCallback, int initialFrameCount)
-    {
-        _logger.LogDebug("Flushing remaining frames from decoder");
-        
-        int flushAttempts = 0;
-        const int maxFlushAttempts = 10;
-        int frameCount = initialFrameCount;
-
-        while (flushAttempts < maxFlushAttempts)
-        {
-            var frame = await DequeueFrameWithTimeoutAsync(deviceFd, TimeSpan.FromMilliseconds(50));
-            if (frame == null)
-            {
-                flushAttempts++;
-                continue;
-            }
-
-            frameCount++;
-            frameCallback?.Invoke(new { 
-                FrameNumber = frameCount, 
-                IsFlushed = true,
-                FlushAttempt = flushAttempts
-            });
-            
-            flushAttempts = 0; // Reset if we got a frame
-        }
-    }
-
-    /// <summary>
-    /// Queue slice data to OUTPUT buffer
-    /// </summary>
-    public async Task QueueSliceDataAsync(int deviceFd, ReadOnlyMemory<byte> sliceData)
-    {
-        byte naluType = sliceData.Span.Length > 0 ? (byte)(sliceData.Span[0] & 0x1F) : (byte)1;
-        await QueueStatelessSliceDataAsync(sliceData.ToArray(), naluType, 0, CancellationToken.None);
-    }
-
-    /// <summary>
     /// Dequeue and return decoded frame from CAPTURE buffer
     /// </summary>
     public async Task<object?> DequeueFrameAsync(int deviceFd)
@@ -441,7 +250,7 @@ public class StatelessSliceProcessor
                     IsLastFrame = (buffer.Flags & 0x00100000) != 0
                 };
 
-                _logger.LogTrace("Dequeued frame: Index={Index}, BytesUsed={BytesUsed}, Sequence={Sequence}", 
+                _logger.LogTrace("Dequeued frame: Index={Index}, BytesUsed={BytesUsed}, Sequence={Sequence}",
                     frameInfo.BufferIndex, frameInfo.BytesUsed, frameInfo.Sequence);
 
                 // Re-queue the capture buffer for continuous operation

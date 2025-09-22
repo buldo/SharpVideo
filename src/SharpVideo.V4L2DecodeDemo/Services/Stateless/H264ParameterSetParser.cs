@@ -15,10 +15,6 @@ public class H264ParameterSetParser
     private readonly H264NaluParser _naluParserWithStartCode;
     private readonly H264NaluParser _naluParserWithoutStartCode;
 
-    // Cache for current parameter sets
-    private V4L2CtrlH264Sps? _currentSps;
-    private V4L2CtrlH264Pps? _currentPps;
-
     public H264ParameterSetParser(ILogger<H264ParameterSetParser> logger, uint initialWidth = 1920, uint initialHeight = 1080)
     {
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -52,7 +48,6 @@ public class H264ParameterSetParser
         try
         {
             var sps = ParseSpsFromBitstream(naluPayload.ToArray(), 0); // Start from header since payload excludes start code
-            _currentSps = sps;
 
             _logger.LogDebug("Parsed SPS: Profile=0x{Profile:X2}, Level=0x{Level:X2}, Constraints=0x{Constraints:X2}, Width={Width}MB, Height={Height}MB",
                 sps.ProfileIdc, sps.LevelIdc, sps.ConstraintSetFlags, sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1);
@@ -87,7 +82,6 @@ public class H264ParameterSetParser
         try
         {
             var pps = ParsePpsFromBitstream(naluPayload.ToArray(), 0); // Start from header since payload excludes start code
-            _currentPps = pps;
 
             _logger.LogDebug("Parsed PPS: ID={PpsId}, SPS_ID={SpsId}, SliceGroups={SliceGroups}, QP={QP}",
                 pps.PicParameterSetId, pps.SeqParameterSetId, pps.NumSliceGroupsMinus1 + 1, pps.PicInitQpMinus26 + 26);
@@ -144,92 +138,6 @@ public class H264ParameterSetParser
     }
 
     /// <summary>
-    /// Extract SPS from H.264 bitstream file using the improved NALU parser
-    /// </summary>
-    public async Task<V4L2CtrlH264Sps?> ExtractSpsAsync(string filePath)
-    {
-        if (_currentSps.HasValue)
-            return _currentSps.Value;
-
-        try
-        {
-            using var fileStream = File.OpenRead(filePath);
-            using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
-
-            // Read file data
-            int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
-            var buffer = new byte[maxBytes];
-            int bytesRead = await fileStream.ReadAsync(buffer, 0, maxBytes);
-
-            // Feed data to NALU provider
-            await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), CancellationToken.None);
-            naluProvider.CompleteWriting();
-
-            // Read NALUs and look for SPS using the new parser
-            await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
-            {
-                if (naluData.Length < 1) continue;
-
-                var naluType = _naluParserWithoutStartCode.GetNaluType(naluData);
-                if (naluType == H264NaluType.SequenceParameterSet)
-                {
-                    return ParseSps(naluData.AsSpan());
-                }
-            }
-
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to extract SPS from file: {FilePath}", filePath);
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Extract PPS from H.264 bitstream file using the improved NALU parser
-    /// </summary>
-    public async Task<V4L2CtrlH264Pps?> ExtractPpsAsync(string filePath)
-    {
-        if (_currentPps.HasValue)
-            return _currentPps.Value;
-
-        try
-        {
-            using var fileStream = File.OpenRead(filePath);
-            using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
-
-            // Read file data
-            int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
-            var buffer = new byte[maxBytes];
-            int bytesRead = await fileStream.ReadAsync(buffer, 0, maxBytes);
-
-            // Feed data to NALU provider
-            await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), CancellationToken.None);
-            naluProvider.CompleteWriting();
-
-            // Read NALUs and look for PPS using the new parser
-            await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(CancellationToken.None))
-            {
-                if (naluData.Length < 1) continue;
-
-                var naluType = _naluParserWithoutStartCode.GetNaluType(naluData);
-                if (naluType == H264NaluType.PictureParameterSet)
-                {
-                    return ParsePps(naluData.AsSpan());
-                }
-            }
-
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to extract PPS from file: {FilePath}", filePath);
-            return null;
-        }
-    }
-
-    /// <summary>
     /// Parse SPS NALU data into V4L2 control structure using the new parser
     /// </summary>
     public V4L2CtrlH264Sps ParseSps(ReadOnlySpan<byte> spsData)
@@ -243,14 +151,6 @@ public class H264ParameterSetParser
     public V4L2CtrlH264Pps ParsePps(ReadOnlySpan<byte> ppsData)
     {
         return ParsePpsToControl(ppsData.ToArray());
-    }
-
-    /// <summary>
-    /// Parse slice header to create V4L2 slice parameters using the new parser
-    /// </summary>
-    public V4L2CtrlH264SliceParams ParseSliceHeader(ReadOnlySpan<byte> sliceData, V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps)
-    {
-        return ParseSliceHeaderToControl(sliceData.ToArray(), 0);
     }
 
     /// <summary>
