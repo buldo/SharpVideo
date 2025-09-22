@@ -11,9 +11,9 @@ public class H264NaluProvider : IDisposable
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly Task _processingTask;
-    private readonly NaluOutputMode _outputMode;
+    private readonly NaluMode _outputMode;
 
-    public H264NaluProvider(NaluOutputMode outputMode = NaluOutputMode.WithStartCode)
+    public H264NaluProvider(NaluMode outputMode = NaluMode.WithStartCode)
     {
         _outputMode = outputMode;
         _processingTask = ProcessNalusAsync(_cancellationTokenSource.Token);
@@ -126,7 +126,7 @@ public class H264NaluProvider : IDisposable
 
             byte[] naluData;
 
-            if (_outputMode == NaluOutputMode.WithStartCode)
+            if (_outputMode == NaluMode.WithStartCode)
             {
                 // Include the start code in the NALU (Annex-B format)
                 var naluLength = nextStartPos - startPos;
@@ -208,7 +208,7 @@ public class H264NaluProvider : IDisposable
             {
                 byte[] finalNalu;
 
-                if (_outputMode == NaluOutputMode.WithStartCode)
+                if (_outputMode == NaluMode.WithStartCode)
                 {
                     // Include start code
                     finalNalu = buffer.ToArray();
@@ -230,7 +230,7 @@ public class H264NaluProvider : IDisposable
         else
         {
             // No start codes found
-            if (_outputMode == NaluOutputMode.WithStartCode)
+            if (_outputMode == NaluMode.WithStartCode)
             {
                 // Add a start code to make it Annex-B format
                 var annexBNalu = new byte[4 + buffer.Count];

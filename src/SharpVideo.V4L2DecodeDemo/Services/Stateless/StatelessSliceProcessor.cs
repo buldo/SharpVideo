@@ -233,7 +233,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         long processedBytes = 0;
 
         using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
+        using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
 
         // Read entire file for NALU processing
         var buffer = new byte[fileStream.Length];
@@ -289,7 +289,7 @@ public class StatelessSliceProcessor : IStatelessSliceProcessor
         
         var fileInfo = new FileInfo(filePath);
         using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
+        using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
 
         // Read file data
         var buffer = new byte[Math.Min(fileStream.Length, 10 * 1024 * 1024)]; // Limit to 10MB for large files

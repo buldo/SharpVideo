@@ -3,7 +3,7 @@
 /// <summary>
 /// Specifies how NALU data should be formatted in the output
 /// </summary>
-public enum NaluOutputMode
+public enum NaluMode
 {
     /// <summary>
     /// Include the start code with each NALU (Annex-B format)

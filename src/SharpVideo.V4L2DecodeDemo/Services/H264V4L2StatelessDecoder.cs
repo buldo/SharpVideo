@@ -396,7 +396,7 @@ public class H264V4L2StatelessDecoder
         long processedBytes = 0;
         
         using var fileStream = File.OpenRead(filePath);
-        using var naluProvider = new H264NaluProvider(_useStartCodes ? NaluOutputMode.WithStartCode : NaluOutputMode.WithoutStartCode);
+        using var naluProvider = new H264NaluProvider(_useStartCodes ? NaluMode.WithStartCode : NaluMode.WithoutStartCode);
 
         // Read and process file in chunks
         const int chunkSize = 1024 * 1024;

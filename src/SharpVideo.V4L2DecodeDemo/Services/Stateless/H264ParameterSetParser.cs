@@ -530,7 +530,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         try
         {
             using var fileStream = File.OpenRead(filePath);
-            using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
+            using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
 
             // Read file data
             int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
@@ -573,7 +573,7 @@ public class H264ParameterSetParser : IH264ParameterSetParser
         try
         {
             using var fileStream = File.OpenRead(filePath);
-            using var naluProvider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
+            using var naluProvider = new H264NaluProvider(NaluMode.WithoutStartCode);
 
             // Read file data
             int maxBytes = Math.Min(1024 * 1024, (int)fileStream.Length);
