@@ -39,7 +39,7 @@ public class H264V4L2StatelessDecoder
     private readonly Queue<uint> _availableOutputBuffers = new();
     private readonly Queue<uint> _availableCaptureBuffers = new();
     private readonly object _bufferLock = new();
-    
+
     private bool _disposed;
     private int _framesDecoded;
     private readonly Stopwatch _decodingStopwatch = new();
@@ -65,23 +65,23 @@ public class H264V4L2StatelessDecoder
 
         // Create dependencies with proper logger factory
         var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
-        
+
         _parameterSetParser = parameterSetParser ?? new H264ParameterSetParser(
-            loggerFactory.CreateLogger<H264ParameterSetParser>(), 
-            _configuration.InitialWidth, 
+            loggerFactory.CreateLogger<H264ParameterSetParser>(),
+            _configuration.InitialWidth,
             _configuration.InitialHeight);
 
         _controlManager = controlManager ?? new V4L2StatelessControlManager(
-            loggerFactory.CreateLogger<V4L2StatelessControlManager>(), 
-            _parameterSetParser, 
+            loggerFactory.CreateLogger<V4L2StatelessControlManager>(),
+            _parameterSetParser,
             _device);
 
         _sliceProcessor = sliceProcessor ?? new StatelessSliceProcessor(
-            loggerFactory.CreateLogger<StatelessSliceProcessor>(), 
-            _controlManager, 
-            _parameterSetParser, 
-            _device, 
-            _outputBuffers, 
+            loggerFactory.CreateLogger<StatelessSliceProcessor>(),
+            _controlManager,
+            _parameterSetParser,
+            _device,
+            _outputBuffers,
             () => _hasValidParameterSets);
     }
 
@@ -139,30 +139,20 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Starting H.264 stateless NALU-by-NALU decode of {FilePath}", filePath);
         _decodingStopwatch.Start();
 
-        try
-        {
-            // Initialize decoder and dependencies
-            await InitializeDecoderAsync(cancellationToken);
+        // Initialize decoder and dependencies
+        await InitializeDecoderAsync(cancellationToken);
 
-            // Extract and set parameter sets
-            await ExtractAndSetParameterSetsAsync(filePath, cancellationToken);
+        // Extract and set parameter sets
+        await ExtractAndSetParameterSetsAsync(filePath, cancellationToken);
 
-            // Process the file NALU by NALU with stateless decoding
-            await ProcessVideoFileNaluByNaluStatelessAsync(filePath, cancellationToken);
+        // Process the file NALU by NALU with stateless decoding
+        await ProcessVideoFileStatelessAsync(filePath, cancellationToken);
 
-            _decodingStopwatch.Stop();
-            _logger.LogInformation("Stateless NALU-by-NALU decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
-                _framesDecoded, _decodingStopwatch.Elapsed.TotalSeconds, _framesDecoded / _decodingStopwatch.Elapsed.TotalSeconds);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during H.264 stateless NALU-by-NALU decoding");
-            throw;
-        }
-        finally
-        {
-            Cleanup();
-        }
+        _decodingStopwatch.Stop();
+        _logger.LogInformation(
+            "Stateless NALU-by-NALU decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
+            _framesDecoded, _decodingStopwatch.Elapsed.TotalSeconds, _framesDecoded / _decodingStopwatch.Elapsed.TotalSeconds);
+
     }
 
     private async Task InitializeDecoderAsync(CancellationToken cancellationToken)
@@ -176,13 +166,13 @@ public class H264V4L2StatelessDecoder
         {
             // Configure decoder formats
             ConfigureFormats();
-            
+
             // Configure V4L2 controls for stateless operation and get start code preference
             _useStartCodes = await _controlManager.ConfigureStatelessControlsAsync(cancellationToken);
-            
+
             // Setup and map buffers properly with real V4L2 mmap
             await SetupAndMapBuffersAsync();
-            
+
             // Start streaming on both queues
             StartStreaming();
 
@@ -234,7 +224,7 @@ public class H264V4L2StatelessDecoder
             };
 
             _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
-            _logger.LogInformation("Set capture format: {Width}x{Height} with {Planes} planes", 
+            _logger.LogInformation("Set capture format: {Width}x{Height} with {Planes} planes",
                 captureFormat.Width, captureFormat.Height, captureFormat.NumPlanes);
 
             _logger.LogInformation("Format configuration completed successfully");
@@ -254,11 +244,11 @@ public class H264V4L2StatelessDecoder
         {
             // Setup OUTPUT buffers for slice data with proper V4L2 mmap
             await SetupBufferQueueAsync(V4L2BufferType.VIDEO_OUTPUT_MPLANE, _configuration.OutputBufferCount, _outputBuffers, _availableOutputBuffers);
-            
+
             // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
             await SetupBufferQueueAsync(V4L2BufferType.VIDEO_CAPTURE_MPLANE, _configuration.CaptureBufferCount, _captureBuffers, _availableCaptureBuffers);
 
-            _logger.LogInformation("Buffer setup completed: {OutputBuffers} output, {CaptureBuffers} capture", 
+            _logger.LogInformation("Buffer setup completed: {OutputBuffers} output, {CaptureBuffers} capture",
                 _outputBuffers.Count, _captureBuffers.Count);
         }
         catch (Exception ex)
@@ -286,7 +276,7 @@ public class H264V4L2StatelessDecoder
             throw new InvalidOperationException($"Failed to request {bufferType} buffers: {result.ErrorMessage}");
         }
 
-        _logger.LogDebug("Requested {RequestedCount} {BufferType} buffers, got {ActualCount}", 
+        _logger.LogDebug("Requested {RequestedCount} {BufferType} buffers, got {ActualCount}",
             bufferCount, bufferType, reqBufs.Count);
 
         // Map each buffer - simplified approach for demo
@@ -295,7 +285,7 @@ public class H264V4L2StatelessDecoder
             // Determine plane count based on buffer type
             int planeCount;
             uint totalSize;
-            
+
             if (bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE)
             {
                 // Output buffer for H.264 slice data - single plane
@@ -312,10 +302,10 @@ public class H264V4L2StatelessDecoder
             }
 
             var bufferPtr = Marshal.AllocHGlobal((int)totalSize);
-            
+
             // Create planes array with proper configuration
             var planes = new V4L2Plane[planeCount];
-            
+
             if (bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE)
             {
                 // Single plane for slice data
@@ -330,13 +320,13 @@ public class H264V4L2StatelessDecoder
                 // Two planes for NV12 format
                 uint yPlaneSize = _configuration.InitialWidth * _configuration.InitialHeight;
                 uint uvPlaneSize = totalSize - yPlaneSize;
-                
+
                 planes[0] = new V4L2Plane
                 {
                     Length = yPlaneSize,
                     BytesUsed = yPlaneSize // Pre-allocated size for capture
                 };
-                
+
                 planes[1] = new V4L2Plane
                 {
                     Length = uvPlaneSize,
@@ -354,8 +344,8 @@ public class H264V4L2StatelessDecoder
 
             bufferList.Add(mappedBuffer);
             availableQueue.Enqueue(i);
-            
-            _logger.LogTrace("Mapped buffer {Index} for {BufferType}: {Size} bytes, {PlaneCount} planes at {Pointer:X8}", 
+
+            _logger.LogTrace("Mapped buffer {Index} for {BufferType}: {Size} bytes, {PlaneCount} planes at {Pointer:X8}",
                 i, bufferType, totalSize, planeCount, bufferPtr.ToInt64());
         }
 
@@ -394,7 +384,7 @@ public class H264V4L2StatelessDecoder
         var fileInfo = new FileInfo(filePath);
         long totalBytes = fileInfo.Length;
         long processedBytes = 0;
-        
+
         using var fileStream = File.OpenRead(filePath);
         using var naluProvider = new H264NaluProvider(_useStartCodes ? NaluMode.WithStartCode : NaluMode.WithoutStartCode);
 
@@ -417,7 +407,7 @@ public class H264V4L2StatelessDecoder
             if (naluData.Length < 1) continue;
 
             byte naluType = (byte)(naluData[0] & 0x1F);
-            
+
             // Handle SPS/PPS that appear in stream (update parameter sets)
             if (naluType == 7 || naluType == 8)
             {
@@ -429,7 +419,7 @@ public class H264V4L2StatelessDecoder
             if (naluType == 1 || naluType == 5)
             {
                 await ProcessSliceNalu(naluData.ToArray(), naluType);
-                
+
                 // Try to dequeue completed frames
                 await DequeueCompletedFrames();
             }
@@ -437,12 +427,6 @@ public class H264V4L2StatelessDecoder
 
         // Flush any remaining frames
         await FlushDecoder();
-    }
-
-    private async Task ProcessVideoFileNaluByNaluStatelessAsync(string filePath, CancellationToken cancellationToken = default)
-    {
-        // Similar to ProcessVideoFileStatelessAsync but with frame-by-frame callbacks
-        await ProcessVideoFileStatelessAsync(filePath, cancellationToken);
     }
 
     private async Task HandleParameterSetNalu(byte[] naluData, byte naluType)
@@ -477,7 +461,7 @@ public class H264V4L2StatelessDecoder
     private async Task ProcessSliceNalu(byte[] sliceData, byte naluType)
     {
         uint bufferIndex;
-        
+
         // Get available output buffer
         lock (_bufferLock)
         {
@@ -495,7 +479,7 @@ public class H264V4L2StatelessDecoder
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to queue slice data for buffer {BufferIndex}", bufferIndex);
-            
+
             // Return buffer to available queue
             lock (_bufferLock)
             {
@@ -513,7 +497,7 @@ public class H264V4L2StatelessDecoder
             if (dequeuedFrame != null)
             {
                 _framesDecoded++;
-                
+
                 FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
                 {
                     FrameNumber = _framesDecoded,
@@ -566,16 +550,16 @@ public class H264V4L2StatelessDecoder
     private async Task FlushDecoder()
     {
         _logger.LogInformation("Flushing decoder...");
-        
+
         // Send EOS to decoder and drain remaining frames
         // Implementation would depend on V4L2 driver capabilities
-        
+
         // Dequeue any remaining frames
         while (true)
         {
             var frame = await _sliceProcessor.DequeueFrameAsync(_device.fd);
             if (frame == null) break;
-            
+
             _framesDecoded++;
             FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
             {
@@ -590,14 +574,14 @@ public class H264V4L2StatelessDecoder
     private void StartStreaming()
     {
         _logger.LogInformation("Starting V4L2 streaming...");
-        
+
         try
         {
             // Queue all capture buffers before starting streaming
             for (uint i = 0; i < _captureBuffers.Count; i++)
             {
                 var mappedBuffer = _captureBuffers[(int)i];
-                
+
                 var buffer = new V4L2Buffer
                 {
                     Index = i,
@@ -635,11 +619,11 @@ public class H264V4L2StatelessDecoder
             // Start streaming on OUTPUT queue first
             _device.StreamOn(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
             _logger.LogTrace("Started OUTPUT streaming");
-            
+
             // Start streaming on CAPTURE queue
             _device.StreamOn(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
             _logger.LogTrace("Started CAPTURE streaming");
-            
+
             _logger.LogInformation("V4L2 streaming started successfully");
         }
         catch (Exception ex)
