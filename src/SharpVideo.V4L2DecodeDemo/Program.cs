@@ -74,7 +74,8 @@ internal class Program
         logger.LogInformation("This may take some time depending on file size and hardware capabilities.\n");
 
         var startTime = DateTime.Now;
-        await decoder.DecodeFileNaluByNaluAsync(filePath);
+        using var fileStream = File.OpenRead(filePath);
+        await decoder.DecodeStreamAsync(fileStream);
         var elapsed = DateTime.Now - startTime;
 
         logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", elapsed.TotalSeconds);

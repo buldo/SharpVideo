@@ -86,23 +86,6 @@ public class H264V4L2StatelessDecoder
     }
 
     /// <summary>
-    /// Decodes an H.264 file using V4L2 hardware acceleration (stateless decoder)
-    /// </summary>
-    public async Task DecodeFileAsync(string filePath, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(filePath))
-            throw new ArgumentException("File path cannot be null or empty", nameof(filePath));
-
-        if (!File.Exists(filePath))
-            throw new FileNotFoundException($"Video file not found: {filePath}");
-
-        _logger.LogInformation("Starting H.264 stateless decode of {FilePath}", filePath);
-
-        using var fileStream = File.OpenRead(filePath);
-        await DecodeStreamAsync(fileStream, cancellationToken);
-    }
-
-    /// <summary>
     /// Decodes H.264 stream using V4L2 hardware acceleration with efficient stream processing
     /// </summary>
     public async Task DecodeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
@@ -339,16 +322,6 @@ public class H264V4L2StatelessDecoder
                 _availableOutputBuffers.Enqueue(bufferIndex);
             }
         }
-    }
-
-    /// <summary>
-    /// Decodes an H.264 file using V4L2 hardware acceleration, processing data NALU by NALU
-    /// This method is now just an alias for DecodeFileAsync for backward compatibility
-    /// </summary>
-    public async Task DecodeFileNaluByNaluAsync(string filePath, CancellationToken cancellationToken = default)
-    {
-        _logger.LogInformation("Starting H.264 stateless NALU-by-NALU decode of {FilePath} (using new streaming implementation)", filePath);
-        await DecodeFileAsync(filePath, cancellationToken);
     }
 
     private async Task InitializeDecoderAsync(CancellationToken cancellationToken)
