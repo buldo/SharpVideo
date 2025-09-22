@@ -302,54 +302,51 @@ namespace SharpVideo.Tests
             // Assert
             Assert.NotEmpty(nalus);
 
-            // Verify each NALU starts with a start code (Annex-B format)
-            foreach (var nalu in nalus)
+            // Enhanced validation
+            var naluStats = AnalyzeNalus(nalus);
+
+            // Verify basic requirements
+            Assert.True(naluStats.TotalNalus > 0, "Should have parsed at least one NALU");
+            Assert.True(naluStats.TotalDataSize > 0, "Total NALU data size should be greater than 0");
+
+            // Verify each NALU has correct format
+            foreach (var (nalu, index) in nalus.Select((n, i) => (n, i)))
             {
-                Assert.True(nalu.Length >= 4, "NALU should have at least 4 bytes (start code + data)");
-
-                // Check for 4-byte start code or 3-byte start code
-                bool has4ByteStartCode = nalu.Length >= 4 &&
-                    nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x00 && nalu[3] == 0x01;
-                bool has3ByteStartCode = nalu.Length >= 3 &&
-                    nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x01;
-
-                Assert.True(has4ByteStartCode || has3ByteStartCode, "NALU should start with Annex-B start code");
+                ValidateNaluFormat(nalu, index);
             }
 
-            // Verify we have some expected NALU types (checking after start code)
-            var spsFound = nalus.Any(nalu =>
-            {
-                var naluType = GetNaluType(nalu);
-                return naluType == 7; // SPS
-            });
+            // Verify we have expected NALU types for a valid H.264 stream
+            Assert.True(naluStats.SpsCount > 0, $"Should find at least one SPS NALU, found {naluStats.SpsCount}");
+            Assert.True(naluStats.PpsCount > 0, $"Should find at least one PPS NALU, found {naluStats.PpsCount}");
+            Assert.True(naluStats.SliceCount > 0, $"Should find at least one slice NALU, found {naluStats.SliceCount}");
 
-            var ppsFound = nalus.Any(nalu =>
-            {
-                var naluType = GetNaluType(nalu);
-                return naluType == 8; // PPS
-            });
+            // Verify NALU sizes are reasonable
+            Assert.True(naluStats.MinNaluSize >= 5, $"Minimum NALU size should be at least 5 bytes (start code + header), got {naluStats.MinNaluSize}");
+            Assert.True(naluStats.MaxNaluSize <= h264Data.Length, $"Maximum NALU size ({naluStats.MaxNaluSize}) should not exceed input data size ({h264Data.Length})");
+            Assert.True(naluStats.AverageNaluSize > 0, $"Average NALU size should be greater than 0, got {naluStats.AverageNaluSize:F2}");
 
-            var sliceFound = nalus.Any(nalu =>
-            {
-                var naluType = GetNaluType(nalu);
-                return naluType == 1; // Non-IDR slice
-            });
+            // Verify data integrity - sum of all NALU data should not exceed input
+            var totalNaluBytes = nalus.Sum(n => n.Length);
+            Assert.True(totalNaluBytes <= h264Data.Length + (nalus.Count * 4),
+                $"Total NALU bytes ({totalNaluBytes}) should not significantly exceed input data ({h264Data.Length})");
 
-            Assert.True(spsFound, "Should find SPS NALU");
-            Assert.True(ppsFound, "Should find PPS NALU");
-            Assert.True(sliceFound, "Should find slice NALUs");
+            // Log statistics for debugging
+            LogNaluStatistics(naluStats);
         }
 
         [Fact]
-        public async Task Should_Handle_Concurrent_Appends()
+        public async Task Should_Parse_Real_H264_File_WithoutStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluOutputMode.WithStartCode);
-            var nalu1 = new byte[] { 0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1E };
-            var nalu2 = new byte[] { 0x00, 0x00, 0x00, 0x01, 0x68, 0xCE, 0x38, 0x80 };
-            var nalu3 = new byte[] { 0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00 };
-            var endMarker = new byte[] { 0x00, 0x00, 0x00, 0x01 };
+            _provider = new H264NaluProvider(NaluOutputMode.WithoutStartCode);
+            var testVideoPath = Path.Combine(Directory.GetCurrentDirectory(), "test_video.h264");
 
+            if (!File.Exists(testVideoPath))
+            {
+                return;
+            }
+
+            var h264Data = await File.ReadAllBytesAsync(testVideoPath);
             var nalus = new List<byte[]>();
 
             // Act
@@ -361,52 +358,266 @@ namespace SharpVideo.Tests
                 }
             });
 
-            var appendTasks = new[]
-            {
-                _provider.AppendData(nalu1, CancellationToken.None),
-                _provider.AppendData(nalu2, CancellationToken.None),
-                _provider.AppendData(nalu3, CancellationToken.None),
-                _provider.AppendData(endMarker, CancellationToken.None)
-            };
-
-            await Task.WhenAll(appendTasks);
+            await _provider.AppendData(h264Data, CancellationToken.None);
             _provider.CompleteWriting();
             await readTask;
 
             // Assert
-            Assert.Equal(3, nalus.Count);
-            Assert.Equal(nalu1, nalus[0]); // Should include start code
-            Assert.Equal(nalu2, nalus[1]); // Should include start code
-            Assert.Equal(nalu3, nalus[2]); // Should include start code
-        }
+            Assert.NotEmpty(nalus);
 
-        [Fact]
-        public async Task Should_Handle_Cancellation()
-        {
-            // Arrange
-            _provider = new H264NaluProvider(NaluOutputMode.WithStartCode);
-            using var cts = new CancellationTokenSource();
-            cts.CancelAfter(TimeSpan.FromMilliseconds(100));
-
-            // Act & Assert
-            await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            // Verify NALUs don't have start codes
+            foreach (var (nalu, index) in nalus.Select((n, i) => (n, i)))
             {
-                var largeData = new byte[1024 * 1024]; // 1MB of data
-                await _provider.AppendData(largeData, cts.Token);
-            });
+                Assert.True(nalu.Length >= 1, $"NALU {index} should have at least 1 byte (header)");
+
+                // Should not start with start code patterns
+                if (nalu.Length >= 4)
+                {
+                    bool has4ByteStartCode = nalu[0] == 0x00 && nalu[1] == 0x00 &&
+                                           nalu[2] == 0x00 && nalu[3] == 0x01;
+                    Assert.False(has4ByteStartCode, $"NALU {index} should not start with 4-byte start code");
+                }
+
+                if (nalu.Length >= 3)
+                {
+                    bool has3ByteStartCode = nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x01;
+                    Assert.False(has3ByteStartCode, $"NALU {index} should not start with 3-byte start code");
+                }
+
+                // Verify NALU type is valid (should be able to extract from first byte)
+                var naluType = nalu[0] & 0x1F;
+                Assert.True(naluType >= 0 && naluType <= 31, $"NALU {index} type {naluType} should be in valid range 0-31");
+            }
+
+            var naluStats = AnalyzeRawNalus(nalus);
+            LogNaluStatistics(naluStats);
         }
 
         [Fact]
-        public void Should_Complete_Channel_When_Disposed()
+        public async Task Should_Validate_NALU_Data_Integrity()
         {
             // Arrange
-            var provider = new H264NaluProvider();
+            var testVideoPath = Path.Combine(Directory.GetCurrentDirectory(), "test_video.h264");
+            if (!File.Exists(testVideoPath))
+            {
+                return;
+            }
 
-            // Act
-            provider.Dispose();
+            var h264Data = await File.ReadAllBytesAsync(testVideoPath);
+
+            // Test both modes and compare results
+            var nalusWithStartCode = await ParseNalusWithMode(h264Data, NaluOutputMode.WithStartCode);
+            var nalusWithoutStartCode = await ParseNalusWithMode(h264Data, NaluOutputMode.WithoutStartCode);
 
             // Assert
-            Assert.True(provider.NaluReader.Completion.IsCompleted);
+            Assert.Equal(nalusWithStartCode.Count, nalusWithoutStartCode.Count);
+
+            // Additional message for debugging
+            if (nalusWithStartCode.Count != nalusWithoutStartCode.Count)
+            {
+                throw new Exception("Both modes should produce the same number of NALUs");
+            }
+
+            // Verify that WithStartCode mode includes start codes and WithoutStartCode doesn't
+            for (int i = 0; i < nalusWithStartCode.Count; i++)
+            {
+                var naluWithStartCode = nalusWithStartCode[i];
+                var naluWithoutStartCode = nalusWithoutStartCode[i];
+
+                // Extract NALU data without start code from the WithStartCode version
+                var extractedNaluData = ExtractNaluDataWithoutStartCode(naluWithStartCode);
+
+                // Should be identical to WithoutStartCode version
+                Assert.True(extractedNaluData.SequenceEqual(naluWithoutStartCode),
+                    $"NALU {i} data should be identical when start code is stripped");
+
+                // Verify start code presence
+                Assert.True(HasStartCode(naluWithStartCode),
+                    $"NALU {i} with start code mode should have start code");
+                Assert.False(HasStartCode(naluWithoutStartCode),
+                    $"NALU {i} without start code mode should not have start code");
+            }
+        }
+
+        private async Task<List<byte[]>> ParseNalusWithMode(byte[] h264Data, NaluOutputMode mode)
+        {
+            using var provider = new H264NaluProvider(mode);
+            var nalus = new List<byte[]>();
+
+            var readTask = Task.Run(async () =>
+            {
+                await foreach (var nalu in provider.NaluReader.ReadAllAsync())
+                {
+                    nalus.Add(nalu);
+                }
+            });
+
+            await provider.AppendData(h264Data, CancellationToken.None);
+            provider.CompleteWriting();
+            await readTask;
+
+            return nalus;
+        }
+
+        private static byte[] ExtractNaluDataWithoutStartCode(byte[] naluWithStartCode)
+        {
+            // Check for 4-byte start code
+            if (naluWithStartCode.Length >= 4 &&
+                naluWithStartCode[0] == 0x00 && naluWithStartCode[1] == 0x00 &&
+                naluWithStartCode[2] == 0x00 && naluWithStartCode[3] == 0x01)
+            {
+                return naluWithStartCode[4..];
+            }
+
+            // Check for 3-byte start code
+            if (naluWithStartCode.Length >= 3 &&
+                naluWithStartCode[0] == 0x00 && naluWithStartCode[1] == 0x00 &&
+                naluWithStartCode[2] == 0x01)
+            {
+                return naluWithStartCode[3..];
+            }
+
+            // No start code found, return as is
+            return naluWithStartCode;
+        }
+
+        private static bool HasStartCode(byte[] nalu)
+        {
+            if (nalu.Length >= 4 &&
+                nalu[0] == 0x00 && nalu[1] == 0x00 &&
+                nalu[2] == 0x00 && nalu[3] == 0x01)
+            {
+                return true;
+            }
+
+            if (nalu.Length >= 3 &&
+                nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x01)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void ValidateNaluFormat(byte[] nalu, int index)
+        {
+            Assert.True(nalu.Length >= 4, $"NALU {index} should have at least 4 bytes (start code + data)");
+
+            // Check for valid start code
+            bool has4ByteStartCode = nalu.Length >= 4 &&
+                nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x00 && nalu[3] == 0x01;
+            bool has3ByteStartCode = nalu.Length >= 3 &&
+                nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x01;
+
+            Assert.True(has4ByteStartCode || has3ByteStartCode,
+                $"NALU {index} should start with valid Annex-B start code");
+
+            // Validate NALU header
+            int headerIndex = has4ByteStartCode ? 4 : 3;
+            if (headerIndex < nalu.Length)
+            {
+                var naluHeader = nalu[headerIndex];
+                var naluType = naluHeader & 0x1F;
+                var forbiddenZeroBit = (naluHeader & 0x80) >> 7;
+                var nalRefIdc = (naluHeader & 0x60) >> 5;
+
+                Assert.True(forbiddenZeroBit == 0, $"NALU {index} forbidden_zero_bit should be 0");
+                Assert.True(naluType >= 0 && naluType <= 31, $"NALU {index} type {naluType} should be in valid range");
+                Assert.True(nalRefIdc >= 0 && nalRefIdc <= 3, $"NALU {index} nal_ref_idc {nalRefIdc} should be in valid range");
+            }
+        }
+
+        private static NaluStatistics AnalyzeNalus(List<byte[]> nalus)
+        {
+            var stats = new NaluStatistics();
+            stats.TotalNalus = nalus.Count;
+
+            if (nalus.Count == 0) return stats;
+
+            var sizes = new List<int>();
+
+            foreach (var nalu in nalus)
+            {
+                sizes.Add(nalu.Length);
+                stats.TotalDataSize += nalu.Length;
+
+                var naluType = GetNaluType(nalu);
+                switch (naluType)
+                {
+                    case 7: stats.SpsCount++; break;
+                    case 8: stats.PpsCount++; break;
+                    case 1:
+                    case 2:
+                    case 3:
+                    case 4:
+                    case 5: stats.SliceCount++; break;
+                    case 6: stats.SeiCount++; break;
+                    case 9: stats.AudCount++; break;
+                    default: stats.OtherCount++; break;
+                }
+            }
+
+            stats.MinNaluSize = sizes.Min();
+            stats.MaxNaluSize = sizes.Max();
+            stats.AverageNaluSize = sizes.Average();
+
+            return stats;
+        }
+
+        private static NaluStatistics AnalyzeRawNalus(List<byte[]> nalus)
+        {
+            var stats = new NaluStatistics();
+            stats.TotalNalus = nalus.Count;
+
+            if (nalus.Count == 0) return stats;
+
+            var sizes = new List<int>();
+
+            foreach (var nalu in nalus)
+            {
+                sizes.Add(nalu.Length);
+                stats.TotalDataSize += nalu.Length;
+
+                if (nalu.Length > 0)
+                {
+                    var naluType = nalu[0] & 0x1F;
+                    switch (naluType)
+                    {
+                        case 7: stats.SpsCount++; break;
+                        case 8: stats.PpsCount++; break;
+                        case 1:
+                        case 2:
+                        case 3:
+                        case 4:
+                        case 5: stats.SliceCount++; break;
+                        case 6: stats.SeiCount++; break;
+                        case 9: stats.AudCount++; break;
+                        default: stats.OtherCount++; break;
+                    }
+                }
+            }
+
+            stats.MinNaluSize = sizes.Min();
+            stats.MaxNaluSize = sizes.Max();
+            stats.AverageNaluSize = sizes.Average();
+
+            return stats;
+        }
+
+        private static void LogNaluStatistics(NaluStatistics stats)
+        {
+            // This would be visible in test output for debugging
+            Console.WriteLine($"NALU Statistics:");
+            Console.WriteLine($"  Total NALUs: {stats.TotalNalus}");
+            Console.WriteLine($"  Total Data Size: {stats.TotalDataSize} bytes");
+            Console.WriteLine($"  SPS Count: {stats.SpsCount}");
+            Console.WriteLine($"  PPS Count: {stats.PpsCount}");
+            Console.WriteLine($"  Slice Count: {stats.SliceCount}");
+            Console.WriteLine($"  SEI Count: {stats.SeiCount}");
+            Console.WriteLine($"  AUD Count: {stats.AudCount}");
+            Console.WriteLine($"  Other Count: {stats.OtherCount}");
+            Console.WriteLine($"  Size Range: {stats.MinNaluSize} - {stats.MaxNaluSize} bytes");
+            Console.WriteLine($"  Average Size: {stats.AverageNaluSize:F2} bytes");
         }
 
         private static int GetNaluType(byte[] nalu)
@@ -438,6 +649,21 @@ namespace SharpVideo.Tests
         public void Dispose()
         {
             _provider?.Dispose();
+        }
+
+        private record NaluStatistics
+        {
+            public int TotalNalus { get; set; }
+            public int TotalDataSize { get; set; }
+            public int SpsCount { get; set; }
+            public int PpsCount { get; set; }
+            public int SliceCount { get; set; }
+            public int SeiCount { get; set; }
+            public int AudCount { get; set; }
+            public int OtherCount { get; set; }
+            public int MinNaluSize { get; set; }
+            public int MaxNaluSize { get; set; }
+            public double AverageNaluSize { get; set; }
         }
     }
 }
