@@ -596,7 +596,8 @@ namespace SharpVideo.Tests
                 
                 if (nalu.Length > 0)
                 {
-                    var naluType = H264NaluParser.GetNaluType(nalu);
+                    var parser = new H264NaluParser(NaluMode.WithoutStartCode);
+                    var naluType = parser.GetNaluType(nalu);
                     switch (naluType)
                     {
                         case H264NaluType.SequenceParameterSet: stats.SpsCount++; break;
@@ -623,28 +624,9 @@ namespace SharpVideo.Tests
         // Helper method to extract NALU type from Annex-B formatted NALU
         private static H264NaluType GetNaluTypeFromAnnexB(byte[] nalu)
         {
-            // Skip start code to get to NALU header
-            int naluHeaderIndex = -1;
-
-            // Check for 4-byte start code
-            if (nalu.Length >= 5 &&
-                nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x00 && nalu[3] == 0x01)
-            {
-                naluHeaderIndex = 4;
-            }
-            // Check for 3-byte start code
-            else if (nalu.Length >= 4 &&
-                nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x01)
-            {
-                naluHeaderIndex = 3;
-            }
-
-            if (naluHeaderIndex >= 0 && naluHeaderIndex < nalu.Length)
-            {
-                return H264NaluParser.GetNaluType(nalu.AsSpan(naluHeaderIndex));
-            }
-
-            return H264NaluType.Unspecified;
+            // Use parser configured for Annex-B format
+            var parser = new H264NaluParser(NaluMode.WithStartCode);
+            return parser.GetNaluType(nalu.AsSpan());
         }
 
         private static int GetNaluType(byte[] nalu)
