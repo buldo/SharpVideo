@@ -3,15 +3,15 @@ using System.Threading.Channels;
 
 namespace SharpVideo.Tests
 {
-    public class H264NaluProviderTest : IDisposable
+    public class H264AnnexBNaluProviderTest : IDisposable
     {
-        private H264NaluProvider? _provider;
+        private H264AnnexBNaluProvider? _provider;
 
         [Fact]
         public async Task Should_Parse_Single_NALU_With_4Byte_StartCode_WithStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x00, 0x01 }.Concat(naluData).ToArray();
             var inputData = new byte[] { 0x00, 0x00, 0x00, 0x01 }
@@ -32,7 +32,7 @@ namespace SharpVideo.Tests
         public async Task Should_Parse_Single_NALU_With_4Byte_StartCode_WithoutStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithoutStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
             var inputData = new byte[] { 0x00, 0x00, 0x00, 0x01 }
                 .Concat(naluData)
@@ -52,7 +52,7 @@ namespace SharpVideo.Tests
         public async Task Should_Parse_Single_NALU_With_3Byte_StartCode_WithStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x01 }.Concat(naluData).ToArray();
             var inputData = new byte[] { 0x00, 0x00, 0x01 }
@@ -73,7 +73,7 @@ namespace SharpVideo.Tests
         public async Task Should_Parse_Single_NALU_With_3Byte_StartCode_WithoutStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithoutStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
             var inputData = new byte[] { 0x00, 0x00, 0x01 }
                 .Concat(naluData)
@@ -93,7 +93,7 @@ namespace SharpVideo.Tests
         public async Task Should_Parse_Multiple_NALUs_WithStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
             var nalu1 = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // SPS
             var nalu2 = new byte[] { 0x68, 0xCE, 0x38, 0x80 }; // PPS
             var nalu3 = new byte[] { 0x65, 0x88, 0x84, 0x00 }; // IDR slice
@@ -131,7 +131,7 @@ namespace SharpVideo.Tests
         public async Task Should_Parse_Multiple_NALUs_WithoutStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithoutStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
             var nalu1 = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // SPS
             var nalu2 = new byte[] { 0x68, 0xCE, 0x38, 0x80 }; // PPS
             var nalu3 = new byte[] { 0x65, 0x88, 0x84, 0x00 }; // IDR slice
@@ -165,7 +165,7 @@ namespace SharpVideo.Tests
         public async Task Should_Handle_Fragmented_Data()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E, 0xA9, 0x50, 0x14, 0x07 };
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x00, 0x01 }.Concat(naluData).ToArray();
             var startCode = new byte[] { 0x00, 0x00, 0x00, 0x01 };
@@ -188,7 +188,7 @@ namespace SharpVideo.Tests
         public async Task Should_Handle_Mixed_StartCode_Types()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
             var nalu1 = new byte[] { 0x67, 0x42, 0x00, 0x1E };
             var nalu2 = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
 
@@ -222,7 +222,7 @@ namespace SharpVideo.Tests
         public async Task Should_Handle_Empty_Data()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
 
             // Act
             await _provider.AppendData(Array.Empty<byte>(), CancellationToken.None);
@@ -241,7 +241,7 @@ namespace SharpVideo.Tests
         public async Task Should_Handle_Data_Without_StartCodes_WithStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
             var dataWithoutStartCodes = new byte[] { 0x67, 0x42, 0x00, 0x1E, 0xA9, 0x50 };
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x00, 0x01 }.Concat(dataWithoutStartCodes).ToArray();
 
@@ -258,7 +258,7 @@ namespace SharpVideo.Tests
         public async Task Should_Handle_Data_Without_StartCodes_WithoutStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithoutStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
             var dataWithoutStartCodes = new byte[] { 0x67, 0x42, 0x00, 0x1E, 0xA9, 0x50 };
 
             // Act
@@ -274,7 +274,7 @@ namespace SharpVideo.Tests
         public async Task Should_Parse_Real_H264_File()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
             var testVideoPath = Path.Combine(Directory.GetCurrentDirectory(), "test_video.h264");
 
             if (!File.Exists(testVideoPath))
@@ -356,7 +356,7 @@ namespace SharpVideo.Tests
         public async Task Should_Parse_Real_H264_File_WithoutStartCode()
         {
             // Arrange
-            _provider = new H264NaluProvider(NaluMode.WithoutStartCode);
+            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
             var testVideoPath = Path.Combine(Directory.GetCurrentDirectory(), "test_video.h264");
 
             if (!File.Exists(testVideoPath))
@@ -459,7 +459,7 @@ namespace SharpVideo.Tests
 
         private async Task<List<byte[]>> ParseNalusWithMode(byte[] h264Data, NaluMode mode)
         {
-            using var provider = new H264NaluProvider(mode);
+            using var provider = new H264AnnexBNaluProvider(mode);
             var nalus = new List<byte[]>();
 
             var readTask = Task.Run(async () =>

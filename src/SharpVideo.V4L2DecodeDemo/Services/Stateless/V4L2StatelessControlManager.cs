@@ -27,7 +27,7 @@ public class V4L2StatelessControlManager
     }
 
     /// <inheritdoc />
-    public async Task SetSliceParamsControlsAsync(byte[] sliceData, H264NaluType sliceType)
+    public void SetSliceParamsControls(byte[] sliceData, H264NaluType sliceType)
     {
         _logger.LogDebug("Setting slice parameters controls for stateless decoder");
 
@@ -92,7 +92,7 @@ public class V4L2StatelessControlManager
     /// <summary>
     /// Set SPS and PPS parameter sets via V4L2 extended controls (simplified approach)
     /// </summary>
-    public async Task SetParameterSetsAsync(V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps)
+    public void SetParameterSets(V4L2CtrlH264Sps sps, V4L2CtrlH264Pps pps)
     {
         _logger.LogInformation("Setting SPS/PPS controls for stateless decoder");
 

@@ -101,7 +101,7 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Starting H.264 stateless stream decode");
         _decodingStopwatch.Start();
 
-        using var naluProvider = new H264NaluProvider(NaluMode.WithStartCode);
+        using var naluProvider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
 
         try
         {
@@ -135,7 +135,7 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Feeds stream data to NaluProvider in chunks
     /// </summary>
-    private async Task FeedStreamToNaluProviderAsync(Stream stream, H264NaluProvider naluProvider, CancellationToken cancellationToken)
+    private async Task FeedStreamToNaluProviderAsync(Stream stream, H264AnnexBNaluProvider naluProvider, CancellationToken cancellationToken)
     {
         const int bufferSize = 64 * 1024; // 64KB buffer
         var buffer = new byte[bufferSize];
@@ -169,50 +169,41 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Processes NALUs asynchronously as they become available
     /// </summary>
-    private async Task ProcessNalusAsync(H264NaluProvider naluProvider, CancellationToken cancellationToken)
+    private async Task ProcessNalusAsync(H264AnnexBNaluProvider naluProvider, CancellationToken cancellationToken)
     {
-        var naluParser = new H264NaluParser(NaluMode.WithStartCode);
-        try
+        var naluParser = new H264NaluParser(NaluMode.WithoutStartCode);
+        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
-            await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
+            if (naluData.Length < 1)
             {
-                if (naluData.Length < 1) continue;
-
-                var naluType = naluParser.GetNaluType(naluData);
-
-                _logger.LogTrace("Processing NALU type {NaluType}, size: {Size} bytes", naluType, naluData.Length);
-
-                await ProcessNaluByTypeAsync(naluData, naluType, cancellationToken);
+                continue;
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error processing NALUs");
-            throw;
+            var naluType = naluParser.GetNaluType(naluData);
+            ProcessNaluByType(naluData, naluType);
         }
     }
 
     /// <summary>
     /// Processes individual NALU based on its type
     /// </summary>
-    private async Task ProcessNaluByTypeAsync(byte[] naluData, H264NaluType naluType, CancellationToken cancellationToken)
+    private void ProcessNaluByType(byte[] naluData, H264NaluType naluType)
     {
         switch (naluType)
         {
             case H264NaluType.SequenceParameterSet: // SPS
                 _logger.LogDebug("Processing SPS NALU");
-                await HandleSpsNaluAsync(naluData, cancellationToken);
+                HandleSpsNalu(naluData);
                 break;
 
             case H264NaluType.PictureParameterSet: // PPS
                 _logger.LogDebug("Processing PPS NALU");
-                await HandlePpsNaluAsync(naluData, cancellationToken);
+                HandlePpsNalu(naluData);
                 break;
 
             case H264NaluType.CodedSliceNonIdr: // Non-IDR slice
             case H264NaluType.CodedSliceIdr: // IDR slice
                 _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
-                await HandleSliceNaluAsync(naluData, naluType, cancellationToken);
+                HandleSliceNalu(naluData, naluType);
                 break;
 
             default:
@@ -224,7 +215,7 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles SPS (Sequence Parameter Set) NALU
     /// </summary>
-    private async Task HandleSpsNaluAsync(byte[] spsData, CancellationToken cancellationToken)
+    private void HandleSpsNalu(byte[] spsData)
     {
         try
         {
@@ -234,7 +225,7 @@ public class H264V4L2StatelessDecoder
             // If we also have PPS, configure the decoder
             if (_currentPps.HasValue)
             {
-                await _controlManager.SetParameterSetsAsync(_currentSps.Value, _currentPps.Value);
+                _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
                 _hasValidParameterSets = true;
                 _logger.LogInformation("Successfully configured parameter sets from stream");
             }
@@ -243,24 +234,22 @@ public class H264V4L2StatelessDecoder
         {
             _logger.LogWarning(ex, "Failed to parse SPS from stream");
         }
-
-        await Task.CompletedTask;
     }
 
     /// <summary>
     /// Handles PPS (Picture Parameter Set) NALU
     /// </summary>
-    private async Task HandlePpsNaluAsync(byte[] ppsData, CancellationToken cancellationToken)
+    private void HandlePpsNalu(byte[] ppsData)
     {
         try
         {
-            _currentPps = _parameterSetParser.ParsePps(ppsData);
+            _currentPps = _parameterSetParser.ParsePpsToControl(ppsData);
             _logger.LogDebug("Parsed and stored PPS from stream");
 
             // If we also have SPS, configure the decoder
             if (_currentSps.HasValue)
             {
-                await _controlManager.SetParameterSetsAsync(_currentSps.Value, _currentPps.Value);
+                _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
                 _hasValidParameterSets = true;
                 _logger.LogInformation("Successfully configured parameter sets from stream");
             }
@@ -269,14 +258,12 @@ public class H264V4L2StatelessDecoder
         {
             _logger.LogWarning(ex, "Failed to parse PPS from stream");
         }
-
-        await Task.CompletedTask;
     }
 
     /// <summary>
     /// Handles slice NALUs (actual video data)
     /// </summary>
-    private async Task HandleSliceNaluAsync(byte[] sliceData, H264NaluType naluType, CancellationToken cancellationToken)
+    private void HandleSliceNalu(byte[] sliceData, H264NaluType naluType)
     {
         if (!_hasValidParameterSets)
         {
@@ -298,10 +285,10 @@ public class H264V4L2StatelessDecoder
 
         try
         {
-            await _sliceProcessor.QueueStatelessSliceDataAsync(sliceData, naluType, bufferIndex, cancellationToken);
+            _sliceProcessor.QueueStatelessSliceData(sliceData, naluType, bufferIndex);
 
             // Try to dequeue completed frames
-            await DequeueCompletedFrames();
+            DequeueCompletedFrames();
         }
         catch (Exception ex)
         {
@@ -512,12 +499,12 @@ public class H264V4L2StatelessDecoder
         await Task.CompletedTask;
     }
 
-    private async Task DequeueCompletedFrames()
+    private void DequeueCompletedFrames()
     {
         try
         {
             // Dequeue completed frames from capture queue
-            var dequeuedFrame = await _sliceProcessor.DequeueFrameAsync(_device.fd);
+            var dequeuedFrame = _sliceProcessor.DequeueFrame(_device.fd);
             if (dequeuedFrame != null)
             {
                 _framesDecoded++;
@@ -535,7 +522,7 @@ public class H264V4L2StatelessDecoder
             }
 
             // Dequeue completed output buffers to make them available again
-            await DequeueCompletedOutputBuffers();
+            DequeueCompletedOutputBuffers();
         }
         catch (Exception ex)
         {
@@ -543,32 +530,22 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private async Task DequeueCompletedOutputBuffers()
+    private void DequeueCompletedOutputBuffers()
     {
-        // Try to dequeue completed output buffers and return them to available queue
-        try
+        var buffer = new V4L2Buffer
         {
-            var buffer = new V4L2Buffer
-            {
-                Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-                Memory = V4L2Constants.V4L2_MEMORY_MMAP
-            };
+            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+            Memory = V4L2Constants.V4L2_MEMORY_MMAP
+        };
 
-            var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
-            if (result.Success)
+        var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
+        if (result.Success)
+        {
+            lock (_bufferLock)
             {
-                lock (_bufferLock)
-                {
-                    _availableOutputBuffers.Enqueue(buffer.Index);
-                }
+                _availableOutputBuffers.Enqueue(buffer.Index);
             }
         }
-        catch (Exception ex)
-        {
-            _logger.LogTrace(ex, "No output buffers ready for dequeue");
-        }
-
-        await Task.CompletedTask;
     }
 
     private void StartStreaming()

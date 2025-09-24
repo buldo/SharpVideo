@@ -3,7 +3,7 @@ using System.Threading.Channels;
 
 namespace SharpVideo.H264;
 
-public class H264NaluProvider : IDisposable
+public class H264AnnexBNaluProvider : IDisposable
 {
     private readonly Pipe _pipe = new Pipe();
     private readonly Channel<byte[]> _channel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
@@ -13,7 +13,7 @@ public class H264NaluProvider : IDisposable
     private readonly Task _processingTask;
     private readonly NaluMode _outputMode;
 
-    public H264NaluProvider(NaluMode outputMode = NaluMode.WithStartCode)
+    public H264AnnexBNaluProvider(NaluMode outputMode = NaluMode.WithStartCode)
     {
         _outputMode = outputMode;
         _processingTask = ProcessNalusAsync(_cancellationTokenSource.Token);

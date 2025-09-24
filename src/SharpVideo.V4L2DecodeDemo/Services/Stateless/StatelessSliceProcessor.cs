@@ -61,7 +61,7 @@ public class StatelessSliceProcessor
     /// <summary>
     /// Queue stateless slice data with proper control setup
     /// </summary>
-    public async Task QueueStatelessSliceDataAsync(byte[] sliceData, H264NaluType naluType, uint bufferIndex, CancellationToken cancellationToken)
+    public void QueueStatelessSliceData(byte[] sliceData, H264NaluType naluType, uint bufferIndex)
     {
         if (!_hasValidParameterSetsProvider())
         {
@@ -79,7 +79,7 @@ public class StatelessSliceProcessor
         }
 
         // First, set the slice parameters controls
-        await _controlManager.SetSliceParamsControlsAsync(sliceData, naluType);
+        _controlManager.SetSliceParamsControls(sliceData, naluType);
 
         // Extract only the slice data (without start codes if configured)
         // TODO: Get useStartCodes from configuration
@@ -89,108 +89,104 @@ public class StatelessSliceProcessor
             pureSliceData.Length, naluType, bufferIndex);
 
         // Queue only the slice data to the hardware
-        await QueueSliceDataToHardwareAsync(pureSliceData, bufferIndex, cancellationToken,
-            isKeyFrame: naluType == H264NaluType.CodedSliceIdr); // IDR slice is keyframe
+        QueueSliceDataToHardware(pureSliceData, bufferIndex, isKeyFrame: naluType == H264NaluType.CodedSliceIdr); // IDR slice is keyframe
     }
 
     /// <summary>
     /// Queues slice data to the hardware decoder (for stateless operation)
     /// </summary>
-    private async Task QueueSliceDataToHardwareAsync(byte[] sliceData, uint bufferIndex, CancellationToken cancellationToken, bool isKeyFrame = false, bool isEos = false)
+    private void QueueSliceDataToHardware(byte[] sliceData, uint bufferIndex, bool isKeyFrame = false, bool isEos = false)
     {
-        await Task.Run(() =>
+        try
         {
-            try
+            // Skip empty data
+            if (sliceData.Length == 0)
             {
-                // Skip empty data
-                if (sliceData.Length == 0)
-                {
-                    _logger.LogDebug("Skipping empty slice data buffer");
-                    return;
-                }
-
-                var mappedBuffer = _outputBuffers[(int)bufferIndex];
-
-                // Critical: Don't truncate slice data as it will break decoding
-                if (sliceData.Length > mappedBuffer.Size)
-                {
-                    throw new InvalidOperationException(
-                        $"Slice data ({sliceData.Length} bytes) exceeds buffer size ({mappedBuffer.Size} bytes). " +
-                        "This indicates insufficient buffer allocation or corrupted data.");
-                }
-
-                // Copy slice data to mapped buffer
-                Marshal.Copy(sliceData, 0, mappedBuffer.Pointer, sliceData.Length);
-
-                // Setup buffer for queuing - handle multiplanar properly
-                if (mappedBuffer.Planes.Length > 0)
-                {
-                    mappedBuffer.Planes[0].BytesUsed = (uint)sliceData.Length;
-                    mappedBuffer.Planes[0].Length = mappedBuffer.Size;
-                }
-
-                // Set appropriate flags for stateless decoder
-                uint flags = 0x01; // V4L2_BUF_FLAG_MAPPED
-
-                if (isKeyFrame)
-                {
-                    flags |= 0x00000008; // V4L2_BUF_FLAG_KEYFRAME
-                    _logger.LogDebug("Setting KEYFRAME flag for slice data");
-                }
-
-                // End-of-stream flag if needed
-                if (isEos)
-                {
-                    flags |= 0x00100000; // V4L2_BUF_FLAG_LAST
-                    _logger.LogDebug("Setting EOS flag");
-                }
-
-                // Create buffer structure for stateless decoding
-                var buffer = new V4L2Buffer
-                {
-                    Index = bufferIndex,
-                    Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
-                    Length = (uint)mappedBuffer.Planes.Length,
-                    Field = (uint)V4L2Field.NONE,
-                    BytesUsed = (uint)sliceData.Length,
-                    Flags = flags,
-                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-                    Sequence = 0
-                };
-
-                unsafe
-                {
-                    // Properly set planes pointer for multiplanar buffer
-                    fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
-                    {
-                        buffer.Planes = planePtr;
-                    }
-                }
-
-                // Queue the buffer containing only slice data
-                var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
-                if (!result.Success)
-                {
-                    int errorCode = Marshal.GetLastWin32Error();
-                    string errorDescription = GetErrorDescription(errorCode);
-                    string v4l2Context = GetV4L2ErrorContext(errorCode) ?? string.Empty;
-
-                    _logger.LogError("Failed to queue slice data buffer {Index}: {ErrorDesc} - {Context}",
-                        bufferIndex, errorDescription, v4l2Context);
-
-                    throw new InvalidOperationException(
-                        $"Failed to queue slice data buffer {bufferIndex}: {errorDescription}. {v4l2Context}");
-                }
-
-                _logger.LogTrace("Queued {ByteCount} bytes of slice data to buffer {BufferIndex}", sliceData.Length, bufferIndex);
+                _logger.LogDebug("Skipping empty slice data buffer");
+                return;
             }
-            catch (Exception ex) when (!(ex is InvalidOperationException))
+
+            var mappedBuffer = _outputBuffers[(int)bufferIndex];
+
+            // Critical: Don't truncate slice data as it will break decoding
+            if (sliceData.Length > mappedBuffer.Size)
             {
-                _logger.LogError(ex, "Unexpected error queuing slice data buffer {BufferIndex}", bufferIndex);
-                throw new InvalidOperationException($"Failed to queue slice data buffer {bufferIndex}: {ex.Message}", ex);
+                throw new InvalidOperationException(
+                    $"Slice data ({sliceData.Length} bytes) exceeds buffer size ({mappedBuffer.Size} bytes). " +
+                    "This indicates insufficient buffer allocation or corrupted data.");
             }
-        }, cancellationToken);
+
+            // Copy slice data to mapped buffer
+            Marshal.Copy(sliceData, 0, mappedBuffer.Pointer, sliceData.Length);
+
+            // Setup buffer for queuing - handle multiplanar properly
+            if (mappedBuffer.Planes.Length > 0)
+            {
+                mappedBuffer.Planes[0].BytesUsed = (uint)sliceData.Length;
+                mappedBuffer.Planes[0].Length = mappedBuffer.Size;
+            }
+
+            // Set appropriate flags for stateless decoder
+            uint flags = 0x01; // V4L2_BUF_FLAG_MAPPED
+
+            if (isKeyFrame)
+            {
+                flags |= 0x00000008; // V4L2_BUF_FLAG_KEYFRAME
+                _logger.LogDebug("Setting KEYFRAME flag for slice data");
+            }
+
+            // End-of-stream flag if needed
+            if (isEos)
+            {
+                flags |= 0x00100000; // V4L2_BUF_FLAG_LAST
+                _logger.LogDebug("Setting EOS flag");
+            }
+
+            // Create buffer structure for stateless decoding
+            var buffer = new V4L2Buffer
+            {
+                Index = bufferIndex,
+                Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+                Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                Length = (uint)mappedBuffer.Planes.Length,
+                Field = (uint)V4L2Field.NONE,
+                BytesUsed = (uint)sliceData.Length,
+                Flags = flags,
+                Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                Sequence = 0
+            };
+
+            unsafe
+            {
+                // Properly set planes pointer for multiplanar buffer
+                fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+                {
+                    buffer.Planes = planePtr;
+                }
+            }
+
+            // Queue the buffer containing only slice data
+            var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
+            if (!result.Success)
+            {
+                int errorCode = Marshal.GetLastWin32Error();
+                string errorDescription = GetErrorDescription(errorCode);
+                string v4l2Context = GetV4L2ErrorContext(errorCode) ?? string.Empty;
+
+                _logger.LogError("Failed to queue slice data buffer {Index}: {ErrorDesc} - {Context}",
+                    bufferIndex, errorDescription, v4l2Context);
+
+                throw new InvalidOperationException(
+                    $"Failed to queue slice data buffer {bufferIndex}: {errorDescription}. {v4l2Context}");
+            }
+
+            _logger.LogTrace("Queued {ByteCount} bytes of slice data to buffer {BufferIndex}", sliceData.Length, bufferIndex);
+        }
+        catch (Exception ex) when (!(ex is InvalidOperationException))
+        {
+            _logger.LogError(ex, "Unexpected error queuing slice data buffer {BufferIndex}", bufferIndex);
+            throw new InvalidOperationException($"Failed to queue slice data buffer {bufferIndex}: {ex.Message}", ex);
+        }
     }
 
     private string GetErrorDescription(int errorCode)
@@ -223,7 +219,7 @@ public class StatelessSliceProcessor
     /// <summary>
     /// Dequeue and return decoded frame from CAPTURE buffer
     /// </summary>
-    public async Task<object?> DequeueFrameAsync(int deviceFd)
+    public  object? DequeueFrame(int deviceFd)
     {
         try
         {
@@ -254,7 +250,7 @@ public class StatelessSliceProcessor
                     frameInfo.BufferIndex, frameInfo.BytesUsed, frameInfo.Sequence);
 
                 // Re-queue the capture buffer for continuous operation
-                await RequeueCaptureBufferAsync(deviceFd, buffer.Index);
+                RequeueCaptureBuffer(deviceFd, buffer.Index);
 
                 return frameInfo;
             }
@@ -269,38 +265,25 @@ public class StatelessSliceProcessor
             _logger.LogDebug(ex, "Error during frame dequeue operation");
             return null;
         }
-        finally
-        {
-            await Task.CompletedTask;
-        }
     }
 
     /// <summary>
     /// Re-queue capture buffer for continuous operation
     /// </summary>
-    private async Task RequeueCaptureBufferAsync(int deviceFd, uint bufferIndex)
+    private void RequeueCaptureBuffer(int deviceFd, uint bufferIndex)
     {
-        try
+        var buffer = new V4L2Buffer
         {
-            var buffer = new V4L2Buffer
-            {
-                Index = bufferIndex,
-                Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                Memory = V4L2Constants.V4L2_MEMORY_MMAP,
-                Length = 1
-            };
+            Index = bufferIndex,
+            Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
+            Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+            Length = 1
+        };
 
-            var result = LibV4L2.QueueBuffer(deviceFd, ref buffer);
-            if (!result.Success)
-            {
-                _logger.LogWarning("Failed to re-queue capture buffer {Index}: {Error}", bufferIndex, result.ErrorMessage);
-            }
-        }
-        catch (Exception ex)
+        var result = LibV4L2.QueueBuffer(deviceFd, ref buffer);
+        if (!result.Success)
         {
-            _logger.LogWarning(ex, "Error re-queuing capture buffer {Index}", bufferIndex);
+            _logger.LogWarning("Failed to re-queue capture buffer {Index}: {Error}", bufferIndex, result.ErrorMessage);
         }
-
-        await Task.CompletedTask;
     }
 }

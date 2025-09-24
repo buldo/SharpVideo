@@ -64,35 +64,23 @@ public class H264ParameterSetParser
     /// <inheritdoc />
     public V4L2CtrlH264Pps ParsePpsToControl(byte[] ppsData)
     {
-        // Determine which parser to use based on data format
-        var parser = HasStartCode(ppsData) ? _naluParserWithStartCode : _naluParserWithoutStartCode;
+        uint chromaFormatIdc = 1; // 4:2:0 YUV format (most common)
+        var parsedPps = H264PpsParser.ParsePps(ppsData, chromaFormatIdc);
 
-        // Validate NALU format
-        if (!parser.HasValidFormat(ppsData))
-            throw new ArgumentException("Invalid PPS NALU data format");
-
-        // Extract NALU type and validate
-        var naluType = parser.GetNaluType(ppsData);
-        if (naluType != H264NaluType.PictureParameterSet)
-            throw new ArgumentException($"Expected PPS NALU (type 8), got type {(int)naluType}");
-
-        // Get the raw NALU payload for bitstream parsing
-        var naluPayload = parser.GetNaluPayload(ppsData);
-
-        try
+        if (parsedPps == null)
         {
-            var pps = ParsePpsFromBitstream(naluPayload.ToArray(), 0); // Start from header since payload excludes start code
-
-            _logger.LogDebug("Parsed PPS: ID={PpsId}, SPS_ID={SpsId}, SliceGroups={SliceGroups}, QP={QP}",
-                pps.PicParameterSetId, pps.SeqParameterSetId, pps.NumSliceGroupsMinus1 + 1, pps.PicInitQpMinus26 + 26);
-
-            return pps;
+            throw new Exception("Not able to parse PPS");
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to parse PPS bitstream, using fallback values");
-            return CreateFallbackPps();
-        }
+
+        // Convert the parsed PPS to V4L2 control structure
+        var v4l2Pps = ConvertPpsStateToV4L2(parsedPps);
+
+        _logger.LogDebug(
+            "Successfully parsed PPS using H264PpsParser: ID={PpsId}, SPS_ID={SpsId}, QP={QP}",
+            v4l2Pps.PicParameterSetId, v4l2Pps.SeqParameterSetId, v4l2Pps.PicInitQpMinus26 + 26);
+
+        return v4l2Pps;
+
     }
 
     /// <inheritdoc />
@@ -143,22 +131,6 @@ public class H264ParameterSetParser
     public V4L2CtrlH264Sps ParseSps(ReadOnlySpan<byte> spsData)
     {
         return ParseSpsToControl(spsData.ToArray());
-    }
-
-    /// <summary>
-    /// Parse PPS NALU data into V4L2 control structure using the new parser
-    /// </summary>
-    public V4L2CtrlH264Pps ParsePps(ReadOnlySpan<byte> ppsData)
-    {
-        return ParsePpsToControl(ppsData.ToArray());
-    }
-
-    /// <summary>
-    /// Parse slice header to create V4L2 slice parameters (legacy method)
-    /// </summary>
-    public V4L2CtrlH264SliceParams ParseSliceHeaderToControl(byte[] sliceData, uint frameNum)
-    {
-        return ParseSliceHeaderToControl(sliceData, (byte)frameNum);
     }
 
     /// <summary>
@@ -343,242 +315,51 @@ public class H264ParameterSetParser
     }
 
     /// <summary>
-    /// Parse PPS from actual H.264 bitstream
+    /// Convert PpsState from H264PpsParser to V4L2CtrlH264Pps structure
     /// </summary>
-    private V4L2CtrlH264Pps ParsePpsFromBitstream(byte[] ppsData, int naluStart)
+    private V4L2CtrlH264Pps ConvertPpsStateToV4L2(PpsState pps)
     {
-        if (ppsData == null || ppsData.Length <= naluStart + 1)
+        var v4l2Pps = new V4L2CtrlH264Pps
         {
-            _logger.LogWarning("PPS data is null or too short, using fallback");
-            return CreateFallbackPps();
-        }
-
-        var reader = new H264BitstreamReader(ppsData, naluStart + 1); // Skip NALU header
-        var pps = new V4L2CtrlH264Pps { Flags = 0 };
-
-        try
-        {
-            // Required fields - must be present
-            if (!TryReadUEG(reader, out var ppsId) || ppsId > 255)
-            {
-                _logger.LogWarning("Invalid PPS ID, using fallback");
-                return CreateFallbackPps();
-            }
-            pps.PicParameterSetId = (byte)ppsId;
-
-            if (!TryReadUEG(reader, out var spsId) || spsId > 31)
-            {
-                _logger.LogWarning("Invalid SPS ID in PPS, using fallback");
-                return CreateFallbackPps();
-            }
-            pps.SeqParameterSetId = (byte)spsId;
-
-            // Optional fields - use defaults if not present
-            if (TryReadBit(reader, out var entropyCodingMode) && entropyCodingMode)
-                pps.Flags |= 0x01; // V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE
-
-            if (TryReadBit(reader, out var bottomFieldPicOrder) && bottomFieldPicOrder)
-                pps.Flags |= 0x02;
-
-            if (TryReadUEG(reader, out var numSliceGroups))
-                pps.NumSliceGroupsMinus1 = (byte)Math.Min(numSliceGroups, 7); // Max 8 slice groups
-
-            // Skip slice group parsing if present
-            if (pps.NumSliceGroupsMinus1 > 0)
-            {
-                TrySkipSliceGroupParams(reader, pps.NumSliceGroupsMinus1);
-            }
-
-            if (TryReadUEG(reader, out var numRefL0))
-                pps.NumRefIdxL0DefaultActiveMinus1 = (byte)Math.Min(numRefL0, 31);
-
-            if (TryReadUEG(reader, out var numRefL1))
-                pps.NumRefIdxL1DefaultActiveMinus1 = (byte)Math.Min(numRefL1, 31);
-
-            if (TryReadBit(reader, out var weightedPred) && weightedPred)
-                pps.Flags |= 0x04;
-
-            if (TryReadBits(reader, 2, out var weightedBipred))
-                pps.WeightedBipredIdc = (byte)weightedBipred;
-
-            if (TryReadSEG(reader, out var picInitQp))
-                pps.PicInitQpMinus26 = (sbyte)Math.Max(-26, Math.Min(picInitQp, 25));
-
-            if (TryReadSEG(reader, out var picInitQs))
-                pps.PicInitQsMinus26 = (sbyte)Math.Max(-26, Math.Min(picInitQs, 25));
-
-            if (TryReadSEG(reader, out var chromaQpOffset))
-                pps.ChromaQpIndexOffset = (sbyte)Math.Max(-12, Math.Min(chromaQpOffset, 12));
-
-            if (TryReadBit(reader, out var deblockingFilter) && deblockingFilter)
-                pps.Flags |= 0x08;
-
-            if (TryReadBit(reader, out var constrainedIntra) && constrainedIntra)
-                pps.Flags |= 0x10;
-
-            if (TryReadBit(reader, out var redundantPicCnt) && redundantPicCnt)
-                pps.Flags |= 0x20;
-
-            // Optional advanced features
-            if (TryReadBit(reader, out var transform8x8) && transform8x8)
-                pps.Flags |= 0x40;
-
-            if (TryReadBit(reader, out var scalingMatrix) && scalingMatrix)
-            {
-                // Skip scaling matrix parsing - too complex for error-prone data
-                _logger.LogDebug("Skipping PPS scaling matrix parsing");
-            }
-
-            if (TryReadSEG(reader, out var secondChromaQp))
-                pps.SecondChromaQpIndexOffset = (sbyte)Math.Max(-12, Math.Min(secondChromaQp, 12));
-            else
-                pps.SecondChromaQpIndexOffset = pps.ChromaQpIndexOffset;
-
-            _logger.LogDebug("Successfully parsed PPS: ID={PpsId}, SPS_ID={SpsId}",
-                pps.PicParameterSetId, pps.SeqParameterSetId);
-
-            return pps;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Exception during PPS parsing, using fallback");
-            return CreateFallbackPps();
-        }
-    }
-
-    /// <summary>
-    /// Safely try to read UE(v) value without throwing exceptions
-    /// </summary>
-    private bool TryReadUEG(H264BitstreamReader reader, out uint value)
-    {
-        value = 0;
-        try
-        {
-            if (!reader.HasMoreData()) return false;
-            value = reader.ReadUEG();
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Safely try to read SE(v) value without throwing exceptions
-    /// </summary>
-    private bool TryReadSEG(H264BitstreamReader reader, out int value)
-    {
-        value = 0;
-        try
-        {
-            if (!reader.HasMoreData()) return false;
-            value = reader.ReadSEG();
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Safely try to read a single bit without throwing exceptions
-    /// </summary>
-    private bool TryReadBit(H264BitstreamReader reader, out bool value)
-    {
-        value = false;
-        try
-        {
-            if (!reader.HasMoreData()) return false;
-            value = reader.ReadBit();
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Safely try to read multiple bits without throwing exceptions
-    /// </summary>
-    private bool TryReadBits(H264BitstreamReader reader, int count, out uint value)
-    {
-        value = 0;
-        try
-        {
-            if (!reader.HasMoreData()) return false;
-            value = reader.ReadBits(count);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Skip slice group parameters based on map type - simplified version
-    /// </summary>
-    private void TrySkipSliceGroupParams(H264BitstreamReader reader, byte numSliceGroupsMinus1)
-    {
-        try
-        {
-            if (!TryReadUEG(reader, out var sliceGroupMapType))
-                return;
-
-            // Simplified - just skip some data based on map type
-            // In a full implementation, this would parse each type properly
-            switch (sliceGroupMapType)
-            {
-                case 0:
-                    // Skip run_length_minus1 for each slice group
-                    for (int i = 0; i <= numSliceGroupsMinus1; i++)
-                        TryReadUEG(reader, out _);
-                    break;
-                case 1:
-                    // No additional data
-                    break;
-                case 2:
-                    // Skip top_left and bottom_right for each slice group
-                    for (int i = 0; i < numSliceGroupsMinus1; i++)
-                    {
-                        TryReadUEG(reader, out _); // top_left
-                        TryReadUEG(reader, out _); // bottom_right
-                    }
-                    break;
-                default:
-                    // For other types, just try to skip some data
-                    _logger.LogDebug("Skipping complex slice group map type {MapType}", sliceGroupMapType);
-                    break;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Error skipping slice group params");
-        }
-    }
-
-    /// <summary>
-    /// Create fallback PPS when bitstream parsing fails
-    /// </summary>
-    private V4L2CtrlH264Pps CreateFallbackPps()
-    {
-        return new V4L2CtrlH264Pps
-        {
-            PicParameterSetId = 0,
-            SeqParameterSetId = 0,
-            NumSliceGroupsMinus1 = 0,
-            NumRefIdxL0DefaultActiveMinus1 = 0,
-            NumRefIdxL1DefaultActiveMinus1 = 0,
-            WeightedBipredIdc = 0,
-            PicInitQpMinus26 = 0,
-            PicInitQsMinus26 = 0,
-            ChromaQpIndexOffset = 0,
-            SecondChromaQpIndexOffset = 0,
-            Flags = 0x08 // Enable deblocking filter control
+            PicParameterSetId = (byte)Math.Min(pps.pic_parameter_set_id, 255),
+            SeqParameterSetId = (byte)Math.Min(pps.seq_parameter_set_id, 31),
+            NumSliceGroupsMinus1 = (byte)Math.Min(pps.num_slice_groups_minus1, 7),
+            NumRefIdxL0DefaultActiveMinus1 = (byte)Math.Min(pps.num_ref_idx_l0_default_active_minus1, 31),
+            NumRefIdxL1DefaultActiveMinus1 = (byte)Math.Min(pps.num_ref_idx_l1_default_active_minus1, 31),
+            WeightedBipredIdc = (byte)Math.Min(pps.weighted_bipred_idc, 3),
+            PicInitQpMinus26 = (sbyte)Math.Max(-26, Math.Min(pps.pic_init_qp_minus26, 25)),
+            PicInitQsMinus26 = (sbyte)Math.Max(-26, Math.Min(pps.pic_init_qs_minus26, 25)),
+            ChromaQpIndexOffset = (sbyte)Math.Max(-12, Math.Min(pps.chroma_qp_index_offset, 12)),
+            SecondChromaQpIndexOffset = (sbyte)Math.Max(-12, Math.Min(pps.second_chroma_qp_index_offset, 12)),
+            Flags = 0
         };
+
+        // Set flags based on parsed PPS values
+        if (pps.entropy_coding_mode_flag != 0)
+            v4l2Pps.Flags |= 0x01; // V4L2_H264_PPS_FLAG_ENTROPY_CODING_MODE
+
+        if (pps.bottom_field_pic_order_in_frame_present_flag != 0)
+            v4l2Pps.Flags |= 0x02; // V4L2_H264_PPS_FLAG_BOTTOM_FIELD_PIC_ORDER_IN_FRAME_PRESENT
+
+        if (pps.weighted_pred_flag != 0)
+            v4l2Pps.Flags |= 0x04; // V4L2_H264_PPS_FLAG_WEIGHTED_PRED
+
+        if (pps.deblocking_filter_control_present_flag != 0)
+            v4l2Pps.Flags |= 0x08; // V4L2_H264_PPS_FLAG_DEBLOCKING_FILTER_CONTROL_PRESENT
+
+        if (pps.constrained_intra_pred_flag != 0)
+            v4l2Pps.Flags |= 0x10; // V4L2_H264_PPS_FLAG_CONSTRAINED_INTRA_PRED
+
+        if (pps.redundant_pic_cnt_present_flag != 0)
+            v4l2Pps.Flags |= 0x20; // V4L2_H264_PPS_FLAG_REDUNDANT_PIC_CNT_PRESENT
+
+        if (pps.transform_8x8_mode_flag != 0)
+            v4l2Pps.Flags |= 0x40; // V4L2_H264_PPS_FLAG_TRANSFORM_8X8_MODE
+
+        if (pps.pic_scaling_matrix_present_flag != 0)
+            v4l2Pps.Flags |= 0x80; // V4L2_H264_PPS_FLAG_PIC_SCALING_MATRIX_PRESENT
+
+        return v4l2Pps;
     }
 
     /// <summary>
