@@ -241,22 +241,15 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void HandlePpsNalu(byte[] ppsData)
     {
-        try
-        {
-            _currentPps = _parameterSetParser.ParsePpsToControl(ppsData);
-            _logger.LogDebug("Parsed and stored PPS from stream");
+        _currentPps = _parameterSetParser.ParsePpsToControl(ppsData);
+        _logger.LogDebug("Parsed and stored PPS from stream");
 
-            // If we also have SPS, configure the decoder
-            if (_currentSps.HasValue)
-            {
-                _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
-                _hasValidParameterSets = true;
-                _logger.LogInformation("Successfully configured parameter sets from stream");
-            }
-        }
-        catch (Exception ex)
+        // If we also have SPS, configure the decoder
+        if (_currentSps.HasValue)
         {
-            _logger.LogWarning(ex, "Failed to parse PPS from stream");
+            _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
+            _hasValidParameterSets = true;
+            _logger.LogInformation("Successfully configured parameter sets from stream");
         }
     }
 
