@@ -27,7 +27,7 @@ public class V4L2StatelessControlManager
     }
 
     /// <inheritdoc />
-    public void SetSliceParamsControls(byte[] sliceData, H264NaluType sliceType)
+    public void SetSliceParamsControls(ReadOnlySpan<byte> sliceData, H264NaluType sliceType)
     {
         _logger.LogDebug("Setting slice parameters controls for stateless decoder");
 

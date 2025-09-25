@@ -27,42 +27,7 @@ public class H264ParameterSetParser
     }
 
     /// <inheritdoc />
-    public V4L2CtrlH264Sps ParseSpsToControl(byte[] spsData)
-    {
-        // Determine which parser to use based on data format
-        var parser = HasStartCode(spsData) ? _naluParserWithStartCode : _naluParserWithoutStartCode;
-
-        // Validate NALU format
-        if (!parser.HasValidFormat(spsData))
-            throw new ArgumentException("Invalid SPS NALU data format");
-
-        // Extract NALU type and validate
-        var naluType = parser.GetNaluType(spsData);
-        if (naluType != H264NaluType.SequenceParameterSet)
-            throw new ArgumentException($"Expected SPS NALU (type 7), got type {(int)naluType}");
-
-        // Get the raw NALU payload for bitstream parsing
-        var naluPayload = parser.GetNaluPayload(spsData);
-
-        // Parse SPS bitstream for real parameters
-        try
-        {
-            var sps = ParseSpsFromBitstream(naluPayload.ToArray(), 0); // Start from header since payload excludes start code
-
-            _logger.LogDebug("Parsed SPS: Profile=0x{Profile:X2}, Level=0x{Level:X2}, Constraints=0x{Constraints:X2}, Width={Width}MB, Height={Height}MB",
-                sps.ProfileIdc, sps.LevelIdc, sps.ConstraintSetFlags, sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1);
-
-            return sps;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to parse SPS bitstream, using fallback values");
-            return CreateFallbackSps(naluPayload.ToArray(), 0);
-        }
-    }
-
-    /// <inheritdoc />
-    public V4L2CtrlH264Pps ParsePpsToControl(byte[] ppsData)
+    public V4L2CtrlH264Pps ParsePpsToControl(ReadOnlySpan<byte> ppsData)
     {
         uint chromaFormatIdc = 1; // 4:2:0 YUV format (most common)
         var parsedPps = H264PpsParser.ParsePps(ppsData, chromaFormatIdc);
@@ -83,8 +48,22 @@ public class H264ParameterSetParser
 
     }
 
+    /// <summary>
+    /// Parse SPS NALU data into V4L2 control structure using the new parser
+    /// </summary>
+    public V4L2CtrlH264Sps ParseSps(ReadOnlySpan<byte> spsData)
+    {
+        var parsedSps = H264SpsParser.ParseSps(spsData);
+
+
+        //_logger.LogDebug("Parsed SPS: Profile=0x{Profile:X2}, Level=0x{Level:X2}, Constraints=0x{Constraints:X2}, Width={Width}MB, Height={Height}MB",
+        //    sps.ProfileIdc, sps.LevelIdc, sps.ConstraintSetFlags, sps.PicWidthInMbsMinus1 + 1, sps.PicHeightInMapUnitsMinus1 + 1);
+
+        throw new NotImplementedException();
+    }
+
     /// <inheritdoc />
-    public V4L2CtrlH264SliceParams ParseSliceHeaderToControl(byte[] sliceData)
+    public V4L2CtrlH264SliceParams ParseSliceHeaderToControl(ReadOnlySpan<byte> sliceData)
     {
         // Determine which parser to use based on data format
         var parser = HasStartCode(sliceData) ? _naluParserWithStartCode : _naluParserWithoutStartCode;
@@ -125,18 +104,11 @@ public class H264ParameterSetParser
         return naluData.Length - payload.Length; // Offset to payload = start code length
     }
 
-    /// <summary>
-    /// Parse SPS NALU data into V4L2 control structure using the new parser
-    /// </summary>
-    public V4L2CtrlH264Sps ParseSps(ReadOnlySpan<byte> spsData)
-    {
-        return ParseSpsToControl(spsData.ToArray());
-    }
 
     /// <summary>
     /// Checks if the NALU data has a start code using the new parser
     /// </summary>
-    private static bool HasStartCode(byte[] naluData)
+    private static bool HasStartCode(ReadOnlySpan<byte> naluData)
     {
         if (naluData.Length >= 4 &&
             naluData[0] == 0x00 && naluData[1] == 0x00 &&
@@ -152,166 +124,6 @@ public class H264ParameterSetParser
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Parse SPS from actual H.264 bitstream
-    /// </summary>
-    private V4L2CtrlH264Sps ParseSpsFromBitstream(byte[] spsData, int naluStart)
-    {
-        var reader = new H264BitstreamReader(spsData, naluStart + 1); // Skip NALU header
-
-        // Parse basic SPS parameters
-        var profileIdc = reader.ReadByte();
-        var constraintSetFlags = reader.ReadByte();
-        var levelIdc = reader.ReadByte();
-        var seqParameterSetId = reader.ReadUEG(); // UE(v)
-
-        // Initialize SPS structure
-        var sps = new V4L2CtrlH264Sps
-        {
-            ProfileIdc = profileIdc,
-            ConstraintSetFlags = constraintSetFlags,
-            LevelIdc = levelIdc,
-            SeqParameterSetId = (byte)seqParameterSetId,
-            OffsetForRefFrame = new int[255] // Initialize array
-        };
-
-        // Parse chroma format
-        if (profileIdc == 100 || profileIdc == 110 || profileIdc == 122 || profileIdc == 244 ||
-            profileIdc == 44 || profileIdc == 83 || profileIdc == 86 || profileIdc == 118 ||
-            profileIdc == 128 || profileIdc == 138 || profileIdc == 139 || profileIdc == 134)
-        {
-            sps.ChromaFormatIdc = (byte)reader.ReadUEG();
-
-            if (sps.ChromaFormatIdc == 3)
-            {
-                reader.ReadBit(); // separate_colour_plane_flag
-            }
-
-            sps.BitDepthLumaMinus8 = (byte)reader.ReadUEG();
-            sps.BitDepthChromaMinus8 = (byte)reader.ReadUEG();
-
-            reader.ReadBit(); // qpprime_y_zero_transform_bypass_flag
-
-            var seqScalingMatrixPresentFlag = reader.ReadBit();
-            if (seqScalingMatrixPresentFlag)
-            {
-                // Skip scaling matrix parsing for now
-                for (int i = 0; i < ((sps.ChromaFormatIdc != 3) ? 8 : 12); i++)
-                {
-                    if (reader.ReadBit()) // seq_scaling_list_present_flag[i]
-                    {
-                        // Skip scaling list
-                        var sizeOfScalingList = (i < 6) ? 16 : 64;
-                        for (int j = 0; j < sizeOfScalingList; j++)
-                        {
-                            reader.ReadSEG(); // Skip scaling list values
-                        }
-                    }
-                }
-            }
-        }
-        else
-        {
-            sps.ChromaFormatIdc = 1; // 4:2:0 default
-            sps.BitDepthLumaMinus8 = 0;
-            sps.BitDepthChromaMinus8 = 0;
-        }
-
-        // Parse frame numbering parameters
-        sps.Log2MaxFrameNumMinus4 = (byte)reader.ReadUEG();
-        sps.PicOrderCntType = (byte)reader.ReadUEG();
-
-        if (sps.PicOrderCntType == 0)
-        {
-            sps.Log2MaxPicOrderCntLsbMinus4 = (byte)reader.ReadUEG();
-        }
-        else if (sps.PicOrderCntType == 1)
-        {
-            reader.ReadBit(); // delta_pic_order_always_zero_flag
-            sps.OffsetForNonRefPic = reader.ReadSEG();
-            sps.OffsetForTopToBottomField = reader.ReadSEG();
-            sps.NumRefFramesInPicOrderCntCycle = (byte)reader.ReadUEG();
-
-            for (int i = 0; i < sps.NumRefFramesInPicOrderCntCycle && i < 255; i++)
-            {
-                sps.OffsetForRefFrame[i] = reader.ReadSEG();
-            }
-        }
-
-        sps.MaxNumRefFrames = (byte)reader.ReadUEG();
-        reader.ReadBit(); // gaps_in_frame_num_value_allowed_flag
-
-        // Parse picture dimensions
-        var picWidthInMbsMinus1 = reader.ReadUEG();
-        var picHeightInMapUnitsMinus1 = reader.ReadUEG();
-
-        sps.PicWidthInMbsMinus1 = (ushort)picWidthInMbsMinus1;
-        sps.PicHeightInMapUnitsMinus1 = (ushort)picHeightInMapUnitsMinus1;
-
-        var frameMbsOnlyFlag = reader.ReadBit();
-        if (!frameMbsOnlyFlag)
-        {
-            reader.ReadBit(); // mb_adaptive_frame_field_flag
-        }
-
-        reader.ReadBit(); // direct_8x8_inference_flag
-
-        var frameCroppingFlag = reader.ReadBit();
-        if (frameCroppingFlag)
-        {
-            reader.ReadUEG(); // frame_crop_left_offset
-            reader.ReadUEG(); // frame_crop_right_offset
-            reader.ReadUEG(); // frame_crop_top_offset
-            reader.ReadUEG(); // frame_crop_bottom_offset
-        }
-
-        // Set flags based on parsed values
-        sps.Flags = 0;
-        if (frameMbsOnlyFlag) sps.Flags |= 0x01; // V4L2_H264_SPS_FLAG_FRAME_MBS_ONLY
-
-        return sps;
-    }
-
-    /// <summary>
-    /// Create fallback SPS when bitstream parsing fails
-    /// </summary>
-    private V4L2CtrlH264Sps CreateFallbackSps(byte[] spsData, int naluStart)
-    {
-        // Extract basic parameters safely
-        var profileIdc = spsData.Length > naluStart + 1 ? spsData[naluStart + 1] : (byte)100; // High profile default
-        var constraintSetFlags = spsData.Length > naluStart + 2 ? spsData[naluStart + 2] : (byte)0;
-        var levelIdc = spsData.Length > naluStart + 3 ? spsData[naluStart + 3] : (byte)40; // Level 4.0 default
-
-        // Validate basic parameters
-        if (profileIdc == 0) profileIdc = 100;
-        if (levelIdc == 0) levelIdc = 40;
-
-        // Create SPS structure with safe defaults
-        var sps = new V4L2CtrlH264Sps
-        {
-            ProfileIdc = profileIdc,
-            ConstraintSetFlags = constraintSetFlags,
-            LevelIdc = levelIdc,
-            SeqParameterSetId = 0,
-            ChromaFormatIdc = 1, // 4:2:0 YUV format
-            BitDepthLumaMinus8 = 0, // 8-bit
-            BitDepthChromaMinus8 = 0, // 8-bit
-            Log2MaxFrameNumMinus4 = 0,
-            PicOrderCntType = 0,
-            Log2MaxPicOrderCntLsbMinus4 = 0,
-            MaxNumRefFrames = 4, // More reasonable default
-            NumRefFramesInPicOrderCntCycle = 0,
-            OffsetForRefFrame = new int[255],
-            OffsetForNonRefPic = 0,
-            OffsetForTopToBottomField = 0,
-            PicWidthInMbsMinus1 = (ushort)((_initialWidth / 16) - 1),
-            PicHeightInMapUnitsMinus1 = (ushort)((_initialHeight / 16) - 1),
-            Flags = 0x01 // Frame MBs only
-        };
-
-        return sps;
     }
 
     /// <summary>
@@ -365,9 +177,9 @@ public class H264ParameterSetParser
     /// <summary>
     /// Parse slice header from bitstream
     /// </summary>
-    private V4L2CtrlH264SliceParams ParseSliceHeaderFromBitstream(byte[] sliceData, int naluStart, byte naluType)
+    private V4L2CtrlH264SliceParams ParseSliceHeaderFromBitstream(ReadOnlyMemory<byte> sliceData, int naluStart, byte naluType)
     {
-        var reader = new H264BitstreamReader(sliceData, naluStart + 1);
+        var reader = new H264BitstreamReader(sliceData);
 
         var sliceParams = new V4L2CtrlH264SliceParams
         {

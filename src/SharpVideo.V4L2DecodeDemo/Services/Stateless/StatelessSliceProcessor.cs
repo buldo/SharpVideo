@@ -38,30 +38,9 @@ public class StatelessSliceProcessor
     }
 
     /// <summary>
-    /// Extract only slice data (remove start codes if needed)
-    /// </summary>
-    public byte[] ExtractSliceDataOnly(byte[] naluData, bool useStartCodes)
-    {
-        if (!useStartCodes)
-        {
-            // If decoder expects raw NALUs, remove start codes
-            int naluStart = _parameterSetParser.GetNaluHeaderPosition(naluData, true);
-            if (naluStart > 0 && naluStart < naluData.Length)
-            {
-                byte[] sliceOnly = new byte[naluData.Length - naluStart];
-                Array.Copy(naluData, naluStart, sliceOnly, 0, sliceOnly.Length);
-                return sliceOnly;
-            }
-        }
-
-        // Return as-is if using start codes or no start code found
-        return naluData;
-    }
-
-    /// <summary>
     /// Queue stateless slice data with proper control setup
     /// </summary>
-    public void QueueStatelessSliceData(byte[] sliceData, H264NaluType naluType, uint bufferIndex)
+    public void QueueStatelessSliceData(ReadOnlySpan<byte> sliceData, H264NaluType naluType, uint bufferIndex)
     {
         if (!_hasValidParameterSetsProvider())
         {
@@ -81,21 +60,15 @@ public class StatelessSliceProcessor
         // First, set the slice parameters controls
         _controlManager.SetSliceParamsControls(sliceData, naluType);
 
-        // Extract only the slice data (without start codes if configured)
-        // TODO: Get useStartCodes from configuration
-        byte[] pureSliceData = ExtractSliceDataOnly(sliceData, true);
-
-        _logger.LogDebug("Queuing stateless slice data: {SliceByteCount} bytes (NALU type {NaluType}) to buffer {BufferIndex}",
-            pureSliceData.Length, naluType, bufferIndex);
 
         // Queue only the slice data to the hardware
-        QueueSliceDataToHardware(pureSliceData, bufferIndex, isKeyFrame: naluType == H264NaluType.CodedSliceIdr); // IDR slice is keyframe
+        QueueSliceDataToHardware(sliceData, bufferIndex, isKeyFrame: naluType == H264NaluType.CodedSliceIdr); // IDR slice is keyframe
     }
 
     /// <summary>
     /// Queues slice data to the hardware decoder (for stateless operation)
     /// </summary>
-    private void QueueSliceDataToHardware(byte[] sliceData, uint bufferIndex, bool isKeyFrame = false, bool isEos = false)
+    private void QueueSliceDataToHardware(ReadOnlySpan<byte> sliceData, uint bufferIndex, bool isKeyFrame = false, bool isEos = false)
     {
         try
         {
@@ -117,7 +90,7 @@ public class StatelessSliceProcessor
             }
 
             // Copy slice data to mapped buffer
-            Marshal.Copy(sliceData, 0, mappedBuffer.Pointer, sliceData.Length);
+            Marshal.Copy(sliceData.ToArray(), 0, mappedBuffer.Pointer, sliceData.Length);
 
             // Setup buffer for queuing - handle multiplanar properly
             if (mappedBuffer.Planes.Length > 0)

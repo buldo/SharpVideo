@@ -179,14 +179,14 @@ public class H264V4L2StatelessDecoder
                 continue;
             }
             var naluType = naluParser.GetNaluType(naluData);
-            ProcessNaluByType(naluData, naluType);
+            ProcessNaluByType(naluData.AsSpan(1), naluType); // Skip NALU header byte
         }
     }
 
     /// <summary>
     /// Processes individual NALU based on its type
     /// </summary>
-    private void ProcessNaluByType(byte[] naluData, H264NaluType naluType)
+    private void ProcessNaluByType(ReadOnlySpan<byte> naluData, H264NaluType naluType)
     {
         switch (naluType)
         {
@@ -215,31 +215,24 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles SPS (Sequence Parameter Set) NALU
     /// </summary>
-    private void HandleSpsNalu(byte[] spsData)
+    private void HandleSpsNalu(ReadOnlySpan<byte> spsData)
     {
-        try
-        {
-            _currentSps = _parameterSetParser.ParseSps(spsData);
-            _logger.LogDebug("Parsed and stored SPS from stream");
+        _currentSps = _parameterSetParser.ParseSps(spsData);
+        _logger.LogDebug("Parsed and stored SPS from stream");
 
-            // If we also have PPS, configure the decoder
-            if (_currentPps.HasValue)
-            {
-                _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
-                _hasValidParameterSets = true;
-                _logger.LogInformation("Successfully configured parameter sets from stream");
-            }
-        }
-        catch (Exception ex)
+        // If we also have PPS, configure the decoder
+        if (_currentPps.HasValue)
         {
-            _logger.LogWarning(ex, "Failed to parse SPS from stream");
+            _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
+            _hasValidParameterSets = true;
+            _logger.LogInformation("Successfully configured parameter sets from stream");
         }
     }
 
     /// <summary>
     /// Handles PPS (Picture Parameter Set) NALU
     /// </summary>
-    private void HandlePpsNalu(byte[] ppsData)
+    private void HandlePpsNalu(ReadOnlySpan<byte> ppsData)
     {
         _currentPps = _parameterSetParser.ParsePpsToControl(ppsData);
         _logger.LogDebug("Parsed and stored PPS from stream");
@@ -256,7 +249,7 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles slice NALUs (actual video data)
     /// </summary>
-    private void HandleSliceNalu(byte[] sliceData, H264NaluType naluType)
+    private void HandleSliceNalu(ReadOnlySpan<byte> sliceData, H264NaluType naluType)
     {
         if (!_hasValidParameterSets)
         {

@@ -5,16 +5,16 @@ namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
 /// </summary>
 internal class H264BitstreamReader
 {
-    private readonly byte[] _data;
+    private readonly ReadOnlyMemory<byte> _data;
     private int _bytePosition;
     private int _bitPosition;
 
     public int Position => _bytePosition * 8 + _bitPosition;
 
-    public H264BitstreamReader(byte[] data, int startOffset)
+    public H264BitstreamReader(ReadOnlyMemory<byte> data)
     {
         _data = data;
-        _bytePosition = startOffset;
+        _bytePosition = 0;
         _bitPosition = 0;
     }
 
@@ -26,7 +26,7 @@ internal class H264BitstreamReader
         if (_bytePosition >= _data.Length)
             throw new EndOfStreamException("Attempted to read past end of stream");
 
-        return _data[_bytePosition++];
+        return _data.Span[_bytePosition++];
     }
 
     public bool ReadBit()
@@ -34,7 +34,7 @@ internal class H264BitstreamReader
         if (_bytePosition >= _data.Length)
             throw new EndOfStreamException("Attempted to read past end of stream");
 
-        var bit = (_data[_bytePosition] >> (7 - _bitPosition)) & 1;
+        var bit = (_data.Span[_bytePosition] >> (7 - _bitPosition)) & 1;
         _bitPosition++;
 
         if (_bitPosition == 8)

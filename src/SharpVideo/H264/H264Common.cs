@@ -1,7 +1,16 @@
-﻿namespace SharpVideo.H264;
+﻿using System;
+
+namespace SharpVideo.H264;
 
 public static class H264Common
 {
+    // some ffmpeg constants
+    public const UInt32 kMaxMbWidth = 1055;
+    public const UInt32 kMaxMbHeight = 1055;
+    public const UInt32 kMaxWidth = (kMaxMbWidth * 16);
+    public const UInt32 kMaxHeight = (kMaxMbHeight * 16);
+    public const UInt32 kMaxMbPicSize = 139264;
+
 
     /// <summary>
     /// NALU packing uses a mechanism to identify the start of a new NALU

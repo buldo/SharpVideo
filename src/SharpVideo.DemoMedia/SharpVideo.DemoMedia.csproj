@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.Build.NoTargets/3.7.134">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+  </PropertyGroup>
+
+	<ItemGroup>
+	  <None Update="test_video.h264">
+	    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+	  </None>
+	</ItemGroup>
+
+	<!--<ItemGroup>
+		<FilesToCopy Include="files/**" />
+	</ItemGroup>
+	<Target Name="CopyFiles" BeforeTargets="PrepareForRun">
+		<Copy SourceFiles="@(FilesToCopy)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="$(SkipCopyUnchangedFiles)" OverwriteReadOnlyFiles="$(OverwriteReadOnlyFiles)" Retries="$(CopyRetryCount)" RetryDelayMilliseconds="$(CopyRetryDelayMilliseconds)" UseHardlinksIfPossible="$(CreateHardLinksForCopyAdditionalFilesIfPossible)" UseSymboliclinksIfPossible="$(CreateSymbolicLinksForCopyAdditionalFilesIfPossible)">
+			<Output TaskParameter="DestinationFiles" ItemName="FileWrites" />
+		</Copy>
+	</Target>-->
+</Project>
