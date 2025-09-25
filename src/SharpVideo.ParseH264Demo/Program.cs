@@ -15,10 +15,16 @@ internal class Program
         {
             var naluType = naluParser.GetNaluType(nalu);
             Console.Write($"Nalu Type: {naluType}, Size: {nalu.Length} bytes");
-            if(naluType == H264NaluType.PictureParameterSet)
+            var naluData = nalu.AsSpan(1);
+            if (naluType == H264NaluType.PictureParameterSet)
             {
-                var ppsState = H264PpsParser.ParsePps(nalu.AsSpan(1),1);
+                var ppsState = H264PpsParser.ParsePps(naluData, 1);
                 Console.WriteLine($", pic_parameter_set_id: {ppsState.pic_parameter_set_id}");
+            }
+            if (naluType == H264NaluType.SequenceParameterSet)
+            {
+                var spsState = H264SpsParser.ParseSps(naluData);
+                Console.WriteLine($", profile_type: {spsState.sps_data.profile_type}");
             }
             else
             {
