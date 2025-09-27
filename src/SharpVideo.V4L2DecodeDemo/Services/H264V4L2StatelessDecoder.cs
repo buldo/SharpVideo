@@ -103,33 +103,24 @@ public class H264V4L2StatelessDecoder
 
         using var naluProvider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
 
-        try
-        {
-            // Initialize decoder and dependencies
-            await InitializeDecoderAsync(cancellationToken);
+        // Initialize decoder and dependencies
+        await InitializeDecoderAsync(cancellationToken);
 
             // Start NALU processing task
-            var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
+        var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
 
             // Feed stream data to NaluProvider
-            await FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
+        await FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
 
             // Wait for NALU processing to complete
-            await naluProcessingTask;
+        await naluProcessingTask;
 
-            _decodingStopwatch.Stop();
-            _logger.LogInformation("Stateless decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
-                _framesDecoded, _decodingStopwatch.Elapsed.TotalSeconds, _framesDecoded / _decodingStopwatch.Elapsed.TotalSeconds);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during H.264 stateless decoding");
-            throw;
-        }
-        finally
-        {
-            Cleanup();
-        }
+        _decodingStopwatch.Stop();
+        _logger.LogInformation(
+            "Stateless decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
+            _framesDecoded,
+            _decodingStopwatch.Elapsed.TotalSeconds,
+            _framesDecoded / _decodingStopwatch.Elapsed.TotalSeconds);
     }
 
     /// <summary>
