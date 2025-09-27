@@ -27,7 +27,6 @@ public static class SpsMapper
             max_num_ref_frames = (byte)spsData.max_num_ref_frames,
             num_ref_frames_in_pic_order_cnt_cycle = (byte)spsData.num_ref_frames_in_pic_order_cnt_cycle,
             offset_for_non_ref_pic = spsData.offset_for_non_ref_pic,
-            offset_for_ref_frame = spsData.offset_for_ref_frame.ToArray(),
             offset_for_top_to_bottom_field = spsData.offset_for_top_to_bottom_field,
             pic_height_in_map_units_minus1 = (ushort)spsData.pic_height_in_map_units_minus1,
             pic_order_cnt_type = (byte)spsData.pic_order_cnt_type,
@@ -35,6 +34,16 @@ public static class SpsMapper
             profile_idc = (byte)spsData.profile_idc,
             seq_parameter_set_id = (byte)spsData.seq_parameter_set_id,
         };
+
+        ret.offset_for_ref_frame = new int[255];
+        if(spsData.offset_for_ref_frame != null)
+        {
+            for(int i = 0; i < spsData.offset_for_ref_frame.Count && i < 255; i++)
+            {
+                ret.offset_for_ref_frame[i] = spsData.offset_for_ref_frame[i];
+            }
+        }
+
 
         return ret;
     }
