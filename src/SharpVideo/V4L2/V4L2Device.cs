@@ -1,4 +1,5 @@
-﻿using System.Runtime.Serialization;
+﻿using System.Runtime.InteropServices;
+using System.Runtime.Serialization;
 using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
@@ -54,6 +55,77 @@ public class V4L2Device : IDisposable
         if (!outputResult.Success)
         {
             throw new Exception($"Failed to start {type} streaming: {outputResult.ErrorMessage}");
+        }
+    }
+
+    /// <summary>
+    /// Set a single extended control - much simpler and more predictable
+    /// </summary>
+    public void SetSingleExtendedControl<T>(uint controlId, T data) where T : struct
+    {
+        var size = (uint)Marshal.SizeOf<T>();
+        var dataPtr = Marshal.AllocHGlobal((int)size);
+
+        try
+        {
+            // Clear the allocated memory
+            unsafe
+            {
+                byte* ptr = (byte*)dataPtr.ToPointer();
+                for (int i = 0; i < size; i++)
+                {
+                    ptr[i] = 0;
+                }
+            }
+
+            // Marshal the structure to unmanaged memory
+            Marshal.StructureToPtr(data, dataPtr, false);
+
+            // Create the control structure
+            var control = new V4L2ExtControl
+            {
+                Id = controlId,
+                Size = size,
+                Ptr = dataPtr
+            };
+
+            // Allocate memory for single control
+            var controlPtr = Marshal.AllocHGlobal(Marshal.SizeOf<V4L2ExtControl>());
+
+            try
+            {
+                Marshal.StructureToPtr(control, controlPtr, false);
+
+                // Set up extended controls wrapper for single control
+                var extControlsWrapper = new V4L2ExtControls
+                {
+                    Which = V4l2ControlsConstants.V4L2_CTRL_CLASS_CODEC,
+                    Count = 1,
+                    Controls = controlPtr
+                };
+
+                //_logger.LogDebug("Setting control 0x{ControlId:X8} with {Size} bytes", controlId, size);
+
+                // Set the control
+                var result = LibV4L2.SetExtendedControls(fd, ref extControlsWrapper);
+                if (!result.Success)
+                {
+                    var errorCode = Marshal.GetLastWin32Error();
+                    //_logger.LogError("Failed to set control 0x{ControlId:X8}: {Error} (errno: {ErrorCode})", controlId, result.ErrorMessage, errorCode);
+
+                    throw new InvalidOperationException($"Failed to set control 0x{controlId:X8}: {result.ErrorMessage} (errno: {errorCode})");
+                }
+
+                //_logger.LogDebug("Successfully set control 0x{ControlId:X8}", controlId);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(controlPtr);
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(dataPtr);
         }
     }
 

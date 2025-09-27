@@ -47,8 +47,8 @@ public class H264V4L2StatelessDecoder
     private bool _hasValidParameterSets;
     private bool _isInitialized;
 
-    private V4L2CtrlH264Sps? _currentSps;
-    private V4L2CtrlH264Pps? _currentPps;
+    private V4L2CtrlH264Sps? _lastSps;
+    private V4L2CtrlH264Pps? _lastPps;
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
@@ -217,16 +217,20 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void HandleSpsNalu(ReadOnlySpan<byte> spsData)
     {
-        _currentSps = _parameterSetParser.ParseSps(spsData);
-        _logger.LogDebug("Parsed and stored SPS from stream");
-
-        // If we also have PPS, configure the decoder
-        if (_currentPps.HasValue)
+        var parsedSps = H264SpsParser.ParseSps(spsData);
+        if (parsedSps == null)
         {
-            _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
-            _hasValidParameterSets = true;
-            _logger.LogInformation("Successfully configured parameter sets from stream");
+            _logger.LogError("Failed to parse SPS");
+            throw new Exception("Not able to parse SPS");
         }
+
+        _logger.LogDebug("Parsed SPS: {Id}", parsedSps.sps_data.seq_parameter_set_id);
+        var v4L2Sps = SpsMapper.MapSpsToV4L2(parsedSps);
+        _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, v4L2Sps);
+        _lastSps = v4L2Sps;
+
+        _logger.LogDebug("Parsed and stored SPS from stream");
+        CheckReadyForDecode();
     }
 
     /// <summary>
@@ -234,13 +238,38 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void HandlePpsNalu(ReadOnlySpan<byte> ppsData)
     {
-        _currentPps = _parameterSetParser.ParsePpsToControl(ppsData);
-        _logger.LogDebug("Parsed and stored PPS from stream");
-
-        // If we also have SPS, configure the decoder
-        if (_currentSps.HasValue)
+        uint chromaFormatIdc = 1; // 4:2:0 YUV format (most common)
+        if (_lastSps.HasValue)
         {
-            _controlManager.SetParameterSets(_currentSps.Value, _currentPps.Value);
+            chromaFormatIdc = _lastSps.Value.chroma_format_idc;
+        }
+
+        var parsedPps = H264PpsParser.ParsePps(ppsData, chromaFormatIdc);
+        if (parsedPps == null)
+        {
+            _logger.LogError("Failed to parse PPS");
+            throw new Exception("Not able to parse PPS");
+        }
+
+        _logger.LogDebug(
+            "Successfully parsed PPS using H264PpsParser: ID={PpsId}, SPS_ID={SpsId}, QP={QP}",
+            parsedPps.pic_parameter_set_id,
+            parsedPps.seq_parameter_set_id,
+            parsedPps.pic_init_qp_minus26 + 26);
+
+        var v4L2Pps = PpsMapper.ConvertPpsStateToV4L2(parsedPps);
+        _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, v4L2Pps);
+        _lastPps = v4L2Pps;
+
+        _logger.LogDebug("Parsed and stored PPS from stream");
+        CheckReadyForDecode();
+    }
+
+    private void CheckReadyForDecode()
+    {
+        // If we also have PPS, configure the decoder
+        if (_lastSps.HasValue && _lastPps.HasValue)
+        {
             _hasValidParameterSets = true;
             _logger.LogInformation("Successfully configured parameter sets from stream");
         }

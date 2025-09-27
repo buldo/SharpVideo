@@ -58,7 +58,7 @@ public static class H264PpsParser
     /// <summary>
     /// Unpack RBSP and parse PPS state from the supplied buffer.
     /// </summary>
-    public static PpsState ParsePps(ReadOnlySpan<byte> data, UInt32 chroma_format_idc)
+    public static PpsState? ParsePps(ReadOnlySpan<byte> data, UInt32 chroma_format_idc)
     {
         var unpacked_buffer = H264Common.UnescapeRbsp(data);
         BitBuffer bit_buffer = new BitBuffer(unpacked_buffer.ToArray());
