@@ -8,28 +8,28 @@ public class H264VuiParametersParser
 
     // Section E.2.1: "The value of chroma_sample_loc_type_top_field [...]
     // shall be in the range of 0 to 5, inclusive."
-    public const UInt32 kChromaSampleLocTypeTopFieldMin = 0;
-    public const UInt32 kChromaSampleLocTypeTopFieldMax = 5;
+    private const UInt32 kChromaSampleLocTypeTopFieldMin = 0;
+    private const UInt32 kChromaSampleLocTypeTopFieldMax = 5;
     // Section E.2.1: "The value of [...] chroma_sample_loc_type_bottom_field
     // shall be in the range of 0 to 5, inclusive."
-    public const UInt32 kChromaSampleLocTypeBottomFieldMin = 0;
-    public const UInt32 kChromaSampleLocTypeBottomFieldMax = 5;
+    private const UInt32 kChromaSampleLocTypeBottomFieldMin = 0;
+    private const UInt32 kChromaSampleLocTypeBottomFieldMax = 5;
     // Section E.2.1: "The value of max_bytes_per_pic_denom shall be in the
     // range of 0 to 16, inclusive."
-    public const UInt32 kMaxBytesPerPicDenomMin = 0;
-    public const UInt32 kMaxBytesPerPicDenomMax = 16;
+    private const UInt32 kMaxBytesPerPicDenomMin = 0;
+    private const UInt32 kMaxBytesPerPicDenomMax = 16;
     // Section E.2.1: "The value of max_bits_per_mb_denom shall be in the
     // range of 0 to 16, inclusive."
-    public const UInt32 kMaxBitsPerMbDenomMin = 0;
-    public const UInt32 kMaxBitsPerMbDenomMax = 16;
+    private const UInt32 kMaxBitsPerMbDenomMin = 0;
+    private const UInt32 kMaxBitsPerMbDenomMax = 16;
     // Section E.2.1: "The value of log2_max_mv_length_horizontal shall be in
     // the range of 0 to 16, inclusive."
-    public const UInt32 kLog2MaxMvLengthHorizontalMin = 0;
-    public const UInt32 kLog2MaxMvLengthHorizontalMax = 16;
+    private const UInt32 kLog2MaxMvLengthHorizontalMin = 0;
+    private const UInt32 kLog2MaxMvLengthHorizontalMax = 16;
     // Section E.2.1: "The value of log2_max_mv_length_vertical shall be in
     // the range of 0 to 16, inclusive."
-    public const UInt32 kLog2MaxMvLengthVerticalMin = 0;
-    public const UInt32 kLog2MaxMvLengthVerticalMax = 16;
+    private const UInt32 kLog2MaxMvLengthVerticalMin = 0;
+    private const UInt32 kLog2MaxMvLengthVerticalMax = 16;
     // Section E.2.1: "The value of max_num_reorder_frames shall be in
     // the range of 0 to max_dec_frame_buffering, inclusive."
     // copied from ffmpeg

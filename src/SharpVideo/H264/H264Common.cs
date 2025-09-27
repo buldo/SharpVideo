@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace SharpVideo.H264;
+﻿namespace SharpVideo.H264;
 
 public static class H264Common
 {

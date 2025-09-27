@@ -14,21 +14,21 @@ namespace SharpVideo.H264;
 /// </summary>
 public class BitBuffer
 {
-    private readonly ReadOnlyMemory<byte> bytes_;
+    private readonly ReadOnlyMemory<byte> _bytes;
 
     // The total size of |bytes_|.
-    int byte_count_;
+    readonly int _byteCount;
 
     // The current offset, in bytes, from the start of |bytes_|.
-    int byte_offset_;
+    private int _byteOffset;
 
     // The current offset, in bits, into the current byte.
-    int bit_offset_;
+    private int _bitOffset;
 
     public BitBuffer(ReadOnlyMemory<byte> bytes)
     {
-        bytes_ = bytes;
-        byte_count_ = bytes.Length;
+        _bytes = bytes;
+        _byteCount = bytes.Length;
     }
 
     /// <summary>
@@ -71,8 +71,8 @@ public class BitBuffer
     /// </summary>
     public void GetCurrentOffset(out int out_byte_offset, out int out_bit_offset)
     {
-        out_byte_offset = byte_offset_;
-        out_bit_offset = bit_offset_;
+        out_byte_offset = _byteOffset;
+        out_bit_offset = _bitOffset;
     }
 
     /// <summary>
@@ -80,7 +80,7 @@ public class BitBuffer
     /// </summary>
     public long RemainingBitCount()
     {
-        return (byte_count_ - byte_offset_) * 8 - bit_offset_;
+        return (_byteCount - _byteOffset) * 8 - _bitOffset;
     }
 
     /// <summary>
@@ -172,14 +172,14 @@ public class BitBuffer
             return false;
         }
 
-        int byteIndex = byte_offset_;
-        int remainingBitsInCurrentByte = 8 - bit_offset_;
-        uint bits = LowestBits(bytes_.Span[byteIndex], remainingBitsInCurrentByte);
+        int byteIndex = _byteOffset;
+        int remainingBitsInCurrentByte = 8 - _bitOffset;
+        uint bits = LowestBits(_bytes.Span[byteIndex], remainingBitsInCurrentByte);
         byteIndex++;
 
         if (bitCount < remainingBitsInCurrentByte)
         {
-            val = HighestBits((byte)bits, bit_offset_ + bitCount);
+            val = HighestBits((byte)bits, _bitOffset + bitCount);
             return true;
         }
 
@@ -187,7 +187,7 @@ public class BitBuffer
 
         while (bitCount >= 8)
         {
-            bits = (bits << 8) | bytes_.Span[byteIndex];
+            bits = (bits << 8) | _bytes.Span[byteIndex];
             byteIndex++;
             bitCount -= 8;
         }
@@ -195,7 +195,7 @@ public class BitBuffer
         if (bitCount > 0)
         {
             bits <<= bitCount;
-            bits |= HighestBits(bytes_.Span[byteIndex], bitCount);
+            bits |= HighestBits(_bytes.Span[byteIndex], bitCount);
         }
 
         val = bits;
@@ -223,16 +223,16 @@ public class BitBuffer
             return false;
         }
 
-        int byteIndex = byte_offset_; // Локальная копия для PeekBits (не изменяем состояние)
-        int remainingBitsInCurrentByte = 8 - bit_offset_;
-        ulong bits = LowestBits(bytes_.Span[byteIndex], remainingBitsInCurrentByte);
+        int byteIndex = _byteOffset; // Локальная копия для PeekBits (не изменяем состояние)
+        int remainingBitsInCurrentByte = 8 - _bitOffset;
+        ulong bits = LowestBits(_bytes.Span[byteIndex], remainingBitsInCurrentByte);
         byteIndex++;
 
         // If we're reading fewer bits than what's left in the current byte, just
         // return the portion of this byte that we need.
         if (bitCount < remainingBitsInCurrentByte)
         {
-            val = HighestBits((byte)bits, bit_offset_ + bitCount);
+            val = HighestBits((byte)bits, _bitOffset + bitCount);
             return true;
         }
 
@@ -241,7 +241,7 @@ public class BitBuffer
         bitCount -= remainingBitsInCurrentByte;
         while (bitCount >= 8)
         {
-            bits = (bits << 8) | bytes_.Span[byteIndex];
+            bits = (bits << 8) | _bytes.Span[byteIndex];
             byteIndex++;
             bitCount -= 8;
         }
@@ -251,7 +251,7 @@ public class BitBuffer
         if (bitCount > 0)
         {
             bits <<= bitCount;
-            bits |= HighestBits(bytes_.Span[byteIndex], bitCount);
+            bits |= HighestBits(_bytes.Span[byteIndex], bitCount);
         }
 
         val = bits;
@@ -324,8 +324,8 @@ public class BitBuffer
 
         // Store off the current byte/bit offset, in case we want to restore them due
         // to a failed parse.
-        int originalByteOffset = byte_offset_;
-        int originalBitOffset = bit_offset_;
+        int originalByteOffset = _byteOffset;
+        int originalBitOffset = _bitOffset;
 
         // Count the number of leading 0 bits by peeking/consuming them one at a time.
         int zeroBitCount = 0;
@@ -396,8 +396,8 @@ public class BitBuffer
             return false;
         }
 
-        byte_offset_ += (int)((bit_offset_ + bit_count) / 8);
-        bit_offset_ = (int)((bit_offset_ + bit_count) % 8);
+        _byteOffset += (int)((_bitOffset + bit_count) / 8);
+        _bitOffset = (int)((_bitOffset + bit_count) % 8);
         return true;
     }
 
@@ -405,13 +405,13 @@ public class BitBuffer
     // offset is from the given byte, in the range [0,7].
     public bool Seek(int byte_offset, int bit_offset)
     {
-        if (byte_offset > byte_count_ || bit_offset > 7 || (byte_offset == byte_count_ && bit_offset > 0))
+        if (byte_offset > _byteCount || bit_offset > 7 || (byte_offset == _byteCount && bit_offset > 0))
         {
             return false;
         }
 
-        byte_offset_ = byte_offset;
-        bit_offset_ = bit_offset;
+        _byteOffset = byte_offset;
+        _bitOffset = bit_offset;
         return true;
     }
 }

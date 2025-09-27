@@ -1,6 +1,3 @@
-using System;
-using System.Text.Unicode;
-
 namespace SharpVideo.H264;
 
 /// <summary>
