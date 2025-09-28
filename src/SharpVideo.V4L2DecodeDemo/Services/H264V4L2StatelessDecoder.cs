@@ -252,7 +252,7 @@ public class H264V4L2StatelessDecoder
         ConfigureFormats();
 
         // Configure V4L2 controls for stateless operation and get start code preference
-        ConfigureStatelessControls(V4L2StatelessH264DecodeMode.FRAME_BASED, V4L2StatelessH264StartCode.NONE);
+        ConfigureStatelessControls(V4L2StatelessH264DecodeMode.SLICE_BASED, V4L2StatelessH264StartCode.NONE);
 
         // Setup and map buffers properly with real V4L2 mmap
         SetupAndMapBuffers();
