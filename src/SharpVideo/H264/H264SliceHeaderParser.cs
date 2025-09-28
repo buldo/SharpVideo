@@ -40,7 +40,7 @@ public class H264SliceHeaderParser
     const uint32_t kDisableDeblockingFilterIdcMax = 2;
 
     // Unpack RBSP and parse slice state from the supplied buffer.
-    static SliceHeaderState? ParseSliceHeader(ReadOnlySpan<byte> data, uint32_t nal_ref_idc, uint32_t nal_unit_type,H264BitstreamParserState bitstream_parser_state)
+    public static SliceHeaderState? ParseSliceHeader(ReadOnlySpan<byte> data, uint32_t nal_ref_idc, uint32_t nal_unit_type,H264BitstreamParserState bitstream_parser_state)
     {
         var unpacked_buffer = H264Common.UnescapeRbsp(data);
         BitBuffer bit_buffer = new(unpacked_buffer.ToArray());

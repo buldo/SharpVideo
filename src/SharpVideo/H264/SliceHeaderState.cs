@@ -37,7 +37,7 @@ public class SliceHeaderState
     public uint32_t idr_pic_id = 0;
     public uint32_t pic_order_cnt_lsb = 0;
     public int32_t delta_pic_order_cnt_bottom = 0;
-    public List<int32_t> delta_pic_order_cnt;
+    public List<int32_t> delta_pic_order_cnt = new();
     public uint32_t redundant_pic_cnt = 0;
     public uint32_t direct_spatial_mv_pred_flag = 0;
     public uint32_t num_ref_idx_active_override_flag = 0;
