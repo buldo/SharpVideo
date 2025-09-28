@@ -75,19 +75,12 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Starting H.264 stateless stream decode");
         _decodingStopwatch.Start();
 
-        using var naluProvider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
-
-        // Initialize decoder and dependencies
         InitializeDecoder();
 
-            // Start NALU processing task
+        using var naluProvider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
         var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
-
-            // Feed stream data to NaluProvider
-        await FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
-
-            // Wait for NALU processing to complete
-        await naluProcessingTask;
+        var feedTask = FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
+        await Task.WhenAll(naluProcessingTask, feedTask);
 
         _decodingStopwatch.Stop();
         _logger.LogInformation(
@@ -259,7 +252,7 @@ public class H264V4L2StatelessDecoder
         ConfigureFormats();
 
         // Configure V4L2 controls for stateless operation and get start code preference
-        ConfigureStatelessControls(V4L2StatelessH264DecodeMode.FRAME_BASED, V4L2StatelessH264StartCode.ANNEX_B);
+        ConfigureStatelessControls(V4L2StatelessH264DecodeMode.FRAME_BASED, V4L2StatelessH264StartCode.NONE);
 
         // Setup and map buffers properly with real V4L2 mmap
         SetupAndMapBuffers();
