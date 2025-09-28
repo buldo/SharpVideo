@@ -6,7 +6,6 @@ namespace SharpVideo.V4L2DecodeDemo.Models;
 public class FrameDecodedEventArgs : EventArgs
 {
     public required int FrameNumber { get; init; }
-    public required uint BufferIndex { get; init; }
     public required uint BytesUsed { get; init; }
     public required DateTime Timestamp { get; init; }
 }

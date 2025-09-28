@@ -1,12 +1,13 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+
 using Microsoft.Extensions.Logging;
+
 using SharpVideo.H264;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2DecodeDemo.Models;
-using SharpVideo.V4L2DecodeDemo.Services.Stateless;
 
 namespace SharpVideo.V4L2DecodeDemo.Services;
 
@@ -30,9 +31,6 @@ public class H264V4L2StatelessDecoder
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
 
     private readonly DecoderConfiguration _configuration;
-    private readonly H264ParameterSetParser _parameterSetParser;
-    private readonly V4L2StatelessControlManager _controlManager;
-    private readonly StatelessSliceProcessor _sliceProcessor;
 
     private readonly List<MappedBuffer> _outputBuffers = new();
     private readonly List<MappedBuffer> _captureBuffers = new();
@@ -56,35 +54,11 @@ public class H264V4L2StatelessDecoder
     public H264V4L2StatelessDecoder(
         V4L2Device device,
         ILogger<H264V4L2StatelessDecoder> logger,
-        DecoderConfiguration? configuration = null,
-        H264ParameterSetParser? parameterSetParser = null,
-        V4L2StatelessControlManager? controlManager = null,
-        StatelessSliceProcessor? sliceProcessor = null)
+        DecoderConfiguration? configuration = null)
     {
         _device = device ?? throw new ArgumentNullException(nameof(device));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? new DecoderConfiguration();
-
-        // Create dependencies with proper logger factory
-        var loggerFactory = LoggerFactory.Create(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Debug));
-
-        _parameterSetParser = parameterSetParser ?? new H264ParameterSetParser(
-            loggerFactory.CreateLogger<H264ParameterSetParser>(),
-            _configuration.InitialWidth,
-            _configuration.InitialHeight);
-
-        _controlManager = controlManager ?? new V4L2StatelessControlManager(
-            loggerFactory.CreateLogger<V4L2StatelessControlManager>(),
-            _parameterSetParser,
-            _device);
-
-        _sliceProcessor = sliceProcessor ?? new StatelessSliceProcessor(
-            loggerFactory.CreateLogger<StatelessSliceProcessor>(),
-            _controlManager,
-            _parameterSetParser,
-            _device,
-            _outputBuffers,
-            () => _hasValidParameterSets);
     }
 
     /// <summary>
@@ -104,7 +78,7 @@ public class H264V4L2StatelessDecoder
         using var naluProvider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
 
         // Initialize decoder and dependencies
-        await InitializeDecoderAsync(cancellationToken);
+        InitializeDecoder();
 
             // Start NALU processing task
         var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
@@ -271,72 +245,30 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void HandleSliceNalu(ReadOnlySpan<byte> sliceData, H264NaluType naluType)
     {
-        if (!_hasValidParameterSets)
-        {
-            _logger.LogWarning("Skipping slice NALU - no valid parameter sets configured yet");
-            return;
-        }
 
-        uint bufferIndex;
-
-        // Get available output buffer
-        lock (_bufferLock)
-        {
-            if (!_availableOutputBuffers.TryDequeue(out bufferIndex))
-            {
-                _logger.LogWarning("No available output buffers - decoder may be overwhelmed");
-                return;
-            }
-        }
-
-        try
-        {
-            _sliceProcessor.QueueStatelessSliceData(sliceData, naluType, bufferIndex);
-
-            // Try to dequeue completed frames
-            DequeueCompletedFrames();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to queue slice data for buffer {BufferIndex}", bufferIndex);
-
-            // Return buffer to available queue
-            lock (_bufferLock)
-            {
-                _availableOutputBuffers.Enqueue(bufferIndex);
-            }
-        }
     }
 
-    private async Task InitializeDecoderAsync(CancellationToken cancellationToken)
+    private void InitializeDecoder()
     {
         if (_isInitialized)
             return;
 
         _logger.LogInformation("Initializing H.264 stateless decoder...");
 
-        try
-        {
-            // Configure decoder formats
-            ConfigureFormats();
+        // Configure decoder formats
+        ConfigureFormats();
 
-            // Configure V4L2 controls for stateless operation and get start code preference
-            _controlManager.ConfigureStatelessControls(V4L2StatelessH264DecodeMode.FRAME_BASED, V4L2StatelessH264StartCode.ANNEX_B);
+        // Configure V4L2 controls for stateless operation and get start code preference
+        ConfigureStatelessControls(V4L2StatelessH264DecodeMode.FRAME_BASED, V4L2StatelessH264StartCode.ANNEX_B);
 
-            // Setup and map buffers properly with real V4L2 mmap
-            await SetupAndMapBuffersAsync();
+        // Setup and map buffers properly with real V4L2 mmap
+        SetupAndMapBuffers();
 
-            // Start streaming on both queues
-            StartStreaming();
+        // Start streaming on both queues
+        StartStreaming();
 
-            _isInitialized = true;
-            _logger.LogInformation("Decoder initialization completed successfully");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to initialize decoder");
-            throw new InvalidOperationException($"Decoder initialization failed: {ex.Message}", ex);
-        }
+        _isInitialized = true;
+        _logger.LogInformation("Decoder initialization completed successfully");
     }
 
     private void ConfigureFormats()
@@ -389,31 +321,24 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private async Task SetupAndMapBuffersAsync()
+    private void SetupAndMapBuffers()
     {
         _logger.LogInformation("Setting up and mapping buffers...");
 
-        try
-        {
-            // Setup OUTPUT buffers for slice data with proper V4L2 mmap
-            await SetupBufferQueueAsync(V4L2BufferType.VIDEO_OUTPUT_MPLANE, _configuration.OutputBufferCount, _outputBuffers, _availableOutputBuffers);
 
-            // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
-            await SetupBufferQueueAsync(V4L2BufferType.VIDEO_CAPTURE_MPLANE, _configuration.CaptureBufferCount, _captureBuffers, _availableCaptureBuffers);
+        // Setup OUTPUT buffers for slice data with proper V4L2 mmap
+        SetupBufferQueue(V4L2BufferType.VIDEO_OUTPUT_MPLANE, _configuration.OutputBufferCount, _outputBuffers,
+            _availableOutputBuffers);
 
-            _logger.LogInformation("Buffer setup completed: {OutputBuffers} output, {CaptureBuffers} capture",
-                _outputBuffers.Count, _captureBuffers.Count);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to setup buffers");
-            throw new InvalidOperationException($"Buffer setup failed: {ex.Message}", ex);
-        }
+        // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
+        SetupBufferQueue(V4L2BufferType.VIDEO_CAPTURE_MPLANE, _configuration.CaptureBufferCount, _captureBuffers,
+            _availableCaptureBuffers);
 
-        await Task.CompletedTask;
+        _logger.LogInformation("Buffer setup completed: {OutputBuffers} output, {CaptureBuffers} capture",
+            _outputBuffers.Count, _captureBuffers.Count);
     }
 
-    private async Task SetupBufferQueueAsync(V4L2BufferType bufferType, uint bufferCount, List<MappedBuffer> bufferList, Queue<uint> availableQueue)
+    private void SetupBufferQueue(V4L2BufferType bufferType, uint bufferCount, List<MappedBuffer> bufferList, Queue<uint> availableQueue)
     {
         // Request buffers from V4L2
         var reqBufs = new V4L2RequestBuffers
@@ -500,57 +425,6 @@ public class H264V4L2StatelessDecoder
 
             _logger.LogTrace("Mapped buffer {Index} for {BufferType}: {Size} bytes, {PlaneCount} planes at {Pointer:X8}",
                 i, bufferType, totalSize, planeCount, bufferPtr.ToInt64());
-        }
-
-        await Task.CompletedTask;
-    }
-
-    private void DequeueCompletedFrames()
-    {
-        try
-        {
-            // Dequeue completed frames from capture queue
-            var dequeuedFrame = _sliceProcessor.DequeueFrame(_device.fd);
-            if (dequeuedFrame != null)
-            {
-                _framesDecoded++;
-
-                FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
-                {
-                    FrameNumber = _framesDecoded,
-                    BufferIndex = 0, // Would extract from dequeuedFrame
-                    BytesUsed = 0,   // Would extract from dequeuedFrame
-                    Timestamp = DateTime.Now
-                });
-
-                // Make capture buffer available again
-                // Would implement proper buffer recycling here
-            }
-
-            // Dequeue completed output buffers to make them available again
-            DequeueCompletedOutputBuffers();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error dequeuing frames");
-        }
-    }
-
-    private void DequeueCompletedOutputBuffers()
-    {
-        var buffer = new V4L2Buffer
-        {
-            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-            Memory = V4L2Constants.V4L2_MEMORY_MMAP
-        };
-
-        var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
-        if (result.Success)
-        {
-            lock (_bufferLock)
-            {
-                _availableOutputBuffers.Enqueue(buffer.Index);
-            }
         }
     }
 
@@ -683,5 +557,24 @@ public class H264V4L2StatelessDecoder
         }
         GC.SuppressFinalize(this);
         await Task.CompletedTask;
+    }
+
+    private void ConfigureStatelessControls(V4L2StatelessH264DecodeMode decodeMode, V4L2StatelessH264StartCode startCode)
+    {
+        _logger.LogInformation("Configuring stateless decoder controls: {DecodeMode}, {StartCode}", decodeMode, startCode);
+
+        if (!_device.TrySetSimpleControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
+                (int)decodeMode))
+        {
+            throw new Exception($"Failed to set decode mode to {decodeMode}");
+        }
+
+        if (!_device.TrySetSimpleControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
+                (int)startCode))
+        {
+            throw new Exception($"Failed to set start code to {startCode}");
+        }
     }
 }

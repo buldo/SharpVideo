@@ -1,6 +1,6 @@
 using System.Runtime.Versioning;
 
-namespace SharpVideo.V4L2DecodeDemo.Services.Stateless;
+namespace SharpVideo.V4L2DecodeDemo.Services;
 
 /// <summary>
 /// Represents a mapped V4L2 buffer for stateless decoding operations
@@ -26,5 +26,5 @@ public class MappedBuffer
     /// <summary>
     /// V4L2 planes associated with this buffer
     /// </summary>
-    public required SharpVideo.Linux.Native.V4L2Plane[] Planes { get; init; }
+    public required Linux.Native.V4L2Plane[] Planes { get; init; }
 }

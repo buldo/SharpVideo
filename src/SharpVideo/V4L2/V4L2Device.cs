@@ -60,6 +60,32 @@ public class V4L2Device : IDisposable
     }
 
     /// <summary>
+    /// Try to set a simple V4L2 control
+    /// </summary>
+    public bool TrySetSimpleControl(uint controlId, int value)
+    {
+
+        var control = new V4L2Control
+        {
+            Id = controlId,
+            Value = value
+        };
+
+        var result = LibV4L2.SetControl(fd, ref control);
+        if (result.Success)
+        {
+            //_logger.LogInformation("Set {Description}", description);
+            return true;
+        }
+        else
+        {
+            //_logger.LogWarning("Failed to set {Description}: {Error}", description, result.ErrorMessage);
+            return false;
+        }
+    }
+
+
+    /// <summary>
     /// Set a single extended control - much simpler and more predictable
     /// </summary>
     public void SetSingleExtendedControl<T>(uint controlId, T data) where T : struct
