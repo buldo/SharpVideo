@@ -154,4 +154,78 @@ public static unsafe partial class NativeTestLibrary
     // Function to get v4l2_ctrl_h264_sps structure size for verification
     [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_h264_sps_size")]
     public static partial int GetNativeV4L2CtrlH264SpsSize();
+
+    // New native V4L2 control constant accessors
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_user")]
+    public static partial uint GetNativeV4L2CtrlClassUser();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_codec")]
+    public static partial uint GetNativeV4L2CtrlClassCodec();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_camera")]
+    public static partial uint GetNativeV4L2CtrlClassCamera();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_fm_tx")]
+    public static partial uint GetNativeV4L2CtrlClassFmTx();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_flash")]
+    public static partial uint GetNativeV4L2CtrlClassFlash();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_jpeg")]
+    public static partial uint GetNativeV4L2CtrlClassJpeg();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_image_source")]
+    public static partial uint GetNativeV4L2CtrlClassImageSource();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_image_proc")]
+    public static partial uint GetNativeV4L2CtrlClassImageProc();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_dv")]
+    public static partial uint GetNativeV4L2CtrlClassDv();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_fm_rx")]
+    public static partial uint GetNativeV4L2CtrlClassFmRx();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_rf_tuner")]
+    public static partial uint GetNativeV4L2CtrlClassRfTuner();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_detect")]
+    public static partial uint GetNativeV4L2CtrlClassDetect();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_codec_stateless")]
+    public static partial uint GetNativeV4L2CtrlClassCodecStateless();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_class_colorimetry")]
+    public static partial uint GetNativeV4L2CtrlClassColorimetry();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_codec_stateless_base")]
+    public static partial uint GetNativeV4L2CidCodecStatelessBase();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_codec_stateless_class")]
+    public static partial uint GetNativeV4L2CidCodecStatelessClass();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_decode_mode")]
+    public static partial uint GetNativeV4L2CidStatelessH264DecodeMode();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_start_code")]
+    public static partial uint GetNativeV4L2CidStatelessH264StartCode();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_sps")]
+    public static partial uint GetNativeV4L2CidStatelessH264Sps();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_pps")]
+    public static partial uint GetNativeV4L2CidStatelessH264Pps();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_scaling_matrix")]
+    public static partial uint GetNativeV4L2CidStatelessH264ScalingMatrix();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_pred_weights")]
+    public static partial uint GetNativeV4L2CidStatelessH264PredWeights();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_slice_params")]
+    public static partial uint GetNativeV4L2CidStatelessH264SliceParams();
+
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_decode_params")]
+    public static partial uint GetNativeV4L2CidStatelessH264DecodeParams();
 }

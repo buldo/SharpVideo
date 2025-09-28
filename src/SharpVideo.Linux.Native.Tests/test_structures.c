@@ -199,6 +199,34 @@ uint32_t get_native_dma_heap_ioctl_alloc(void) {
 
 // V4L2 structure testing functions
 
+// Accessors for V4L2 control class constants straight from the kernel headers
+uint32_t get_native_v4l2_ctrl_class_user(void) { return V4L2_CTRL_CLASS_USER; }
+uint32_t get_native_v4l2_ctrl_class_codec(void) { return V4L2_CTRL_CLASS_CODEC; }
+uint32_t get_native_v4l2_ctrl_class_camera(void) { return V4L2_CTRL_CLASS_CAMERA; }
+uint32_t get_native_v4l2_ctrl_class_fm_tx(void) { return V4L2_CTRL_CLASS_FM_TX; }
+uint32_t get_native_v4l2_ctrl_class_flash(void) { return V4L2_CTRL_CLASS_FLASH; }
+uint32_t get_native_v4l2_ctrl_class_jpeg(void) { return V4L2_CTRL_CLASS_JPEG; }
+uint32_t get_native_v4l2_ctrl_class_image_source(void) { return V4L2_CTRL_CLASS_IMAGE_SOURCE; }
+uint32_t get_native_v4l2_ctrl_class_image_proc(void) { return V4L2_CTRL_CLASS_IMAGE_PROC; }
+uint32_t get_native_v4l2_ctrl_class_dv(void) { return V4L2_CTRL_CLASS_DV; }
+uint32_t get_native_v4l2_ctrl_class_fm_rx(void) { return V4L2_CTRL_CLASS_FM_RX; }
+uint32_t get_native_v4l2_ctrl_class_rf_tuner(void) { return V4L2_CTRL_CLASS_RF_TUNER; }
+uint32_t get_native_v4l2_ctrl_class_detect(void) { return V4L2_CTRL_CLASS_DETECT; }
+uint32_t get_native_v4l2_ctrl_class_codec_stateless(void) { return V4L2_CTRL_CLASS_CODEC_STATELESS; }
+uint32_t get_native_v4l2_ctrl_class_colorimetry(void) { return V4L2_CTRL_CLASS_COLORIMETRY; }
+
+// Accessors for V4L2 stateless codec control identifiers
+uint32_t get_native_v4l2_cid_codec_stateless_base(void) { return V4L2_CID_CODEC_STATELESS_BASE; }
+uint32_t get_native_v4l2_cid_codec_stateless_class(void) { return V4L2_CID_CODEC_STATELESS_CLASS; }
+uint32_t get_native_v4l2_cid_stateless_h264_decode_mode(void) { return V4L2_CID_STATELESS_H264_DECODE_MODE; }
+uint32_t get_native_v4l2_cid_stateless_h264_start_code(void) { return V4L2_CID_STATELESS_H264_START_CODE; }
+uint32_t get_native_v4l2_cid_stateless_h264_sps(void) { return V4L2_CID_STATELESS_H264_SPS; }
+uint32_t get_native_v4l2_cid_stateless_h264_pps(void) { return V4L2_CID_STATELESS_H264_PPS; }
+uint32_t get_native_v4l2_cid_stateless_h264_scaling_matrix(void) { return V4L2_CID_STATELESS_H264_SCALING_MATRIX; }
+uint32_t get_native_v4l2_cid_stateless_h264_pred_weights(void) { return V4L2_CID_STATELESS_H264_PRED_WEIGHTS; }
+uint32_t get_native_v4l2_cid_stateless_h264_slice_params(void) { return V4L2_CID_STATELESS_H264_SLICE_PARAMS; }
+uint32_t get_native_v4l2_cid_stateless_h264_decode_params(void) { return V4L2_CID_STATELESS_H264_DECODE_PARAMS; }
+
 // Function to fill v4l2_capability structure with test data
 void fill_native_v4l2_capability(struct v4l2_capability* s) {
     if (!s) return;
