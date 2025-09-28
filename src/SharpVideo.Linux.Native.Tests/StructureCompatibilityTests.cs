@@ -602,5 +602,57 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal(0u, extControl.Reserved2);
         Assert.Equal(new IntPtr(0x12345678), extControl.Ptr);
     }
+
+    [Fact]
+    public void TestV4L2CtrlH264Sps_NativeSizeCompatibility()
+    {
+        int csharpSize = Marshal.SizeOf<V4L2CtrlH264Sps>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2CtrlH264SpsSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2CtrlH264Sps_NativeMemoryLayoutCompatibility()
+    {
+        int nativeSize = NativeTestLibrary.GetNativeV4L2CtrlH264SpsSize();
+        var ptr = Marshal.AllocHGlobal(nativeSize);
+        try
+        {
+            // Fill native memory using the native test library
+            NativeTestLibrary.FillNativeV4L2CtrlH264Sps(ptr);
+
+            // Marshal the native memory into our managed structure (handles ByValArray marshaling)
+            var nativeFilledStruct = Marshal.PtrToStructure<V4L2CtrlH264Sps>(ptr)!;
+
+            // Verify distinctive patterns set by the native filler
+            Assert.Equal(0xAA, nativeFilledStruct.profile_idc);
+            Assert.Equal((V4L2H264SpsConstraintSetFlag)0x3F, nativeFilledStruct.constraint_set_flags);
+            Assert.Equal(0xBB, nativeFilledStruct.level_idc);
+            Assert.Equal(0xCC, nativeFilledStruct.seq_parameter_set_id);
+            Assert.Equal((byte)0x01, nativeFilledStruct.chroma_format_idc);
+            Assert.Equal((byte)0x02, nativeFilledStruct.bit_depth_luma_minus8);
+            Assert.Equal((byte)0x03, nativeFilledStruct.bit_depth_chroma_minus8);
+            Assert.Equal((byte)0x04, nativeFilledStruct.log2_max_frame_num_minus4);
+            Assert.Equal((byte)0x05, nativeFilledStruct.pic_order_cnt_type);
+            Assert.Equal((byte)0x06, nativeFilledStruct.log2_max_pic_order_cnt_lsb_minus4);
+            Assert.Equal((byte)0x07, nativeFilledStruct.max_num_ref_frames);
+            Assert.Equal((byte)0x08, nativeFilledStruct.num_ref_frames_in_pic_order_cnt_cycle);
+
+            // Check a couple of entries in the large ref-frame offsets array
+            Assert.Equal(0x1000, nativeFilledStruct.offset_for_ref_frame[0]);
+            Assert.Equal(0x1000 + 254, nativeFilledStruct.offset_for_ref_frame[254]);
+
+            Assert.Equal(unchecked((int)0xDEADBEEF), nativeFilledStruct.offset_for_non_ref_pic);
+            Assert.Equal(unchecked((int)0xCAFEBABE), nativeFilledStruct.offset_for_top_to_bottom_field);
+            Assert.Equal((ushort)0x1234, nativeFilledStruct.pic_width_in_mbs_minus1);
+            Assert.Equal((ushort)0x5678, nativeFilledStruct.pic_height_in_map_units_minus1);
+            Assert.Equal((V4L2H264SpsFlag)0xDEADBEEFu, nativeFilledStruct.flags);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
 }
 

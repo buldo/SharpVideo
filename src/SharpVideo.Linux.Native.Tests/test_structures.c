@@ -128,7 +128,7 @@ void fill_native_drm_mode_mode_info(drmModeModeInfo* s) {
     strcpy(s->name, "TEST_MODE_INFO_ABCDEF");  // Distinctive test string
 }
 
-// Function to get drmModeModeInfo structure size for verification
+// Function to get off_t size
 int get_off_t_size() {
     return sizeof(__off_t);
 }
@@ -278,10 +278,10 @@ void fill_native_v4l2_requestbuffers(struct v4l2_requestbuffers* s) {
     s->type = 0xCAFEBABE;         // Distinctive pattern for type
     s->memory = 0x12345678;       // Distinctive pattern for memory
     s->capabilities = 0x87654321; // Distinctive pattern for capabilities
-    s->flags = 0xFEDCBA98;        // Distinctive pattern for flags
-    s->reserved[0] = 0x11223344;  // Distinctive pattern for reserved[0]
-    s->reserved[1] = 0x55667788;  // Distinctive pattern for reserved[1]
-    s->reserved[2] = 0x99AABBCC;  // Distinctive pattern for reserved[2]
+    s->flags = 0x98;              // Distinctive byte pattern for flags (matches low byte of 0xFEDCBA98)
+    s->reserved[0] = 0x44;        // Distinctive byte pattern for reserved[0]
+    s->reserved[1] = 0x88;        // Distinctive byte pattern for reserved[1]
+    s->reserved[2] = 0xCC;        // Distinctive byte pattern for reserved[2]
 }
 
 // Function to get v4l2_requestbuffers structure size for verification
@@ -374,4 +374,38 @@ void fill_native_v4l2_ext_control(struct v4l2_ext_control* s) {
 // Function to get v4l2_ext_control structure size for verification
 int get_native_v4l2_ext_control_size(void) {
     return sizeof(struct v4l2_ext_control);
+}
+
+// Function to fill v4l2_ctrl_h264_sps structure with test data
+void fill_native_v4l2_ctrl_h264_sps(struct v4l2_ctrl_h264_sps* s) {
+    if (!s) return;
+
+    s->profile_idc = 0xAA;                         // Distinctive pattern for profile_idc
+    s->constraint_set_flags = 0x3F;                // Set all defined constraint set bits
+    s->level_idc = 0xBB;                           // Distinctive pattern for level_idc
+    s->seq_parameter_set_id = 0xCC;                // Distinctive pattern for seq_parameter_set_id
+    s->chroma_format_idc = 0x01;                   // Distinctive pattern for chroma_format_idc
+    s->bit_depth_luma_minus8 = 0x02;               // Distinctive pattern for bit_depth_luma_minus8
+    s->bit_depth_chroma_minus8 = 0x03;             // Distinctive pattern for bit_depth_chroma_minus8
+    s->log2_max_frame_num_minus4 = 0x04;           // Distinctive pattern
+    s->pic_order_cnt_type = 0x05;                  // Distinctive pattern
+    s->log2_max_pic_order_cnt_lsb_minus4 = 0x06;   // Distinctive pattern
+    s->max_num_ref_frames = 0x07;                  // Distinctive pattern
+    s->num_ref_frames_in_pic_order_cnt_cycle = 0x08; // Distinctive pattern
+
+    // Fill offset_for_ref_frame with a recognizable sequence
+    for (int i = 0; i < 255; i++) {
+        s->offset_for_ref_frame[i] = 0x1000 + i;
+    }
+
+    s->offset_for_non_ref_pic = 0xDEADBEEF;       // Distinctive 32-bit pattern
+    s->offset_for_top_to_bottom_field = 0xCAFEBABE; // Distinctive 32-bit pattern
+    s->pic_width_in_mbs_minus1 = 0x1234;          // Distinctive 16-bit pattern
+    s->pic_height_in_map_units_minus1 = 0x5678;   // Distinctive 16-bit pattern
+    s->flags = 0xDEADBEEF;                        // Distinctive 32-bit flags pattern
+}
+
+// Function to get v4l2_ctrl_h264_sps structure size for verification
+int get_native_v4l2_ctrl_h264_sps_size(void) {
+    return sizeof(struct v4l2_ctrl_h264_sps);
 }

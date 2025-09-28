@@ -146,4 +146,12 @@ public static unsafe partial class NativeTestLibrary
     // Function to get v4l2_ext_control structure size for verification
     [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ext_control_size")]
     public static partial int GetNativeV4L2ExtControlSize();
+
+    // Function to fill v4l2_ctrl_h264_sps structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_ctrl_h264_sps")]
+    public static partial void FillNativeV4L2CtrlH264Sps(IntPtr structure);
+
+    // Function to get v4l2_ctrl_h264_sps structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_ctrl_h264_sps_size")]
+    public static partial int GetNativeV4L2CtrlH264SpsSize();
 }
