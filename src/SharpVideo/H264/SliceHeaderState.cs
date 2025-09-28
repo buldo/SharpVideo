@@ -56,21 +56,22 @@ public class SliceHeaderState
     public uint32_t slice_group_change_cycle = 0;
 
     // derived values
-    static uint32_t getFrameNumLen(uint32_t log2_max_frame_num_minus4)
+    public static uint32_t getFrameNumLen(uint32_t log2_max_frame_num_minus4)
     {
         // Rec. ITU-T H.264 (2012) Page 62, Section 7.4.3
         // frame_num is used as an identifier for pictures and shall be
         // represented by log2_max_frame_num_minus4 + 4 bits in the bitstream.
         return log2_max_frame_num_minus4 + 4;
     }
-    static uint32_t getPicOrderCntLsbLen(uint32_t log2_max_pic_order_cnt_lsb_minus4)
+
+    public static uint32_t getPicOrderCntLsbLen(uint32_t log2_max_pic_order_cnt_lsb_minus4)
     {
         // Rec. ITU-T H.264 (2012) Page 64, Section 7.4.3
         // The size of the pic_order_cnt_lsb syntax element is
         // log2_max_pic_order_cnt_lsb_minus4 + 4 bits.
         return log2_max_pic_order_cnt_lsb_minus4 + 4;
     }
-    static uint32_t getSliceGroupChangeCycleLen(uint32_t pic_width_in_mbs_minus1, uint32_t pic_height_in_map_units_minus1, uint32_t slice_group_change_rate_minus1)
+    public static uint32_t getSliceGroupChangeCycleLen(uint32_t pic_width_in_mbs_minus1, uint32_t pic_height_in_map_units_minus1, uint32_t slice_group_change_rate_minus1)
     {
         // Rec. ITU-T H.264 (2012) Page 67, Section 7.4.3
         // The value of slice_group_change_cycle is represented in the bitstream

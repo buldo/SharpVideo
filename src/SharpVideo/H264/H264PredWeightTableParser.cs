@@ -34,7 +34,7 @@ class H264PredWeightTableParser
             num_ref_idx_l1_active_minus1);
     }
 
-    static PredWeightTableState? ParsePredWeightTable(
+    public static PredWeightTableState? ParsePredWeightTable(
         BitBuffer bit_buffer,
         uint32_t chroma_array_type,
         uint32_t slice_type,

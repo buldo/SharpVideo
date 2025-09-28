@@ -16,7 +16,7 @@ public class H264RefPicListModificationParser
         return ParseRefPicListModification(bit_buffer, slice_type);
     }
 
-    static RefPicListModificationState? ParseRefPicListModification(BitBuffer bit_buffer, uint32_t slice_type)
+    public static RefPicListModificationState? ParseRefPicListModification(BitBuffer bit_buffer, uint32_t slice_type)
     {
         uint32_t golomb_tmp;
 

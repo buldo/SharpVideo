@@ -17,7 +17,7 @@ class H264DecRefPicMarkingParser
         return ParseDecRefPicMarking(bit_buffer, nal_unit_type);
     }
 
-    static DecRefPicMarkingState? ParseDecRefPicMarking(BitBuffer bit_buffer, uint32_t nal_unit_type)
+    public static DecRefPicMarkingState? ParseDecRefPicMarking(BitBuffer bit_buffer, uint32_t nal_unit_type)
     {
         uint32_t golomb_tmp;
 
