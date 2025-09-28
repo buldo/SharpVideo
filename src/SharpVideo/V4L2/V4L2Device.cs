@@ -95,6 +95,7 @@ public class V4L2Device : IDisposable
                 {
                     Which = GetControlClass(controlId),
                     Count = 1,
+                    RequestFd = -1,
                     Controls = controlPtr
                 };
 
