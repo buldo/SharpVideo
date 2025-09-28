@@ -160,4 +160,12 @@ public static class H264Common
 
         return (out_bit_offset == 0);
     }
+
+    internal static int get_current_offset(BitBuffer bit_buffer)
+    {
+        int out_byte_offset, out_bit_offset;
+        bit_buffer.GetCurrentOffset(out out_byte_offset, out out_bit_offset);
+
+        return out_byte_offset + ((out_bit_offset == 0) ? 0 : 1);
+    }
 }

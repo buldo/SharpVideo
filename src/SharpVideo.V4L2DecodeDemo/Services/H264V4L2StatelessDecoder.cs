@@ -45,8 +45,9 @@ public class H264V4L2StatelessDecoder
     private bool _hasValidParameterSets;
     private bool _isInitialized;
 
-    private V4L2CtrlH264Sps? _lastSps;
-    private V4L2CtrlH264Pps? _lastPps;
+    private H264BitstreamParserState _h264BitstreamParserState;
+    private V4L2CtrlH264Sps? _lastV4L2Sps;
+    private V4L2CtrlH264Pps? _lastV4L2Pps;
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
     public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
@@ -185,7 +186,7 @@ public class H264V4L2StatelessDecoder
         _logger.LogDebug("Parsed SPS: {Id}", parsedSps.sps_data.seq_parameter_set_id);
         var v4L2Sps = SpsMapper.MapSpsToV4L2(parsedSps);
         _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, v4L2Sps);
-        _lastSps = v4L2Sps;
+        _lastV4L2Sps = v4L2Sps;
 
         _logger.LogDebug("Parsed and stored SPS from stream");
         CheckReadyForDecode();
@@ -197,9 +198,9 @@ public class H264V4L2StatelessDecoder
     private void HandlePpsNalu(ReadOnlySpan<byte> ppsData)
     {
         uint chromaFormatIdc = 1; // 4:2:0 YUV format (most common)
-        if (_lastSps.HasValue)
+        if (_lastV4L2Sps.HasValue)
         {
-            chromaFormatIdc = _lastSps.Value.chroma_format_idc;
+            chromaFormatIdc = _lastV4L2Sps.Value.chroma_format_idc;
         }
 
         var parsedPps = H264PpsParser.ParsePps(ppsData, chromaFormatIdc);
@@ -217,7 +218,7 @@ public class H264V4L2StatelessDecoder
 
         var v4L2Pps = PpsMapper.ConvertPpsStateToV4L2(parsedPps);
         _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, v4L2Pps);
-        _lastPps = v4L2Pps;
+        _lastV4L2Pps = v4L2Pps;
 
         _logger.LogDebug("Parsed and stored PPS from stream");
         CheckReadyForDecode();
@@ -226,7 +227,7 @@ public class H264V4L2StatelessDecoder
     private void CheckReadyForDecode()
     {
         // If we also have PPS, configure the decoder
-        if (_lastSps.HasValue && _lastPps.HasValue)
+        if (_lastV4L2Sps.HasValue && _lastV4L2Pps.HasValue)
         {
             _hasValidParameterSets = true;
             _logger.LogInformation("Successfully configured parameter sets from stream");
@@ -238,7 +239,7 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void HandleSliceNalu(ReadOnlySpan<byte> sliceData, H264NaluType naluType)
     {
-
+        //var parsedSlice = H264SliceHeaderParser.ParseSliceHeader(sliceData,, (uint)naluType, _h264BitstreamParserState);
     }
 
     private void InitializeDecoder()
@@ -247,6 +248,7 @@ public class H264V4L2StatelessDecoder
             return;
 
         _logger.LogInformation("Initializing H.264 stateless decoder...");
+        _h264BitstreamParserState = new();
 
         // Configure decoder formats
         ConfigureFormats();

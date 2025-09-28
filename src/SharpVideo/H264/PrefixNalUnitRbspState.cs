@@ -1,0 +1,13 @@
+﻿namespace SharpVideo.H264;
+
+public class PrefixNalUnitRbspState
+{
+    // input parameters
+    public uint32_t svc_extension_flag = 0;
+    public uint32_t nal_ref_idc = 0;
+    public uint32_t use_ref_base_pic_flag = 0;
+    public uint32_t idr_flag = 0;
+
+    // contents
+    public PrefixNalUnitSvcState prefix_nal_unit_svc;
+}

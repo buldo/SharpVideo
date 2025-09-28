@@ -19,7 +19,7 @@ public class H264BitstreamParserState
     /// <summary>
     /// SubsetSPS state
     /// </summary>
-    //Dictionary<uint32_t, SubsetSpsState> subset_sps = new();
+    public Dictionary<uint32_t, SubsetSpsState> subset_sps = new();
 
 // some accessors
     SpsState? GetSps(uint32_t sps_id) => sps.GetValueOrDefault(sps_id);

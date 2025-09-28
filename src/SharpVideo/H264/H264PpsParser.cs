@@ -65,7 +65,7 @@ public static class H264PpsParser
         return ParsePps(bit_buffer, chroma_format_idc);
     }
 
-    private static PpsState? ParsePps(BitBuffer bit_buffer, UInt32 chroma_format_idc)
+    public static PpsState? ParsePps(BitBuffer bit_buffer, UInt32 chroma_format_idc)
     {
         UInt32 bits_tmp;
         UInt32 golomb_tmp;

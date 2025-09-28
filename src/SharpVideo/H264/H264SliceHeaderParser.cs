@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace SharpVideo.H264;
+﻿namespace SharpVideo.H264;
 
 /// <summary>
 /// A class for parsing out a slice header data from an H264 NALU.
@@ -51,7 +49,7 @@ public class H264SliceHeaderParser
             bitstream_parser_state);
     }
 
-    static SliceHeaderState? ParseSliceHeader(BitBuffer bit_buffer, uint32_t nal_ref_idc, uint32_t nal_unit_type, H264BitstreamParserState bitstream_parser_state)
+    public static SliceHeaderState? ParseSliceHeader(BitBuffer bit_buffer, uint32_t nal_ref_idc, uint32_t nal_unit_type, H264BitstreamParserState bitstream_parser_state)
     {
         int32_t sgolomb_tmp;
 
