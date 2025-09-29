@@ -10,25 +10,28 @@ internal class Program
         var provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
         await provider.AppendData(file, CancellationToken.None);
 
-        var naluParser = new H264NaluParser(NaluMode.WithoutStartCode);
+        var streamState = new H264BitstreamParserState();
+        var parsingOptions = new ParsingOptions();
         await foreach (var nalu in provider.NaluReader.ReadAllAsync())
         {
-            var naluType = naluParser.GetNaluType(nalu);
+            var naluState = H264NalUnitParser.ParseNalUnit(nalu, streamState, parsingOptions);
+            var naluType = (NalUnitType)naluState.nal_unit_header.nal_unit_type;
             Console.Write($"Nalu Type: {naluType}, Size: {nalu.Length} bytes");
             var naluData = nalu.AsSpan(1);
-            if (naluType == H264NaluType.PictureParameterSet)
+            if (naluType == NalUnitType.PPS_NUT)
             {
-                var ppsState = H264PpsParser.ParsePps(naluData, 1);
-                Console.WriteLine($", pic_parameter_set_id: {ppsState.pic_parameter_set_id}");
+                var pps = naluState.nal_unit_payload.pps;
+                Console.WriteLine($", pic_parameter_set_id: {pps.pic_parameter_set_id}");
             }
-            if (naluType == H264NaluType.SequenceParameterSet)
+            else if (naluType == NalUnitType.SPS_NUT)
             {
-                var spsState = H264SpsParser.ParseSps(naluData);
+                var spsState = naluState.nal_unit_payload.sps;
                 Console.WriteLine($", profile_type: {spsState.sps_data.profile_type}");
             }
             else
             {
-                Console.WriteLine();
+                var aaa = naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp;
+                Console.WriteLine($"Frame num: {aaa.slice_header.frame_num}");
             }
         }
     }

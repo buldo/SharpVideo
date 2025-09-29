@@ -3,14 +3,14 @@
 /// <summary>
 /// A class for parsing out an H264 NAL Unit.
 /// </summary>
-public class H264NalUnitParser
+public static class H264NalUnitParser
 {
     /// <summary>
     /// Parse NAL unit state from the supplied buffer.
     /// Use this function to parse NALUs that have not been escaped
     /// into an RBSP, e.g. with NALUs from an mp4 mdat box.
     /// </summary>
-    static NalUnitState ParseNalUnitUnescaped(ReadOnlySpan<byte> data, int length, H264BitstreamParserState bitstream_parser_state, ParsingOptions parsing_options)
+    public static NalUnitState ParseNalUnitUnescaped(ReadOnlySpan<byte> data, int length, H264BitstreamParserState bitstream_parser_state, ParsingOptions parsing_options)
     {
         BitBuffer bit_buffer = new(data.ToArray());
 
@@ -23,7 +23,7 @@ public class H264NalUnitParser
     /// to avoid the start code prefix (0x000001/0x00000001)
     /// </summary>
     /// <returns></returns>
-    static NalUnitState ParseNalUnit(ReadOnlySpan<byte> data, H264BitstreamParserState bitstream_parser_state,ParsingOptions parsing_options)
+    public static NalUnitState ParseNalUnit(ReadOnlySpan<byte> data, H264BitstreamParserState bitstream_parser_state,ParsingOptions parsing_options)
     {
         var unpacked_buffer = H264Common.UnescapeRbsp(data);
         BitBuffer bit_buffer = new(unpacked_buffer.ToArray());
