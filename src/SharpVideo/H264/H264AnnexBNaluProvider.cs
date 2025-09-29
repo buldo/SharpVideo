@@ -3,11 +3,26 @@ using System.Threading.Channels;
 
 namespace SharpVideo.H264;
 
+public class H264Nalu
+{
+    private readonly byte[] _data;
+    private readonly int _payloadStart;
+
+    public H264Nalu(byte[] data, int payloadStart)
+    {
+        _data = data;
+        _payloadStart = payloadStart;
+    }
+
+    public ReadOnlySpan<byte> Data => _data;
+    public ReadOnlySpan<byte> WithoutHeader => _data.AsSpan(_payloadStart);
+}
+
 public class H264AnnexBNaluProvider : IDisposable
 {
     private readonly Pipe _pipe = new Pipe();
-    private readonly Channel<byte[]> _channel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
-        { SingleReader = true, SingleWriter = true });
+    private readonly Channel<H264Nalu> _channel = Channel.CreateUnbounded<H264Nalu>(new UnboundedChannelOptions
+    { SingleReader = true, SingleWriter = true });
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly Task _processingTask;
@@ -24,7 +39,7 @@ public class H264AnnexBNaluProvider : IDisposable
         await _pipe.Writer.WriteAsync(data, cancellationToken);
     }
 
-    public ChannelReader<byte[]> NaluReader => _channel.Reader;
+    public ChannelReader<H264Nalu> NaluReader => _channel.Reader;
 
     public void CompleteWriting()
     {

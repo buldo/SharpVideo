@@ -45,7 +45,6 @@ public class H264V4L2StatelessDecoder
     private bool _hasValidParameterSets;
     private bool _isInitialized;
 
-    private H264BitstreamParserState _h264BitstreamParserState;
     private V4L2CtrlH264Sps? _lastV4L2Sps;
     private V4L2CtrlH264Pps? _lastV4L2Pps;
 
@@ -244,13 +243,26 @@ public class H264V4L2StatelessDecoder
             return;
 
         _logger.LogInformation("Initializing H.264 stateless decoder...");
-        _h264BitstreamParserState = new();
 
         // Configure decoder formats
         ConfigureFormats();
 
-        // Configure V4L2 controls for stateless operation and get start code preference
-        ConfigureStatelessControls(V4L2StatelessH264DecodeMode.SLICE_BASED, V4L2StatelessH264StartCode.NONE);
+        // For RK3566 I can only set FRAME_BASED + ANNEX_B
+        var decodeMode = V4L2StatelessH264DecodeMode.FRAME_BASED;
+        if (!_device.TrySetSimpleControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
+                (int)decodeMode))
+        {
+            throw new Exception($"Failed to set decode mode to {decodeMode}");
+        }
+
+        var startCode = V4L2StatelessH264StartCode.ANNEX_B;
+        if (!_device.TrySetSimpleControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
+                (int)startCode))
+        {
+            throw new Exception($"Failed to set start code to {startCode}");
+        }
 
         // Setup and map buffers properly with real V4L2 mmap
         SetupAndMapBuffers();
@@ -548,24 +560,5 @@ public class H264V4L2StatelessDecoder
         }
         GC.SuppressFinalize(this);
         await Task.CompletedTask;
-    }
-
-    private void ConfigureStatelessControls(V4L2StatelessH264DecodeMode decodeMode, V4L2StatelessH264StartCode startCode)
-    {
-        _logger.LogInformation("Configuring stateless decoder controls: {DecodeMode}, {StartCode}", decodeMode, startCode);
-
-        if (!_device.TrySetSimpleControl(
-                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
-                (int)decodeMode))
-        {
-            throw new Exception($"Failed to set decode mode to {decodeMode}");
-        }
-
-        if (!_device.TrySetSimpleControl(
-                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
-                (int)startCode))
-        {
-            throw new Exception($"Failed to set start code to {startCode}");
-        }
     }
 }
