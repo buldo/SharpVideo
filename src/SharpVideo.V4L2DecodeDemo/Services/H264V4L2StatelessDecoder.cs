@@ -45,6 +45,11 @@ public class H264V4L2StatelessDecoder
     private bool _hasValidParameterSets;
     private bool _isInitialized;
 
+    private readonly List<byte> _pendingFrameData = new();
+    private SliceHeaderState? _currentFrameHeader;
+    private bool _currentFrameIsIdr;
+    private int _pendingSliceCount;
+
     private V4L2CtrlH264Sps? _lastV4L2Sps;
     private V4L2CtrlH264Pps? _lastV4L2Pps;
 
@@ -75,12 +80,17 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Starting H.264 stateless stream decode");
         _decodingStopwatch.Start();
 
+        ResetFrameAssembly();
+
         InitializeDecoder();
 
         using var naluProvider = new H264AnnexBNaluProvider();
         var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
         var feedTask = FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
         await Task.WhenAll(naluProcessingTask, feedTask);
+
+        ProcessCaptureBuffers();
+        ReclaimOutputBuffers();
 
         _decodingStopwatch.Stop();
         _logger.LogInformation(
@@ -141,6 +151,8 @@ public class H264V4L2StatelessDecoder
 
             ProcessNaluByType(naluData, naluState); // Use WithoutHeader instead of manual span slicing
         }
+
+        FlushPendingFrame();
     }
 
     /// <summary>
@@ -234,7 +246,312 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void HandleSliceNalu(H264Nalu nalu, SliceLayerWithoutPartitioningRbspState sliceLayerWithoutPartitioningRbsp, NalUnitType naluType)
     {
-        throw new NotImplementedException();
+        if (!_hasValidParameterSets)
+        {
+            _logger.LogTrace("Ignoring slice because SPS/PPS are not configured yet");
+            return;
+        }
+
+        if (sliceLayerWithoutPartitioningRbsp?.slice_header == null)
+        {
+            _logger.LogWarning("Slice header missing; skipping slice");
+            return;
+        }
+
+        var header = sliceLayerWithoutPartitioningRbsp.slice_header;
+
+        var isFrameStart = header.first_mb_in_slice == 0;
+
+        if (isFrameStart && _pendingFrameData.Count > 0)
+        {
+            FlushPendingFrame();
+        }
+
+        if (isFrameStart)
+        {
+            _currentFrameHeader = header;
+            _currentFrameIsIdr = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
+            _pendingSliceCount = 0;
+        }
+
+        if (_currentFrameHeader == null)
+        {
+            _currentFrameHeader = header;
+        }
+
+        AppendSliceToPendingFrame(nalu.Data);
+        _pendingSliceCount++;
+
+        _logger.LogTrace(
+            "Buffered slice for frame {FrameNum} (slice #{SliceIndex}, type={SliceType}, bytes={SliceSize})",
+            _currentFrameHeader?.frame_num,
+            _pendingSliceCount,
+            header.slice_type,
+            nalu.Data.Length);
+    }
+
+    private void AppendSliceToPendingFrame(ReadOnlySpan<byte> sliceData)
+    {
+        if (sliceData.Length == 0)
+            return;
+
+        var start = _pendingFrameData.Count;
+        _pendingFrameData.AddRange(new byte[sliceData.Length]);
+
+        var span = CollectionsMarshal.AsSpan(_pendingFrameData);
+        sliceData.CopyTo(span.Slice(start, sliceData.Length));
+    }
+
+    private void FlushPendingFrame()
+    {
+        if (_pendingFrameData.Count == 0 || _currentFrameHeader == null)
+            return;
+
+        TrySubmitFrameToDevice(_pendingFrameData, _currentFrameHeader, _currentFrameIsIdr, _pendingSliceCount);
+        ResetFrameAssembly();
+    }
+
+    private void ResetFrameAssembly()
+    {
+        _pendingFrameData.Clear();
+        _currentFrameHeader = null;
+        _currentFrameIsIdr = false;
+        _pendingSliceCount = 0;
+    }
+
+    private bool TrySubmitFrameToDevice(List<byte> frameData, SliceHeaderState header, bool isIdr, int sliceCount)
+    {
+        ProcessCaptureBuffers();
+        ReclaimOutputBuffers();
+
+        if (!TryAcquireOutputBuffer(out var bufferIndex, out var mappedBuffer))
+        {
+            _logger.LogWarning("No available OUTPUT buffer when queuing frame {FrameNum}; dropping frame", header.frame_num);
+            return false;
+        }
+
+        var payloadSize = frameData.Count;
+        if (payloadSize == 0)
+        {
+            ReturnOutputBuffer(bufferIndex);
+            return true;
+        }
+
+        if (payloadSize > mappedBuffer.Size)
+        {
+            _logger.LogError(
+                "Frame {FrameNum} size {PayloadSize} exceeds buffer size {BufferSize}; dropping frame",
+                header.frame_num,
+                payloadSize,
+                mappedBuffer.Size);
+            ReturnOutputBuffer(bufferIndex);
+            return false;
+        }
+
+        unsafe
+        {
+            var destination = new Span<byte>((void*)mappedBuffer.Pointer, (int)mappedBuffer.Size);
+            CollectionsMarshal.AsSpan(frameData).Slice(0, payloadSize).CopyTo(destination);
+        }
+
+        mappedBuffer.Planes[0].BytesUsed = (uint)payloadSize;
+        mappedBuffer.Planes[0].DataOffset = 0;
+
+        _logger.LogInformation(
+            "Queuing frame {FrameNum} ({SliceCount} slices, {Bytes} bytes, IDR={IsIdr})",
+            header.frame_num,
+            sliceCount,
+            payloadSize,
+            isIdr);
+
+        if (!QueueOutputBuffer(bufferIndex, mappedBuffer, payloadSize))
+        {
+            return false;
+        }
+
+        ProcessCaptureBuffers();
+        ReclaimOutputBuffers();
+
+        return true;
+    }
+
+    private bool QueueOutputBuffer(uint bufferIndex, MappedBuffer mappedBuffer, int payloadSize)
+    {
+        var buffer = new V4L2Buffer
+        {
+            Index = bufferIndex,
+            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+            Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+            Length = (uint)mappedBuffer.Planes.Length,
+            Field = (uint)V4L2Field.NONE,
+            BytesUsed = (uint)payloadSize,
+            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+            Sequence = 0
+        };
+
+        unsafe
+        {
+            fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+            {
+                buffer.Planes = planePtr;
+
+                var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
+                if (!result.Success)
+                {
+                    _logger.LogWarning(
+                        "Failed to queue output buffer {Index}: {Error}",
+                        bufferIndex,
+                        result.ErrorMessage ?? $"errno {result.ErrorCode}");
+                    ReturnOutputBuffer(bufferIndex);
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private void ProcessCaptureBuffers()
+    {
+        if (_captureBuffers.Count == 0)
+            return;
+
+        var planeCount = _captureBuffers[0].Planes.Length;
+
+        unsafe
+        {
+            var planeStorage = stackalloc V4L2Plane[planeCount];
+
+            while (true)
+            {
+                var buffer = new V4L2Buffer
+                {
+                    Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = (uint)planeCount,
+                    Field = (uint)V4L2Field.NONE,
+                    Planes = planeStorage
+                };
+
+                var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
+                if (!result.Success)
+                {
+                    if (result.ErrorCode == 11)
+                    {
+                        break;
+                    }
+
+                    _logger.LogDebug(
+                        "Failed to dequeue capture buffer: {Error}",
+                        result.ErrorMessage ?? $"errno {result.ErrorCode}");
+                    break;
+                }
+
+                uint bytesUsed = 0;
+                foreach (var plane in buffer.PlaneSpan)
+                {
+                    bytesUsed += plane.BytesUsed;
+                }
+
+                _framesDecoded++;
+                FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
+                {
+                    FrameNumber = _framesDecoded,
+                    BytesUsed = bytesUsed,
+                    Timestamp = DateTime.UtcNow
+                });
+
+                var mappedBuffer = _captureBuffers[(int)buffer.Index];
+                var requeueBuffer = new V4L2Buffer
+                {
+                    Index = buffer.Index,
+                    Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = (uint)mappedBuffer.Planes.Length,
+                    Field = (uint)V4L2Field.NONE,
+                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                    Sequence = 0
+                };
+
+                fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+                {
+                    requeueBuffer.Planes = planePtr;
+
+                    var queueResult = LibV4L2.QueueBuffer(_device.fd, ref requeueBuffer);
+                    if (!queueResult.Success)
+                    {
+                        _logger.LogWarning(
+                            "Failed to requeue capture buffer {Index}: {Error}",
+                            buffer.Index,
+                            queueResult.ErrorMessage ?? $"errno {queueResult.ErrorCode}");
+                    }
+                }
+            }
+        }
+    }
+
+    private void ReclaimOutputBuffers()
+    {
+        if (_outputBuffers.Count == 0)
+            return;
+
+        unsafe
+        {
+            var planeStorage = stackalloc V4L2Plane[1];
+
+            while (true)
+            {
+                var buffer = new V4L2Buffer
+                {
+                    Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Length = 1,
+                    Field = (uint)V4L2Field.NONE,
+                    Planes = planeStorage
+                };
+
+                var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
+                if (!result.Success)
+                {
+                    if (result.ErrorCode == 11)
+                    {
+                        break;
+                    }
+
+                    _logger.LogDebug(
+                        "Failed to dequeue output buffer: {Error}",
+                        result.ErrorMessage ?? $"errno {result.ErrorCode}");
+                    break;
+                }
+
+                ReturnOutputBuffer(buffer.Index);
+            }
+        }
+    }
+
+    private bool TryAcquireOutputBuffer(out uint bufferIndex, out MappedBuffer mappedBuffer)
+    {
+        lock (_bufferLock)
+        {
+            if (_availableOutputBuffers.Count > 0)
+            {
+                bufferIndex = _availableOutputBuffers.Dequeue();
+                mappedBuffer = _outputBuffers[(int)bufferIndex];
+                return true;
+            }
+        }
+
+        bufferIndex = 0;
+        mappedBuffer = null!;
+        return false;
+    }
+
+    private void ReturnOutputBuffer(uint index)
+    {
+        lock (_bufferLock)
+        {
+            _availableOutputBuffers.Enqueue(index);
+        }
     }
 
     private void InitializeDecoder()
@@ -522,6 +839,7 @@ public class H264V4L2StatelessDecoder
 
             _isInitialized = false;
             _logger.LogInformation("Decoder cleanup completed");
+            ResetFrameAssembly();
         }
         catch (Exception ex)
         {
