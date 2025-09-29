@@ -43,7 +43,7 @@ public class H264SliceHeaderParserTest
         bitstream_parser_state.pps[0] = pps;
 
         UInt32 nal_ref_idc = 3;
-        UInt32 nal_unit_type = (uint)H264NaluType.CodedSliceIdr;
+        UInt32 nal_unit_type = (uint)NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
         var slice_header = H264SliceHeaderParser.ParseSliceHeader(buffer, nal_ref_idc, nal_unit_type, bitstream_parser_state);
         // fuzzer::conv: end
 
@@ -129,7 +129,7 @@ public class H264SliceHeaderParserTest
         bitstream_parser_state.pps[0] = pps;
 
         UInt32 nal_ref_idc = 2;
-        UInt32 nal_unit_type = (uint)H264NaluType.CodedSliceNonIdr;
+        UInt32 nal_unit_type = (uint)NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT;
         var slice_header = H264SliceHeaderParser.ParseSliceHeader(buffer, nal_ref_idc, nal_unit_type, bitstream_parser_state);
         // fuzzer::conv: end
 

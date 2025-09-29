@@ -130,39 +130,43 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private async Task ProcessNalusAsync(H264AnnexBNaluProvider naluProvider, CancellationToken cancellationToken)
     {
-        var naluParser = new H264NaluParser(NaluMode.WithoutStartCode);
+        var streamState = new H264BitstreamParserState();
+        var parsingOptions = new ParsingOptions();
         await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
             if (naluData.Length < 1)
             {
                 continue;
             }
-            var naluType = naluParser.GetNaluType(naluData);
-            ProcessNaluByType(naluData.AsSpan(1), naluType); // Skip NALU header byte
+            var naluState = H264NalUnitParser.ParseNalUnit(naluData, streamState, parsingOptions);
+
+            ProcessNaluByType(naluData.AsSpan(1), naluState); // Skip NALU header byte
         }
     }
 
     /// <summary>
     /// Processes individual NALU based on its type
     /// </summary>
-    private void ProcessNaluByType(ReadOnlySpan<byte> naluData, H264NaluType naluType)
+    private void ProcessNaluByType(ReadOnlySpan<byte> naluData, NalUnitState naluState)
     {
+        var naluType = (NalUnitType)naluState.nal_unit_header.nal_unit_type;
+
         switch (naluType)
         {
-            case H264NaluType.SequenceParameterSet: // SPS
+            case NalUnitType.SPS_NUT: // SPS
                 _logger.LogDebug("Processing SPS NALU");
-                HandleSpsNalu(naluData);
+                HandleSpsNalu(naluState.nal_unit_payload.sps);
                 break;
 
-            case H264NaluType.PictureParameterSet: // PPS
+            case NalUnitType.PPS_NUT: // PPS
                 _logger.LogDebug("Processing PPS NALU");
-                HandlePpsNalu(naluData);
+                HandlePpsNalu(naluState.nal_unit_payload.pps);
                 break;
 
-            case H264NaluType.CodedSliceNonIdr: // Non-IDR slice
-            case H264NaluType.CodedSliceIdr: // IDR slice
+            case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT: // Non-IDR slice
+            case NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT: // IDR slice
                 _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
-                HandleSliceNalu(naluData, naluType);
+                HandleSliceNalu(naluData, naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp, naluType);
                 break;
 
             default:
@@ -174,9 +178,8 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles SPS (Sequence Parameter Set) NALU
     /// </summary>
-    private void HandleSpsNalu(ReadOnlySpan<byte> spsData)
+    private void HandleSpsNalu(SpsState? parsedSps)
     {
-        var parsedSps = H264SpsParser.ParseSps(spsData);
         if (parsedSps == null)
         {
             _logger.LogError("Failed to parse SPS");
@@ -195,15 +198,8 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles PPS (Picture Parameter Set) NALU
     /// </summary>
-    private void HandlePpsNalu(ReadOnlySpan<byte> ppsData)
+    private void HandlePpsNalu(PpsState? parsedPps)
     {
-        uint chromaFormatIdc = 1; // 4:2:0 YUV format (most common)
-        if (_lastV4L2Sps.HasValue)
-        {
-            chromaFormatIdc = _lastV4L2Sps.Value.chroma_format_idc;
-        }
-
-        var parsedPps = H264PpsParser.ParsePps(ppsData, chromaFormatIdc);
         if (parsedPps == null)
         {
             _logger.LogError("Failed to parse PPS");
@@ -237,9 +233,9 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles slice NALUs (actual video data)
     /// </summary>
-    private void HandleSliceNalu(ReadOnlySpan<byte> sliceData, H264NaluType naluType)
+    private void HandleSliceNalu(ReadOnlySpan<byte> sliceData, SliceLayerWithoutPartitioningRbspState sliceLayerWithoutPartitioningRbsp, NalUnitType naluType)
     {
-        //var parsedSlice = H264SliceHeaderParser.ParseSliceHeader(sliceData,, (uint)naluType, _h264BitstreamParserState);
+        throw new NotImplementedException();
     }
 
     private void InitializeDecoder()
