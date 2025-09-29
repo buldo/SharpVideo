@@ -77,7 +77,7 @@ public class H264V4L2StatelessDecoder
 
         InitializeDecoder();
 
-        using var naluProvider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
+        using var naluProvider = new H264AnnexBNaluProvider();
         var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
         var feedTask = FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
         await Task.WhenAll(naluProcessingTask, feedTask);
@@ -133,20 +133,20 @@ public class H264V4L2StatelessDecoder
         var parsingOptions = new ParsingOptions();
         await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
-            if (naluData.Length < 1)
+            if (naluData.Data.Length < 1)
             {
                 continue;
             }
-            var naluState = H264NalUnitParser.ParseNalUnit(naluData, streamState, parsingOptions);
+            var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
 
-            ProcessNaluByType(naluData.AsSpan(1), naluState); // Skip NALU header byte
+            ProcessNaluByType(naluData, naluState); // Use WithoutHeader instead of manual span slicing
         }
     }
 
     /// <summary>
     /// Processes individual NALU based on its type
     /// </summary>
-    private void ProcessNaluByType(ReadOnlySpan<byte> naluData, NalUnitState naluState)
+    private void ProcessNaluByType(H264Nalu naluData, NalUnitState naluState)
     {
         var naluType = (NalUnitType)naluState.nal_unit_header.nal_unit_type;
 
@@ -232,7 +232,7 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Handles slice NALUs (actual video data)
     /// </summary>
-    private void HandleSliceNalu(ReadOnlySpan<byte> sliceData, SliceLayerWithoutPartitioningRbspState sliceLayerWithoutPartitioningRbsp, NalUnitType naluType)
+    private void HandleSliceNalu(H264Nalu nalu, SliceLayerWithoutPartitioningRbspState sliceLayerWithoutPartitioningRbsp, NalUnitType naluType)
     {
         throw new NotImplementedException();
     }

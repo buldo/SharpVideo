@@ -3,21 +3,6 @@ using System.Threading.Channels;
 
 namespace SharpVideo.H264;
 
-public class H264Nalu
-{
-    private readonly byte[] _data;
-    private readonly int _payloadStart;
-
-    public H264Nalu(byte[] data, int payloadStart)
-    {
-        _data = data;
-        _payloadStart = payloadStart;
-    }
-
-    public ReadOnlySpan<byte> Data => _data;
-    public ReadOnlySpan<byte> WithoutHeader => _data.AsSpan(_payloadStart);
-}
-
 public class H264AnnexBNaluProvider : IDisposable
 {
     private readonly Pipe _pipe = new Pipe();
@@ -26,11 +11,9 @@ public class H264AnnexBNaluProvider : IDisposable
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly Task _processingTask;
-    private readonly NaluMode _outputMode;
 
-    public H264AnnexBNaluProvider(NaluMode outputMode = NaluMode.WithStartCode)
+    public H264AnnexBNaluProvider()
     {
-        _outputMode = outputMode;
         _processingTask = ProcessNalusAsync(_cancellationTokenSource.Token);
     }
 
@@ -133,47 +116,26 @@ public class H264AnnexBNaluProvider : IDisposable
             }
         }
 
-        // Extract complete NALUs based on output mode
+        // Extract complete NALUs (always include start codes)
         for (int i = 0; i < startPositions.Count - 1; i++)
         {
             var startPos = startPositions[i];
             var nextStartPos = startPositions[i + 1];
 
-            byte[] naluData;
+            var startCodeLength = GetStartCodeLength(buffer, startPos);
+            var naluLength = nextStartPos - startPos;
 
-            if (_outputMode == NaluMode.WithStartCode)
+            if (naluLength > 0)
             {
-                // Include the start code in the NALU (Annex-B format)
-                var naluLength = nextStartPos - startPos;
-
-                if (naluLength > 0)
+                // Always include the start code in the NALU (Annex-B format)
+                var naluData = new byte[naluLength];
+                for (int j = 0; j < naluLength; j++)
                 {
-                    naluData = new byte[naluLength];
-                    for (int j = 0; j < naluLength; j++)
-                    {
-                        naluData[j] = buffer[startPos + j];
-                    }
-
-                    await _channel.Writer.WriteAsync(naluData, cancellationToken);
+                    naluData[j] = buffer[startPos + j];
                 }
-            }
-            else // WithoutStartCode
-            {
-                // Skip the start code, only include NALU payload
-                var startCodeLength = GetStartCodeLength(buffer, startPos);
-                var naluDataStart = startPos + startCodeLength;
-                var naluDataLength = nextStartPos - naluDataStart;
 
-                if (naluDataLength > 0)
-                {
-                    naluData = new byte[naluDataLength];
-                    for (int j = 0; j < naluDataLength; j++)
-                    {
-                        naluData[j] = buffer[naluDataStart + j];
-                    }
-
-                    await _channel.Writer.WriteAsync(naluData, cancellationToken);
-                }
+                var nalu = new H264Nalu(naluData, startCodeLength);
+                await _channel.Writer.WriteAsync(nalu, cancellationToken);
             }
         }
 
@@ -221,47 +183,25 @@ public class H264AnnexBNaluProvider : IDisposable
             // Only process if there's actual NALU data after the start code
             if (buffer.Count > startCodeLength)
             {
-                byte[] finalNalu;
-
-                if (_outputMode == NaluMode.WithStartCode)
-                {
-                    // Include start code
-                    finalNalu = buffer.ToArray();
-                }
-                else // WithoutStartCode
-                {
-                    // Skip start code, only include NALU payload
-                    finalNalu = new byte[buffer.Count - startCodeLength];
-                    for (int i = 0; i < finalNalu.Length; i++)
-                    {
-                        finalNalu[i] = buffer[startCodeLength + i];
-                    }
-                }
-
-                await _channel.Writer.WriteAsync(finalNalu, cancellationToken);
+                // Include start code (Annex-B format)
+                var finalNalu = buffer.ToArray();
+                var nalu = new H264Nalu(finalNalu, startCodeLength);
+                await _channel.Writer.WriteAsync(nalu, cancellationToken);
             }
             // If buffer contains only a start code with no data, ignore it
         }
         else
         {
-            // No start codes found
-            if (_outputMode == NaluMode.WithStartCode)
-            {
-                // Add a start code to make it Annex-B format
-                var annexBNalu = new byte[4 + buffer.Count];
-                annexBNalu[0] = 0x00;
-                annexBNalu[1] = 0x00;
-                annexBNalu[2] = 0x00;
-                annexBNalu[3] = 0x01;
-                buffer.CopyTo(annexBNalu, 4);
+            // No start codes found - add a start code to make it Annex-B format
+            var finalNalu = new byte[4 + buffer.Count];
+            finalNalu[0] = 0x00;
+            finalNalu[1] = 0x00;
+            finalNalu[2] = 0x00;
+            finalNalu[3] = 0x01;
+            buffer.CopyTo(finalNalu, 4);
 
-                await _channel.Writer.WriteAsync(annexBNalu, cancellationToken);
-            }
-            else // WithoutStartCode
-            {
-                // Just use the raw data as-is
-                await _channel.Writer.WriteAsync(buffer.ToArray(), cancellationToken);
-            }
+            var nalu = new H264Nalu(finalNalu, 4); // Payload starts after the added start code
+            await _channel.Writer.WriteAsync(nalu, cancellationToken);
         }
     }
 

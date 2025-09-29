@@ -8,10 +8,10 @@ namespace SharpVideo.Tests
         private H264AnnexBNaluProvider? _provider;
 
         [Fact]
-        public async Task Should_Parse_Single_NALU_With_4Byte_StartCode_WithStartCode()
+        public async Task Should_Parse_Single_NALU_With_4Byte_StartCode()
         {
             // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider();
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x00, 0x01 }.Concat(naluData).ToArray();
             var inputData = new byte[] { 0x00, 0x00, 0x00, 0x01 }
@@ -25,34 +25,15 @@ namespace SharpVideo.Tests
 
             // Assert
             var nalu = await _provider.NaluReader.ReadAsync();
-            Assert.Equal(expectedAnnexBNalu, nalu);
+            Assert.Equal(expectedAnnexBNalu, nalu.Data.ToArray());
+            Assert.Equal(naluData, nalu.WithoutHeader.ToArray());
         }
 
         [Fact]
-        public async Task Should_Parse_Single_NALU_With_4Byte_StartCode_WithoutStartCode()
+        public async Task Should_Parse_Single_NALU_With_3Byte_StartCode()
         {
             // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
-            var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
-            var inputData = new byte[] { 0x00, 0x00, 0x00, 0x01 }
-                .Concat(naluData)
-                .Concat(new byte[] { 0x00, 0x00, 0x00, 0x01 }) // Next start code
-                .ToArray();
-
-            // Act
-            await _provider.AppendData(inputData, CancellationToken.None);
-            _provider.CompleteWriting();
-
-            // Assert
-            var nalu = await _provider.NaluReader.ReadAsync();
-            Assert.Equal(naluData, nalu); // Should not include start code
-        }
-
-        [Fact]
-        public async Task Should_Parse_Single_NALU_With_3Byte_StartCode_WithStartCode()
-        {
-            // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider();
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x01 }.Concat(naluData).ToArray();
             var inputData = new byte[] { 0x00, 0x00, 0x01 }
@@ -66,34 +47,15 @@ namespace SharpVideo.Tests
 
             // Assert
             var nalu = await _provider.NaluReader.ReadAsync();
-            Assert.Equal(expectedAnnexBNalu, nalu);
+            Assert.Equal(expectedAnnexBNalu, nalu.Data.ToArray());
+            Assert.Equal(naluData, nalu.WithoutHeader.ToArray());
         }
 
         [Fact]
-        public async Task Should_Parse_Single_NALU_With_3Byte_StartCode_WithoutStartCode()
+        public async Task Should_Parse_Multiple_NALUs()
         {
             // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
-            var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // Sample SPS NALU data
-            var inputData = new byte[] { 0x00, 0x00, 0x01 }
-                .Concat(naluData)
-                .Concat(new byte[] { 0x00, 0x00, 0x01 }) // Next start code
-                .ToArray();
-
-            // Act
-            await _provider.AppendData(inputData, CancellationToken.None);
-            _provider.CompleteWriting();
-
-            // Assert
-            var nalu = await _provider.NaluReader.ReadAsync();
-            Assert.Equal(naluData, nalu); // Should not include start code
-        }
-
-        [Fact]
-        public async Task Should_Parse_Multiple_NALUs_WithStartCode()
-        {
-            // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider();
             var nalu1 = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // SPS
             var nalu2 = new byte[] { 0x68, 0xCE, 0x38, 0x80 }; // PPS
             var nalu3 = new byte[] { 0x65, 0x88, 0x84, 0x00 }; // IDR slice
@@ -115,57 +77,28 @@ namespace SharpVideo.Tests
             _provider.CompleteWriting();
 
             // Assert
-            var nalus = new List<byte[]>();
+            var nalus = new List<H264Nalu>();
             await foreach (var nalu in _provider.NaluReader.ReadAllAsync())
             {
                 nalus.Add(nalu);
             }
 
             Assert.Equal(3, nalus.Count);
-            Assert.Equal(expectedNalu1, nalus[0]);
-            Assert.Equal(expectedNalu2, nalus[1]);
-            Assert.Equal(expectedNalu3, nalus[2]);
-        }
-
-        [Fact]
-        public async Task Should_Parse_Multiple_NALUs_WithoutStartCode()
-        {
-            // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
-            var nalu1 = new byte[] { 0x67, 0x42, 0x00, 0x1E }; // SPS
-            var nalu2 = new byte[] { 0x68, 0xCE, 0x38, 0x80 }; // PPS
-            var nalu3 = new byte[] { 0x65, 0x88, 0x84, 0x00 }; // IDR slice
-
-            var inputData = new byte[] { 0x00, 0x00, 0x00, 0x01 }
-                .Concat(nalu1)
-                .Concat(new byte[] { 0x00, 0x00, 0x00, 0x01 })
-                .Concat(nalu2)
-                .Concat(new byte[] { 0x00, 0x00, 0x00, 0x01 })
-                .Concat(nalu3)
-                .ToArray();
-
-            // Act
-            await _provider.AppendData(inputData, CancellationToken.None);
-            _provider.CompleteWriting();
-
-            // Assert
-            var nalus = new List<byte[]>();
-            await foreach (var nalu in _provider.NaluReader.ReadAllAsync())
-            {
-                nalus.Add(nalu);
-            }
-
-            Assert.Equal(3, nalus.Count);
-            Assert.Equal(nalu1, nalus[0]); // Should not include start code
-            Assert.Equal(nalu2, nalus[1]); // Should not include start code
-            Assert.Equal(nalu3, nalus[2]); // Should not include start code
+            Assert.Equal(expectedNalu1, nalus[0].Data.ToArray());
+            Assert.Equal(expectedNalu2, nalus[1].Data.ToArray());
+            Assert.Equal(expectedNalu3, nalus[2].Data.ToArray());
+            
+            // Verify that WithoutHeader returns just the payload
+            Assert.Equal(nalu1, nalus[0].WithoutHeader.ToArray());
+            Assert.Equal(nalu2, nalus[1].WithoutHeader.ToArray());
+            Assert.Equal(nalu3, nalus[2].WithoutHeader.ToArray());
         }
 
         [Fact]
         public async Task Should_Handle_Fragmented_Data()
         {
             // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider();
             var naluData = new byte[] { 0x67, 0x42, 0x00, 0x1E, 0xA9, 0x50, 0x14, 0x07 };
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x00, 0x01 }.Concat(naluData).ToArray();
             var startCode = new byte[] { 0x00, 0x00, 0x00, 0x01 };
@@ -181,14 +114,15 @@ namespace SharpVideo.Tests
 
             // Assert
             var nalu = await _provider.NaluReader.ReadAsync();
-            Assert.Equal(expectedAnnexBNalu, nalu);
+            Assert.Equal(expectedAnnexBNalu, nalu.Data.ToArray());
+            Assert.Equal(naluData, nalu.WithoutHeader.ToArray());
         }
 
         [Fact]
         public async Task Should_Handle_Mixed_StartCode_Types()
         {
             // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider();
             var nalu1 = new byte[] { 0x67, 0x42, 0x00, 0x1E };
             var nalu2 = new byte[] { 0x68, 0xCE, 0x38, 0x80 };
 
@@ -207,29 +141,33 @@ namespace SharpVideo.Tests
             _provider.CompleteWriting();
 
             // Assert
-            var nalus = new List<byte[]>();
+            var nalus = new List<H264Nalu>();
             await foreach (var nalu in _provider.NaluReader.ReadAllAsync())
             {
                 nalus.Add(nalu);
             }
 
             Assert.Equal(2, nalus.Count);
-            Assert.Equal(expectedNalu1, nalus[0]);
-            Assert.Equal(expectedNalu2, nalus[1]);
+            Assert.Equal(expectedNalu1, nalus[0].Data.ToArray());
+            Assert.Equal(expectedNalu2, nalus[1].Data.ToArray());
+            
+            // Verify that WithoutHeader returns just the payload regardless of start code type
+            Assert.Equal(nalu1, nalus[0].WithoutHeader.ToArray());
+            Assert.Equal(nalu2, nalus[1].WithoutHeader.ToArray());
         }
 
         [Fact]
         public async Task Should_Handle_Empty_Data()
         {
             // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider();
 
             // Act
             await _provider.AppendData(Array.Empty<byte>(), CancellationToken.None);
             _provider.CompleteWriting();
 
             // Assert - The channel should be completed without any NALUs
-            var nalus = new List<byte[]>();
+            var nalus = new List<H264Nalu>();
             await foreach (var nalu in _provider.NaluReader.ReadAllAsync())
             {
                 nalus.Add(nalu);
@@ -238,10 +176,10 @@ namespace SharpVideo.Tests
         }
 
         [Fact]
-        public async Task Should_Handle_Data_Without_StartCodes_WithStartCode()
+        public async Task Should_Handle_Data_Without_StartCodes()
         {
             // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithStartCode);
+            _provider = new H264AnnexBNaluProvider();
             var dataWithoutStartCodes = new byte[] { 0x67, 0x42, 0x00, 0x1E, 0xA9, 0x50 };
             var expectedAnnexBNalu = new byte[] { 0x00, 0x00, 0x00, 0x01 }.Concat(dataWithoutStartCodes).ToArray();
 
@@ -251,23 +189,8 @@ namespace SharpVideo.Tests
 
             // Assert - should get the data as a single NALU in Annex-B format when stream completes
             var nalu = await _provider.NaluReader.ReadAsync();
-            Assert.Equal(expectedAnnexBNalu, nalu);
-        }
-
-        [Fact]
-        public async Task Should_Handle_Data_Without_StartCodes_WithoutStartCode()
-        {
-            // Arrange
-            _provider = new H264AnnexBNaluProvider(NaluMode.WithoutStartCode);
-            var dataWithoutStartCodes = new byte[] { 0x67, 0x42, 0x00, 0x1E, 0xA9, 0x50 };
-
-            // Act
-            await _provider.AppendData(dataWithoutStartCodes, CancellationToken.None);
-            _provider.CompleteWriting();
-
-            // Assert - should get the raw data without start code
-            var nalu = await _provider.NaluReader.ReadAsync();
-            Assert.Equal(dataWithoutStartCodes, nalu);
+            Assert.Equal(expectedAnnexBNalu, nalu.Data.ToArray());
+            Assert.Equal(dataWithoutStartCodes, nalu.WithoutHeader.ToArray());
         }
 
         [Fact]
@@ -282,44 +205,33 @@ namespace SharpVideo.Tests
 
             var h264Data = await File.ReadAllBytesAsync(testVideoPath);
 
-            // Test both modes and compare results
-            var nalusWithStartCode = await ParseNalusWithMode(h264Data, NaluMode.WithStartCode);
-            var nalusWithoutStartCode = await ParseNalusWithMode(h264Data, NaluMode.WithoutStartCode);
+            // Parse NALUs and verify integrity
+            var nalus = await ParseNalus(h264Data);
 
             // Assert
-            Assert.Equal(nalusWithStartCode.Count, nalusWithoutStartCode.Count);
+            Assert.NotEmpty(nalus);
 
-            // Additional message for debugging
-            if (nalusWithStartCode.Count != nalusWithoutStartCode.Count)
+            // Verify that all NALUs have valid structure
+            for (int i = 0; i < nalus.Count; i++)
             {
-                throw new Exception("Both modes should produce the same number of NALUs");
-            }
-
-            // Verify that WithStartCode mode includes start codes and WithoutStartCode doesn't
-            for (int i = 0; i < nalusWithStartCode.Count; i++)
-            {
-                var naluWithStartCode = nalusWithStartCode[i];
-                var naluWithoutStartCode = nalusWithoutStartCode[i];
-
-                // Extract NALU data without start code from the WithStartCode version
-                var extractedNaluData = ExtractNaluDataWithoutStartCode(naluWithStartCode);
-
-                // Should be identical to WithoutStartCode version
-                Assert.True(extractedNaluData.SequenceEqual(naluWithoutStartCode),
-                    $"NALU {i} data should be identical when start code is stripped");
-
-                // Verify start code presence
-                Assert.True(HasStartCode(naluWithStartCode),
-                    $"NALU {i} with start code mode should have start code");
-                Assert.False(HasStartCode(naluWithoutStartCode),
-                    $"NALU {i} without start code mode should not have start code");
+                var nalu = nalus[i];
+                
+                // Verify that Data always contains start code
+                Assert.True(HasStartCode(nalu.Data.ToArray()),
+                    $"NALU {i} should always have start code in Data property");
+                    
+                // Verify that WithoutHeader doesn't contain start code
+                Assert.False(HasStartCode(nalu.WithoutHeader.ToArray()),
+                    $"NALU {i} should not have start code in WithoutHeader property");
+                    
+                ValidateNaluFormat(nalu.Data.ToArray(), i);
             }
         }
 
-        private async Task<List<byte[]>> ParseNalusWithMode(byte[] h264Data, NaluMode mode)
+        private async Task<List<H264Nalu>> ParseNalus(byte[] h264Data)
         {
-            using var provider = new H264AnnexBNaluProvider(mode);
-            var nalus = new List<byte[]>();
+            using var provider = new H264AnnexBNaluProvider();
+            var nalus = new List<H264Nalu>();
 
             var readTask = Task.Run(async () =>
             {
@@ -401,6 +313,7 @@ namespace SharpVideo.Tests
                 Assert.True(nalRefIdc >= 0 && nalRefIdc <= 3, $"NALU {index} nal_ref_idc {nalRefIdc} should be in valid range");
             }
         }
+        
         public void Dispose()
         {
             _provider?.Dispose();
