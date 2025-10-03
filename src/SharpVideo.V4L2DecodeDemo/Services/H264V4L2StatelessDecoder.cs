@@ -99,8 +99,41 @@ public class H264V4L2StatelessDecoder
         var feedTask = FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
         await Task.WhenAll(naluProcessingTask, feedTask);
 
+        // Drain the pipeline: wait for all queued frames to be processed by hardware
+        _logger.LogInformation("Draining decoder pipeline...");
+        int drainAttempts = 0;
+        int lastFrameCount = _framesDecoded;
+        while (drainAttempts < 50) // Up to 5 seconds of draining
+        {
+            ProcessCaptureBuffers();
+            ReclaimOutputBuffers();
+
+            // Check if we have frames in the pipeline
+            lock (_bufferLock)
+            {
+                int buffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
+                if (buffersInUse == 0)
+                {
+                    _logger.LogInformation("Pipeline drained, all buffers returned");
+                    break;
+                }
+                _logger.LogDebug("Still draining: {BuffersInUse} buffers in use", buffersInUse);
+            }
+
+            // Check for progress
+            if (_framesDecoded != lastFrameCount)
+            {
+                _logger.LogDebug("Decoded {NewFrames} more frames during drain", _framesDecoded - lastFrameCount);
+                lastFrameCount = _framesDecoded;
+                drainAttempts = 0; // Reset timeout if we're making progress
+            }
+
+            Thread.Sleep(100); // Wait 100ms between drain attempts
+            drainAttempts++;
+        }
+
+        // Final drain
         ProcessCaptureBuffers();
-        ReclaimOutputBuffers();
 
         _decodingStopwatch.Stop();
         var elapsedSeconds = _decodingStopwatch.Elapsed.TotalSeconds;
@@ -336,36 +369,27 @@ public class H264V4L2StatelessDecoder
         ReclaimOutputBuffers();
         ProcessCaptureBuffers();
 
-        // Try to submit frame with simple retry logic
+        // Submit frame - TryAcquireOutputBuffer now blocks until a buffer is available
         if (!TrySubmitFrameToDevice(nalu.Data, header, isIdr))
         {
             _consecutiveFailures++;
-            _logger.LogDebug("First frame submission failed ({Failures} consecutive), attempting retry for frame {FrameNum}",
-                _consecutiveFailures, header.frame_num);
+            _logger.LogError("Failed to submit frame {FrameNum} (consecutive failures: {Failures})",
+                header.frame_num, _consecutiveFailures);
 
-            // Single retry with buffer reclamation
-            ReclaimOutputBuffers();
-            Thread.Sleep(2); // Slightly longer delay
-
-            if (!TrySubmitFrameToDevice(nalu.Data, header, isIdr))
+            // If we have too many consecutive failures, reset the decoder
+            if (_consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
             {
-                _consecutiveFailures++;
-                _logger.LogWarning("Failed to queue frame {FrameNum} after retry; dropping (consecutive failures: {Failures})",
-                    header.frame_num, _consecutiveFailures);
-
-                // If we have too many consecutive failures, reset the decoder
-                if (_consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
-                {
-                    _logger.LogError("Too many consecutive failures ({Failures}), resetting decoder", _consecutiveFailures);
-                    ResetDecoderState();
-                    _consecutiveFailures = 0;
-                }
-                return;
+                _logger.LogError("Too many consecutive failures ({Failures}), resetting decoder", _consecutiveFailures);
+                ResetDecoderState();
+                _consecutiveFailures = 0;
             }
+            return;
         }
 
         // Reset failure counter on success
-        _consecutiveFailures = 0;        // Drain CAPTURE buffers that are ready after queuing this frame
+        _consecutiveFailures = 0;
+
+        // Drain CAPTURE buffers that are ready after queuing this frame
         ProcessCaptureBuffers();
     }
 
@@ -1000,12 +1024,15 @@ public class H264V4L2StatelessDecoder
             }
         }
 
-        // If no buffers available, try more aggressive reclamation with longer waits
-        _logger.LogDebug("No buffers available, attempting aggressive reclamation");
-        for (int i = 0; i < 5; i++)
+        // If no buffers available, wait for hardware to release buffers
+        // This implements backpressure to prevent frame drops
+        _logger.LogDebug("No buffers available, waiting for hardware to release buffers...");
+        for (int i = 0; i < 100; i++) // Try up to 100 times (up to ~5 seconds total)
         {
-            // Progressive delays: give hardware more time on later attempts
-            Thread.Sleep(2 + i);
+            // Exponential backoff with cap at 50ms
+            int delayMs = Math.Min(1 + i / 2, 50);
+            Thread.Sleep(delayMs);
+
             ReclaimOutputBuffers();
             ProcessCaptureBuffers(); // Also try to drain capture buffers
 
@@ -1015,13 +1042,19 @@ public class H264V4L2StatelessDecoder
                 {
                     bufferIndex = _availableOutputBuffers.Dequeue();
                     mappedBuffer = _outputBuffers[(int)bufferIndex];
-                    _logger.LogDebug("Acquired buffer {Index} after {Attempts} attempts", bufferIndex, i + 1);
+                    _logger.LogDebug("Acquired buffer {Index} after {Attempts} attempts (waited {Delay}ms total)",
+                        bufferIndex, i + 1, (i * (i + 1)) / 4);
                     return true;
                 }
             }
+
+            if ((i + 1) % 10 == 0)
+            {
+                _logger.LogInformation("Still waiting for output buffer after {Attempts} attempts...", i + 1);
+            }
         }
 
-        _logger.LogWarning("Failed to acquire any output buffer after multiple attempts");
+        _logger.LogError("Failed to acquire any output buffer after 100 attempts - decoder may be stalled");
         bufferIndex = 0;
         mappedBuffer = null!;
         return false;
