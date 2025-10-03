@@ -521,10 +521,32 @@ public class H264V4L2StatelessDecoder
                 return false;
             }
 
+            _logger.LogDebug("Setting controls for frame {FrameNum} (IDR={IsIdr}, request_fd={RequestFd})",
+                header.frame_num, isIdr, request.RequestFd);
+
             // Set SPS, PPS, and DECODE_PARAMS together on this request
             // This is critical for stateless decoders - all metadata must be per-request
-            _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, _lastV4L2Sps.Value, request.RequestFd);
-            _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, _lastV4L2Pps.Value, request.RequestFd);
+            try
+            {
+                _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, _lastV4L2Sps.Value, request.RequestFd);
+                _logger.LogDebug("SPS control set successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to set SPS control");
+                throw;
+            }
+
+            try
+            {
+                _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, _lastV4L2Pps.Value, request.RequestFd);
+                _logger.LogDebug("PPS control set successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to set PPS control");
+                throw;
+            }
 
             if (_supportsSliceParamsControl)
             {
@@ -532,6 +554,7 @@ public class H264V4L2StatelessDecoder
                 try
                 {
                     _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS, sliceParams, request.RequestFd);
+                    _logger.LogDebug("SLICE_PARAMS control set successfully");
                 }
                 catch (InvalidOperationException ex) when (IsInvalidArgument(ex))
                 {
@@ -541,7 +564,22 @@ public class H264V4L2StatelessDecoder
             }
 
             var decodeParams = BuildDecodeParams(header, isIdr);
-            _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS, decodeParams, request.RequestFd);
+            _logger.LogDebug("DECODE_PARAMS: FrameNum={FrameNum}, NalRefIdc={NalRefIdc}, IDR={IsIdr}, DPB_count={DpbCount}",
+                decodeParams.FrameNum, decodeParams.NalRefIdc,
+                (decodeParams.Flags & V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_IDR_PIC) != 0,
+                _dpb.Count);
+
+            try
+            {
+                _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS, decodeParams, request.RequestFd);
+                _logger.LogDebug("DECODE_PARAMS control set successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to set DECODE_PARAMS control");
+                throw;
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -736,6 +774,7 @@ public class H264V4L2StatelessDecoder
             Memory = V4L2Constants.V4L2_MEMORY_MMAP,
             Length = (uint)mappedBuffer.Planes.Length,
             Field = (uint)V4L2Field.NONE,
+            Flags = (uint)V4L2BufferFlags.REQUEST_FD,
             BytesUsed = 0,
             Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
             Sequence = 0,
