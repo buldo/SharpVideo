@@ -334,6 +334,7 @@ public class H264V4L2StatelessDecoder
 
         // Reclaim any OUTPUT buffers that the driver has finished processing
         ReclaimOutputBuffers();
+        ProcessCaptureBuffers();
 
         // Try to submit frame with simple retry logic
         if (!TrySubmitFrameToDevice(nalu.Data, header, isIdr))
@@ -999,12 +1000,14 @@ public class H264V4L2StatelessDecoder
             }
         }
 
-        // If no buffers available, try more aggressive reclamation
+        // If no buffers available, try more aggressive reclamation with longer waits
         _logger.LogDebug("No buffers available, attempting aggressive reclamation");
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 5; i++)
         {
-            Thread.Sleep(1); // Small delay
+            // Progressive delays: give hardware more time on later attempts
+            Thread.Sleep(2 + i);
             ReclaimOutputBuffers();
+            ProcessCaptureBuffers(); // Also try to drain capture buffers
 
             lock (_bufferLock)
             {

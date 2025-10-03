@@ -21,14 +21,14 @@ public class DecoderConfiguration
     public uint PreferredPixelFormat { get; init; } = 0x3231564E; // NV12
 
     /// <summary>
-    /// Number of output buffers for slice data
+    /// Number of output buffers to allocate (for encoded data)
     /// </summary>
-    public uint OutputBufferCount { get; init; } = 4;
+    public uint OutputBufferCount { get; init; } = 8;
 
     /// <summary>
-    /// Number of capture buffers for decoded frames
+    /// Number of capture buffers to allocate (for decoded frames)
     /// </summary>
-    public uint CaptureBufferCount { get; init; } = 4;
+    public uint CaptureBufferCount { get; init; } = 8;
 
     /// <summary>
     /// Buffer size for slice data (in bytes)
