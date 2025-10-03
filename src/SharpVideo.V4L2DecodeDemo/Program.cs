@@ -17,7 +17,7 @@ internal class Program
 
         var testVideoName = "test_video.h264";
         var filePath = File.Exists(testVideoName) ? testVideoName : Path.Combine(AppContext.BaseDirectory, testVideoName);
-        if (!File.Exists(testVideoName))
+        if (!File.Exists(filePath))
         {
             logger.LogError($"Error: Test video file '{testVideoName}' not found in current directory or application base directory.");
             return;

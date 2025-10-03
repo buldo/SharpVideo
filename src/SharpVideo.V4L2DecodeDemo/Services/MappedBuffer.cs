@@ -14,17 +14,27 @@ public class MappedBuffer
     public required uint Index { get; init; }
 
     /// <summary>
-    /// Pointer to the mapped memory region
+    /// Pointers to the mapped memory regions per plane
     /// </summary>
-    public required IntPtr Pointer { get; init; }
+    public required IntPtr[] PlanePointers { get; init; }
 
     /// <summary>
-    /// Size of the mapped buffer in bytes
+    /// Sizes of the mapped planes in bytes
     /// </summary>
-    public required uint Size { get; init; }
+    public required uint[] PlaneSizes { get; init; }
 
     /// <summary>
     /// V4L2 planes associated with this buffer
     /// </summary>
     public required Linux.Native.V4L2Plane[] Planes { get; init; }
+
+    /// <summary>
+    /// Primary plane pointer (plane 0) for convenience.
+    /// </summary>
+    public IntPtr Pointer => PlanePointers.Length > 0 ? PlanePointers[0] : IntPtr.Zero;
+
+    /// <summary>
+    /// Size of the primary plane (plane 0) for convenience.
+    /// </summary>
+    public uint Size => PlaneSizes.Length > 0 ? PlaneSizes[0] : 0;
 }

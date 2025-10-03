@@ -90,4 +90,16 @@ public static class IoctlConstants
     public static uint DRM_IOR(uint nr, uint size) => IOR(DRM_IOCTL_BASE, nr, size);
     public static uint DRM_IOW(uint nr, uint size) => IOW(DRM_IOCTL_BASE, nr, size);
     public static uint DRM_IOWR(uint nr, uint size) => IOWR(DRM_IOCTL_BASE, nr, size);
+
+    // Media controller ioctl constants
+    public const uint MEDIA_IOC_MAGIC = (uint)'|';
+    public static readonly uint MEDIA_IOC_DEVICE_INFO = IOWR(MEDIA_IOC_MAGIC, 0x00, 200); // sizeof(struct media_device_info)
+    public static readonly uint MEDIA_IOC_ENUM_ENTITIES = IOWR(MEDIA_IOC_MAGIC, 0x01, 0);
+    public static readonly uint MEDIA_IOC_ENUM_LINKS = IOWR(MEDIA_IOC_MAGIC, 0x02, 0);
+    public static readonly uint MEDIA_IOC_SETUP_LINK = IOWR(MEDIA_IOC_MAGIC, 0x03, 0);
+    public static readonly uint MEDIA_IOC_G_TOPOLOGY = IOWR(MEDIA_IOC_MAGIC, 0x04, 0);
+    public static readonly uint MEDIA_IOC_REQUEST_ALLOC = IOR(MEDIA_IOC_MAGIC, 0x05, 4); // returns int fd
+
+    public static readonly uint MEDIA_REQUEST_IOC_QUEUE = IO(MEDIA_IOC_MAGIC, 0x80);
+    public static readonly uint MEDIA_REQUEST_IOC_REINIT = IO(MEDIA_IOC_MAGIC, 0x81);
 }

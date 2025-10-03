@@ -71,7 +71,7 @@ public class V4L2Device : IDisposable
             Value = value
         };
 
-        var result = LibV4L2.SetControl(fd, ref control);
+        var result = LibV4L2.SetControl(_deviceFd, ref control);
         if (result.Success)
         {
             //_logger.LogInformation("Set {Description}", description);
@@ -88,7 +88,7 @@ public class V4L2Device : IDisposable
     /// <summary>
     /// Set a single extended control - much simpler and more predictable
     /// </summary>
-    public void SetSingleExtendedControl<T>(uint controlId, T data) where T : struct
+    public void SetSingleExtendedControl<T>(uint controlId, T data, int requestFd = -1) where T : struct
     {
         ThrowIfDisposed();
 
@@ -121,7 +121,7 @@ public class V4L2Device : IDisposable
                 {
                     Which = GetControlClass(controlId),
                     Count = 1,
-                    RequestFd = -1,
+                    RequestFd = requestFd,
                     Controls = controlPtr
                 };
 

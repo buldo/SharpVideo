@@ -66,6 +66,17 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
+    /// Query buffer properties (memory offsets, lengths, etc.).
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="buffer">Buffer structure with index/type set</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult QueryBuffer(int fd, ref V4L2Buffer buffer)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERYBUF, ref buffer);
+    }
+
+    /// <summary>
     /// Dequeue buffer after capture or output.
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>

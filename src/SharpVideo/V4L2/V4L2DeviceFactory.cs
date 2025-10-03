@@ -8,7 +8,7 @@ public static class V4L2DeviceFactory
 {
     public static V4L2Device? Open(string path)
     {
-        int deviceFd = Libc.open(path, OpenFlags.O_RDWR);
+    int deviceFd = Libc.open(path, OpenFlags.O_RDWR | OpenFlags.O_NONBLOCK);
         if (deviceFd < 0)
         {
             return null;

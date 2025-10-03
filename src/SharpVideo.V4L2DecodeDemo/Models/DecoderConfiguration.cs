@@ -19,7 +19,7 @@ public class DecoderConfiguration
     /// Preferred output pixel format
     /// </summary>
     public uint PreferredPixelFormat { get; init; } = 0x3231564E; // NV12
-    
+
     /// <summary>
     /// Number of output buffers for slice data
     /// </summary>
@@ -34,4 +34,14 @@ public class DecoderConfiguration
     /// Buffer size for slice data (in bytes)
     /// </summary>
     public uint SliceBufferSize { get; init; } = 1024 * 1024; // 1MB
+
+    /// <summary>
+    /// Optional media controller device path to enable request API.
+    /// </summary>
+    public string? MediaDevicePath { get; init; } = null; // Disabled by default for better compatibility
+
+    /// <summary>
+    /// Number of media requests to keep allocated for reuse.
+    /// </summary>
+    public uint RequestPoolSize { get; init; } = 8;
 }
