@@ -21,32 +21,33 @@ internal class Program
         var filePath = File.Exists(testVideoName) ? testVideoName : Path.Combine(AppContext.BaseDirectory, testVideoName);
         if (!File.Exists(filePath))
         {
-            logger.LogError($"Error: Test video file '{testVideoName}' not found in current directory or application base directory.");
-            return;
+            throw new Exception(
+                $"Error: Test video file '{testVideoName}' not found in current directory or application base directory.");
         }
 
         var h264Devices = V4L2.V4L2DeviceManager.GetH264Devices();
         if (!h264Devices.Any())
         {
-            logger.LogError("Error: No H.264 capable V4L2 devices found.");
-            return;
+            throw new Exception("Error: No H.264 capable V4L2 devices found.");
         }
 
         var selectedDevice = h264Devices.First();
         logger.LogInformation("Using device: {@Device}", selectedDevice);
 
-        var device = V4L2.V4L2DeviceFactory.Open(selectedDevice.DevicePath);
-        if(device == null)
+        using var v4L2Device = V4L2DeviceFactory.Open(selectedDevice.DevicePath);
+        if(v4L2Device == null)
         {
-            logger.LogError($"Error: Failed to open V4L2 device at path '{selectedDevice.DevicePath}'.");
-            return;
+            throw new Exception($"Error: Failed to open V4L2 device at path '{selectedDevice.DevicePath}'.");
         }
 
-        logger.LogInformation("Successfully opened V4L2 device");
+        // TODO: media device discovery
+        using var mediaDevice = MediaDevice.Open("/dev/media0");
+        if (mediaDevice == null)
+        {
+            throw new Exception("Not able to open /dev/media0");
+        }
 
         var decoderLogger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
-
-        // Create decoder configuration with media device path for request API
         var config = new Models.DecoderConfiguration
         {
             OutputBufferCount = 16,
@@ -54,13 +55,7 @@ internal class Program
             RequestPoolSize = 32
         };
 
-        var mediaDevice = MediaDevice.Open("/dev/media0");
-        if (mediaDevice == null)
-        {
-            throw new Exception("Not able to open /dev/media0");
-        }
-
-        await using var decoder = new H264V4L2StatelessDecoder(device, mediaDevice, decoderLogger, config);
+        await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config);
 
         int decodedFrames = 0;
         decoder.FrameDecoded += (sender, e) =>
