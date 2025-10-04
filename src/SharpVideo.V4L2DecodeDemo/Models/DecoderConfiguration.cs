@@ -23,12 +23,12 @@ public class DecoderConfiguration
     /// <summary>
     /// Number of output buffers to allocate (for encoded data)
     /// </summary>
-    public uint OutputBufferCount { get; init; } = 8;
+    public uint OutputBufferCount { get; init; } = 16;
 
     /// <summary>
     /// Number of capture buffers to allocate (for decoded frames)
     /// </summary>
-    public uint CaptureBufferCount { get; init; } = 8;
+    public uint CaptureBufferCount { get; init; } = 16;
 
     /// <summary>
     /// Buffer size for slice data (in bytes)
@@ -43,5 +43,5 @@ public class DecoderConfiguration
     /// <summary>
     /// Number of media requests to keep allocated for reuse.
     /// </summary>
-    public uint RequestPoolSize { get; init; } = 8;
+    public uint RequestPoolSize { get; init; } = 32;
 }

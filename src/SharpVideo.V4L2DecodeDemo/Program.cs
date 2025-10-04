@@ -49,9 +49,9 @@ internal class Program
         var config = new SharpVideo.V4L2DecodeDemo.Models.DecoderConfiguration
         {
             MediaDevicePath = "/dev/media0", // Request API required for stateless decoders
-            OutputBufferCount = 8,
-            CaptureBufferCount = 8,
-            RequestPoolSize = 16
+            OutputBufferCount = 16,
+            CaptureBufferCount = 16,
+            RequestPoolSize = 32
         };
 
         await using var decoder = new H264V4L2StatelessDecoder(device, decoderLogger, config);

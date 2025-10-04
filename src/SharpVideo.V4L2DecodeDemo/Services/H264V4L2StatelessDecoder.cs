@@ -103,7 +103,7 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Draining decoder pipeline...");
         int drainAttempts = 0;
         int lastFrameCount = _framesDecoded;
-        while (drainAttempts < 50) // Up to 5 seconds of draining
+        while (drainAttempts < 200) // Up to 2 seconds of draining (fast hardware)
         {
             ProcessCaptureBuffers();
             ReclaimOutputBuffers();
@@ -128,11 +128,9 @@ public class H264V4L2StatelessDecoder
                 drainAttempts = 0; // Reset timeout if we're making progress
             }
 
-            Thread.Sleep(100); // Wait 100ms between drain attempts
+            Thread.Sleep(10); // Wait 10ms between drain attempts (fast for high-performance hardware)
             drainAttempts++;
-        }
-
-        // Final drain
+        }        // Final drain
         ProcessCaptureBuffers();
 
         _decodingStopwatch.Stop();
@@ -365,9 +363,12 @@ public class H264V4L2StatelessDecoder
             return;
         }
 
-        // Reclaim any OUTPUT buffers that the driver has finished processing
-        ReclaimOutputBuffers();
-        ProcessCaptureBuffers();
+        // Aggressively drain capture buffers first to free up output buffers
+        for (int i = 0; i < 3; i++)
+        {
+            ProcessCaptureBuffers();
+            ReclaimOutputBuffers();
+        }
 
         // Submit frame - TryAcquireOutputBuffer now blocks until a buffer is available
         if (!TrySubmitFrameToDevice(nalu.Data, header, isIdr))
@@ -857,12 +858,14 @@ public class H264V4L2StatelessDecoder
             return;
 
         var planeCount = _captureBuffers[0].Planes.Length;
+        int processed = 0;
 
         unsafe
         {
             var planeStorage = stackalloc V4L2Plane[planeCount];
 
-            while (true)
+            // Process all available capture buffers without blocking
+            while (processed < 32) // Limit to prevent infinite loops
             {
                 var buffer = new V4L2Buffer
                 {
@@ -881,11 +884,14 @@ public class H264V4L2StatelessDecoder
                         break;
                     }
 
-                    _logger.LogDebug(
-                        "Failed to dequeue capture buffer: {Error}",
-                        result.ErrorMessage ?? $"errno {result.ErrorCode}");
+                    if (processed > 0)
+                    {
+                        _logger.LogTrace("Processed {Count} capture buffers this cycle", processed);
+                    }
                     break;
                 }
+
+                processed++;
 
                 uint bytesUsed = 0;
                 foreach (var plane in buffer.PlaneSpan)
