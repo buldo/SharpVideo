@@ -8,7 +8,7 @@ public static class V4L2DeviceFactory
 {
     public static V4L2Device? Open(string path)
     {
-    int deviceFd = Libc.open(path, OpenFlags.O_RDWR | OpenFlags.O_NONBLOCK);
+        int deviceFd = Libc.open(path, OpenFlags.O_RDWR | OpenFlags.O_NONBLOCK);
         if (deviceFd < 0)
         {
             return null;
@@ -19,7 +19,8 @@ public static class V4L2DeviceFactory
         return new V4L2Device(deviceFd, legacyControls, extendedControls);
     }
 
-    private static unsafe (List<V4L2DeviceControl> legacy, List<V4L2DeviceExtendedControl> ext) CreateControlsForDevice(int deviceFd)
+    private static unsafe (List<V4L2DeviceControl> legacy, List<V4L2DeviceExtendedControl> ext)
+        CreateControlsForDevice(int deviceFd)
     {
         var legacy = new List<V4L2DeviceControl>();
         var ext = new List<V4L2DeviceExtendedControl>();

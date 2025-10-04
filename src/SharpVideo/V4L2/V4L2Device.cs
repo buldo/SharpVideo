@@ -1,6 +1,4 @@
-﻿using System;
-using System.Runtime.InteropServices;
-using System.Runtime.Serialization;
+﻿using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
@@ -24,20 +22,23 @@ public class V4L2Device : IDisposable
 
     public IReadOnlyCollection<V4L2DeviceExtendedControl> ExtendedControls { get; }
 
-    public void SetFormatMplane(
-        V4L2BufferType type,
-        V4L2PixFormatMplane pixFormat)
+    public void SetFormat(ref V4L2Format format)
     {
-        var format = new V4L2Format
+        var result = LibV4L2.SetFormat(_deviceFd, ref format);
+        if (!result.Success)
         {
-            Type = type,
-            Pix_mp = pixFormat
-        };
+            throw new Exception(
+                $"Failed to set format {format.Type}. {result.ErrorCode}: {result.ErrorMessage}");
+        }
+    }
 
-        var formatResult = LibV4L2.SetFormat(_deviceFd, ref format);
-        if (!formatResult.Success)
+    public void GetFormat(ref V4L2Format format)
+    {
+        var result = LibV4L2.GetFormat(fd, ref format);
+        if (!result.Success)
         {
-            throw new Exception($"Failed to set {type} format");
+            throw new Exception(
+                $"Failed to get format {format.Type}: {result.ErrorCode}: {result.ErrorMessage}");
         }
     }
 
@@ -88,7 +89,7 @@ public class V4L2Device : IDisposable
     /// <summary>
     /// Set a single extended control - much simpler and more predictable
     /// </summary>
-    public void SetSingleExtendedControl<T>(uint controlId, T data, int requestFd = -1) where T : struct
+    public void SetSingleExtendedControl<T>(uint controlId, T data, MediaRequest? request = null) where T : struct
     {
         ThrowIfDisposed();
 
@@ -116,7 +117,7 @@ public class V4L2Device : IDisposable
             try
             {
                 Marshal.StructureToPtr(control, controlPtr, false);
-
+                var requestFd = request?.Fd ?? -1;
                 var extControlsWrapper = new V4L2ExtControls
                 {
                     Which = GetControlClass(controlId),
@@ -154,6 +155,38 @@ public class V4L2Device : IDisposable
 
         return controlClass != 0 ? controlClass : V4l2ControlsConstants.V4L2_CTRL_CLASS_USER;
     }
+
+    public void QueueOutputBuffer(uint bufferIndex, Linux.Native.V4L2Plane[] planes, MediaRequest? request = null)
+    {
+        var buffer = new V4L2Buffer
+        {
+            Index = bufferIndex,
+            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+            Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+            Length = (uint)planes.Length,
+            Field = (uint)V4L2Field.NONE,
+            Flags = (uint)V4L2BufferFlags.REQUEST_FD,
+            BytesUsed = 0,
+            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+            Sequence = 0,
+            RequestFd = request?.Fd ?? 0
+        };
+
+        unsafe
+        {
+            fixed (V4L2Plane* planePtr = planes)
+            {
+                buffer.Planes = planePtr;
+
+                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+                if (!result.Success)
+                {
+                    throw new Exception($"Failed to queue output buffer");
+                }
+            }
+        }
+    }
+
 
     // TODO: Remove
     public int fd

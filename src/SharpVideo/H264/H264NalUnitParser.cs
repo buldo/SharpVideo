@@ -23,12 +23,12 @@ public static class H264NalUnitParser
     /// to avoid the start code prefix (0x000001/0x00000001)
     /// </summary>
     /// <returns></returns>
-    public static NalUnitState ParseNalUnit(ReadOnlySpan<byte> data, H264BitstreamParserState bitstream_parser_state,ParsingOptions parsing_options)
+    public static NalUnitState? ParseNalUnit(ReadOnlySpan<byte> data, H264BitstreamParserState bitstream_parser_state,ParsingOptions parsing_options)
     {
-        var unpacked_buffer = H264Common.UnescapeRbsp(data);
-        BitBuffer bit_buffer = new(unpacked_buffer.ToArray());
+        var unpackedBuffer = H264Common.UnescapeRbsp(data);
+        BitBuffer bitBuffer = new(unpackedBuffer.ToArray());
 
-        return ParseNalUnit(bit_buffer, bitstream_parser_state, parsing_options);
+        return ParseNalUnit(bitBuffer, bitstream_parser_state, parsing_options);
     }
 
     public static NalUnitState? ParseNalUnit(
@@ -39,18 +39,18 @@ public static class H264NalUnitParser
         // H264 NAL Unit (nal_unit()) parser.
         // Section 7.3.1 ("NAL unit syntax") of the H.264
         // standard for a complete description.
-        var nal_unit = new NalUnitState();
+        var nalUnit = new NalUnitState();
 
         // need to calculate the checksum before parsing the bit buffer
         if (parsing_options.add_checksum)
         {
             // set the checksum
-            nal_unit.checksum = NaluChecksum.GetNaluChecksum(bit_buffer);
+            nalUnit.checksum = NaluChecksum.GetNaluChecksum(bit_buffer);
         }
 
         // nal_unit_header()
-        nal_unit.nal_unit_header = H264NalUnitHeaderParser.ParseNalUnitHeader(bit_buffer);
-        if (nal_unit.nal_unit_header == null)
+        nalUnit.nal_unit_header = H264NalUnitHeaderParser.ParseNalUnitHeader(bit_buffer);
+        if (nalUnit.nal_unit_header == null)
         {
 #if DEBUG
             //fprintf(stderr, "error: cannot ParseNalUnitHeader in nal unit\n");
@@ -59,16 +59,15 @@ public static class H264NalUnitParser
         }
 
         // nal_unit_payload()
-        nal_unit.nal_unit_payload =
-            H264NalUnitPayloadParser.ParseNalUnitPayload(bit_buffer, nal_unit.nal_unit_header, bitstream_parser_state);
-        if (nal_unit.nal_unit_payload == null)
+        nalUnit.nal_unit_payload = H264NalUnitPayloadParser.ParseNalUnitPayload(bit_buffer, nalUnit.nal_unit_header, bitstream_parser_state);
+        if (nalUnit.nal_unit_payload == null)
         {
             return null;
         }
 
         // update the parsed length
-        nal_unit.parsed_length = H264Common.get_current_offset(bit_buffer);
+        nalUnit.parsed_length = H264Common.get_current_offset(bit_buffer);
 
-        return nal_unit;
+        return nalUnit;
     }
 }

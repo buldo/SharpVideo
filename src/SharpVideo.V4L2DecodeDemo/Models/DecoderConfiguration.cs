@@ -36,12 +36,7 @@ public class DecoderConfiguration
     public uint SliceBufferSize { get; init; } = 1024 * 1024; // 1MB
 
     /// <summary>
-    /// Optional media controller device path to enable request API.
-    /// </summary>
-    public string? MediaDevicePath { get; init; } = null; // Disabled by default for better compatibility
-
-    /// <summary>
     /// Number of media requests to keep allocated for reuse.
     /// </summary>
-    public uint RequestPoolSize { get; init; } = 32;
+    public int RequestPoolSize { get; init; } = 32;
 }

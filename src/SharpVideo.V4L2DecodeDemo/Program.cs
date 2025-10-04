@@ -1,5 +1,6 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
+using SharpVideo.V4L2;
 using SharpVideo.V4L2DecodeDemo.Services;
 
 namespace SharpVideo.V4L2DecodeDemo;
@@ -46,15 +47,20 @@ internal class Program
         var decoderLogger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
 
         // Create decoder configuration with media device path for request API
-        var config = new SharpVideo.V4L2DecodeDemo.Models.DecoderConfiguration
+        var config = new Models.DecoderConfiguration
         {
-            MediaDevicePath = "/dev/media0", // Request API required for stateless decoders
             OutputBufferCount = 16,
             CaptureBufferCount = 16,
             RequestPoolSize = 32
         };
 
-        await using var decoder = new H264V4L2StatelessDecoder(device, decoderLogger, config);
+        var mediaDevice = MediaDevice.Open("/dev/media0");
+        if (mediaDevice == null)
+        {
+            throw new Exception("Not able to open /dev/media0");
+        }
+
+        await using var decoder = new H264V4L2StatelessDecoder(device, mediaDevice, decoderLogger, config);
 
         // Subscribe to events for real-time feedback
         var lastProgressUpdate = DateTime.MinValue;

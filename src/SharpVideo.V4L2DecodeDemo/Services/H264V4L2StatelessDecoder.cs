@@ -18,6 +18,7 @@ namespace SharpVideo.V4L2DecodeDemo.Services;
 public class H264V4L2StatelessDecoder
 {
     private readonly V4L2Device _device;
+    private readonly MediaDevice? _mediaDevice;
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
 
     private readonly DecoderConfiguration _configuration;
@@ -37,15 +38,7 @@ public class H264V4L2StatelessDecoder
     private int _framesDecoded;
     private readonly Stopwatch _decodingStopwatch = new();
 
-    private bool _hasValidParameterSets;
-    private bool _isInitialized;
-
-    private bool _requestApiEnabled;
-    private int _mediaFd = -1;
-    private bool _supportsSliceParamsControl;
-
-    private V4L2CtrlH264Sps? _lastV4L2Sps;
-    private V4L2CtrlH264Pps? _lastV4L2Pps;
+    private readonly bool _supportsSliceParamsControl;
 
     private int _consecutiveFailures = 0;
     private const int MAX_CONSECUTIVE_FAILURES = 10;
@@ -68,10 +61,12 @@ public class H264V4L2StatelessDecoder
 
     public H264V4L2StatelessDecoder(
         V4L2Device device,
+        MediaDevice? mediaDevice,
         ILogger<H264V4L2StatelessDecoder> logger,
         DecoderConfiguration? configuration = null)
     {
         _device = device ?? throw new ArgumentNullException(nameof(device));
+        _mediaDevice = mediaDevice;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? new DecoderConfiguration();
         _supportsSliceParamsControl = device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
@@ -199,43 +194,25 @@ public class H264V4L2StatelessDecoder
     {
         var streamState = new H264BitstreamParserState();
         var parsingOptions = new ParsingOptions();
-            var naluCount = 0;
-            await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
+        var naluCount = 0;
+        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
         {
             if (naluData.Data.Length < 1)
             {
                 continue;
             }
-                NalUnitState? naluState = null;
-                try
-                {
-                    naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to parse NALU #{Index} (length {Length})", naluCount + 1, naluData.Data.Length);
-                    continue;
-                }
 
-                if (naluState == null)
-                {
-                    _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
-                    continue;
-                }
+            var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
 
-                naluCount++;
+            if (naluState == null)
+            {
+                _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
+                continue;
+            }
 
-                if (naluCount <= 5 || naluCount % 100 == 0)
-                {
-                    _logger.LogInformation(
-                        "Processing NALU #{Index}: type={Type} length={Length}",
-                        naluCount,
-                        (NalUnitType)naluState.nal_unit_header.nal_unit_type,
-                        naluData.Data.Length);
-                }
+            naluCount++;
 
-            _logger.LogDebug("Dispatching NALU #{Index} to handler", naluCount);
-            ProcessNaluByType(naluData, naluState); // Use WithoutHeader instead of manual span slicing
+            ProcessNaluByType(naluData, naluState, streamState); // Use WithoutHeader instead of manual span slicing
         }
 
         _logger.LogInformation("Finished processing NALUs ({Count} total)", naluCount);
@@ -244,26 +221,21 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Processes individual NALU based on its type
     /// </summary>
-    private void ProcessNaluByType(H264Nalu naluData, NalUnitState naluState)
+    private void ProcessNaluByType(H264Nalu naluData, NalUnitState naluState, H264BitstreamParserState streamState)
     {
         var naluType = (NalUnitType)naluState.nal_unit_header.nal_unit_type;
 
         switch (naluType)
         {
-            case NalUnitType.SPS_NUT: // SPS
-                _logger.LogDebug("Processing SPS NALU");
-                HandleSpsNalu(naluState.nal_unit_payload.sps);
-                break;
-
-            case NalUnitType.PPS_NUT: // PPS
-                _logger.LogDebug("Processing PPS NALU");
-                HandlePpsNalu(naluState.nal_unit_payload.pps);
+            case NalUnitType.SPS_NUT:
+            case NalUnitType.PPS_NUT:
+                _logger.LogTrace("{NaluType} was found in stream", naluType);
                 break;
 
             case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT: // Non-IDR slice
             case NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT: // IDR slice
                 _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
-                HandleSliceNalu(naluData, naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp, naluType);
+                HandleSliceNalu(naluData, naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp, naluType, streamState);
                 break;
 
             default:
@@ -273,95 +245,21 @@ public class H264V4L2StatelessDecoder
     }
 
     /// <summary>
-    /// Handles SPS (Sequence Parameter Set) NALU
-    /// </summary>
-    private void HandleSpsNalu(SpsState? parsedSps)
-    {
-        if (parsedSps == null)
-        {
-            _logger.LogError("Failed to parse SPS");
-            throw new Exception("Not able to parse SPS");
-        }
-
-        _logger.LogDebug("Parsed SPS: {Id}", parsedSps.sps_data.seq_parameter_set_id);
-        var v4L2Sps = SpsMapper.MapSpsToV4L2(parsedSps);
-        _lastV4L2Sps = v4L2Sps;
-
-        // Update max_frame_num from SPS
-        _maxFrameNum = (uint)(1 << (int)(parsedSps.sps_data.log2_max_frame_num_minus4 + 4));
-
-        _logger.LogDebug("Parsed and stored SPS from stream (max_frame_num={MaxFrameNum})", _maxFrameNum);
-        CheckReadyForDecode();
-    }
-
-    /// <summary>
-    /// Handles PPS (Picture Parameter Set) NALU
-    /// </summary>
-    private void HandlePpsNalu(PpsState? parsedPps)
-    {
-        if (parsedPps == null)
-        {
-            _logger.LogError("Failed to parse PPS");
-            throw new Exception("Not able to parse PPS");
-        }
-
-        _logger.LogDebug(
-            "Successfully parsed PPS using H264PpsParser: ID={PpsId}, SPS_ID={SpsId}, QP={QP}",
-            parsedPps.pic_parameter_set_id,
-            parsedPps.seq_parameter_set_id,
-            parsedPps.pic_init_qp_minus26 + 26);
-
-        var v4L2Pps = PpsMapper.ConvertPpsStateToV4L2(parsedPps);
-        _lastV4L2Pps = v4L2Pps;
-
-        _logger.LogDebug("Parsed and stored PPS from stream");
-        CheckReadyForDecode();
-    }
-
-    private void CheckReadyForDecode()
-    {
-        // If we have both SPS and PPS, we're ready to decode
-        if (_lastV4L2Sps.HasValue && _lastV4L2Pps.HasValue)
-        {
-            _hasValidParameterSets = true;
-            _logger.LogInformation("Successfully configured parameter sets from stream - decoder ready for frames");
-        }
-    }
-
-    /// <summary>
     /// Handles slice NALUs (actual video data)
     /// </summary>
-    private void HandleSliceNalu(H264Nalu nalu, SliceLayerWithoutPartitioningRbspState sliceLayerWithoutPartitioningRbsp, NalUnitType naluType)
+    private void HandleSliceNalu(
+        H264Nalu nalu,
+        SliceLayerWithoutPartitioningRbspState sliceLayerWithoutPartitioningRbsp,
+        NalUnitType naluType,
+        H264BitstreamParserState streamState)
     {
-        if (!_hasValidParameterSets)
-        {
-            var pendingFrame = sliceLayerWithoutPartitioningRbsp?.slice_header?.frame_num;
-            _logger.LogDebug(
-                "Ignoring slice NALU because SPS/PPS not yet configured (frame_num={Frame})",
-                pendingFrame.HasValue ? pendingFrame.Value : -1);
-            return;
-        }
-
-        if (sliceLayerWithoutPartitioningRbsp?.slice_header == null)
-        {
-            _logger.LogWarning("Slice header missing; skipping slice");
-            return;
-        }
-
         var header = sliceLayerWithoutPartitioningRbsp.slice_header;
         if (header.first_mb_in_slice != 0)
         {
             _logger.LogDebug("Skipping non-initial slice for frame {FrameNum} in frame-based mode", header.frame_num);
             return;
         }
-        var isIdr = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
-
-        // Verify we still have valid parameter sets
-        if (!_lastV4L2Sps.HasValue || !_lastV4L2Pps.HasValue)
-        {
-            _logger.LogWarning("Lost parameter sets during decoding, cannot process frame {FrameNum}", header.frame_num);
-            return;
-        }
+        var isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 
         // Aggressively drain capture buffers first to free up output buffers
         for (int i = 0; i < 3; i++)
@@ -370,249 +268,87 @@ public class H264V4L2StatelessDecoder
             ReclaimOutputBuffers();
         }
 
-        // Submit frame - TryAcquireOutputBuffer now blocks until a buffer is available
-        if (!TrySubmitFrameToDevice(nalu.Data, header, isIdr))
-        {
-            _consecutiveFailures++;
-            _logger.LogError("Failed to submit frame {FrameNum} (consecutive failures: {Failures})",
-                header.frame_num, _consecutiveFailures);
-
-            // If we have too many consecutive failures, reset the decoder
-            if (_consecutiveFailures >= MAX_CONSECUTIVE_FAILURES)
-            {
-                _logger.LogError("Too many consecutive failures ({Failures}), resetting decoder", _consecutiveFailures);
-                ResetDecoderState();
-                _consecutiveFailures = 0;
-            }
-            return;
-        }
-
-        // Reset failure counter on success
-        _consecutiveFailures = 0;
+        SubmitFrameToDevice(nalu.Data, header, isKeyFrame, streamState);
 
         // Drain CAPTURE buffers that are ready after queuing this frame
         ProcessCaptureBuffers();
     }
 
-    private bool TrySubmitFrameToDevice(ReadOnlySpan<byte> frameData, SliceHeaderState header, bool isIdr)
+    private void SubmitFrameToDevice(
+        ReadOnlySpan<byte> frameData,
+        SliceHeaderState header,
+        bool isKeyFrame,
+        H264BitstreamParserState streamState)
     {
-        if (!TryAcquireOutputBuffer(out var bufferIndex, out var mappedBuffer))
+        var (bufferIndex, mappedBuffer) = AcquireOutputBuffer();
+
+        if (frameData.Length > mappedBuffer.Size)
         {
-            _logger.LogWarning("No available OUTPUT buffer when queuing frame {FrameNum}; dropping frame", header.frame_num);
-            return false;
+            throw new Exception("Output buffer too small");
         }
 
-        MediaRequestContext? requestContext = null;
-        int requestFd = -1;
+        frameData.CopyTo(mappedBuffer.AsSpan());
 
-        var payloadSize = frameData.Length;
-        if (payloadSize == 0)
-        {
-            ReturnOutputBuffer(bufferIndex);
-            return true;
-        }
-
-        if (payloadSize > mappedBuffer.Size)
-        {
-            _logger.LogError(
-                "Frame {FrameNum} size {PayloadSize} exceeds buffer size {BufferSize}; dropping frame",
-                header.frame_num,
-                payloadSize,
-                mappedBuffer.Size);
-            ReturnOutputBuffer(bufferIndex);
-            return false;
-        }
-
-        unsafe
-        {
-            var destination = new Span<byte>((void*)mappedBuffer.Pointer, (int)mappedBuffer.Size);
-            frameData.CopyTo(destination);
-        }
-
-        mappedBuffer.Planes[0].BytesUsed = (uint)payloadSize;
+        mappedBuffer.Planes[0].BytesUsed = (uint)frameData.Length;
         mappedBuffer.Planes[0].Length = mappedBuffer.PlaneSizes[0];
         mappedBuffer.Planes[0].DataOffset = 0;
 
-        if (_requestApiEnabled)
+        MediaRequestContext? requestContext = null;
+        if (_mediaDevice != null)
         {
-            if (!TryAcquireMediaRequest(out var acquiredRequest))
-            {
-                _logger.LogWarning("Failed to acquire media request for frame {FrameNum}; dropping frame", header.frame_num);
-                ReturnOutputBuffer(bufferIndex);
-                return false;
-            }
-
-            requestContext = acquiredRequest;
+            requestContext = AcquireMediaRequest();
             requestContext.InUse = true;
             requestContext.BufferIndex = bufferIndex;
-            requestFd = requestContext.RequestFd;
-
-            if (!SubmitFrameControls(header, isIdr, requestContext))
-            {
-                ReturnOutputBuffer(bufferIndex);
-                requestContext.InUse = false;
-                var reinitResult = LibMedia.ReinitRequest(requestContext.RequestFd);
-                if (!reinitResult.Success)
-                {
-                    _logger.LogWarning(
-                        "MEDIA_REQUEST_IOC_REINIT failed after control submission failure for request fd {Fd}: {Error}",
-                        requestContext.RequestFd,
-                        reinitResult.ErrorMessage ?? $"errno {reinitResult.ErrorCode}");
-                    Libc.close(requestContext.RequestFd);
-                    TryAllocateMediaRequest();
-                }
-                else
-                {
-                    ReleaseMediaRequest(requestContext);
-                }
-                return false;
-            }
+            SubmitFrameControls(header, isKeyFrame, requestContext, streamState);
         }
 
-        _logger.LogInformation(
-            "Queuing frame {FrameNum} ({Bytes} bytes, IDR={IsIdr})",
-            header.frame_num,
-            payloadSize,
-            isIdr);
-
-        if (!QueueOutputBuffer(bufferIndex, mappedBuffer, requestFd))
-        {
-            if (requestContext != null)
-            {
-                requestContext.InUse = false;
-                var reinitResult = LibMedia.ReinitRequest(requestContext.RequestFd);
-                if (!reinitResult.Success)
-                {
-                    _logger.LogWarning(
-                        "MEDIA_REQUEST_IOC_REINIT failed after queue failure for request fd {Fd}: {Error}",
-                        requestContext.RequestFd,
-                        reinitResult.ErrorMessage ?? $"errno {reinitResult.ErrorCode}");
-                    Libc.close(requestContext.RequestFd);
-                    TryAllocateMediaRequest();
-                }
-                else
-                {
-                    ReleaseMediaRequest(requestContext);
-                }
-            }
-            return false;
-        }
+        _device.QueueOutputBuffer(bufferIndex, mappedBuffer.Planes, requestContext?.Request);
 
         if (requestContext != null)
         {
-            var queueResult = LibMedia.QueueRequest(requestContext.RequestFd);
-            if (!queueResult.Success)
-            {
-                _logger.LogWarning(
-                    "MEDIA_REQUEST_IOC_QUEUE failed for buffer {Index}: {Error}",
-                    bufferIndex,
-                    queueResult.ErrorMessage ?? $"errno {queueResult.ErrorCode}");
-
-                var reinitResult = LibMedia.ReinitRequest(requestContext.RequestFd);
-                if (!reinitResult.Success)
-                {
-                    _logger.LogWarning(
-                        "Unable to reinitialize failed request fd {Fd}: {Error}",
-                        requestContext.RequestFd,
-                        reinitResult.ErrorMessage ?? $"errno {reinitResult.ErrorCode}");
-                    Libc.close(requestContext.RequestFd);
-                    TryAllocateMediaRequest();
-                }
-                else
-                {
-                    requestContext.InUse = false;
-                    ReleaseMediaRequest(requestContext);
-                }
-
-                ReturnOutputBuffer(bufferIndex);
-                return false;
-            }
+            requestContext.Request.Queue();
 
             lock (_bufferLock)
             {
                 _inFlightRequests[bufferIndex] = requestContext;
             }
         }
-
-        return true;
     }
 
-    private bool SubmitFrameControls(SliceHeaderState header, bool isIdr, MediaRequestContext request)
+    private void SubmitFrameControls(
+        SliceHeaderState header,
+        bool isKeyFrame,
+        MediaRequestContext request,
+        H264BitstreamParserState streamState)
     {
-        try
+        var pps = streamState.pps[header.pic_parameter_set_id];
+        var ppsV4L2 = PpsMapper.ConvertPpsStateToV4L2(pps);
+        _device.SetSingleExtendedControl(
+            V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS,
+            ppsV4L2,
+            request.Request);
+
+        var sps = streamState.sps[pps.seq_parameter_set_id];
+        var spsV4L2 = SpsMapper.MapSpsToV4L2(sps);
+        _device.SetSingleExtendedControl(
+            V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS,
+            spsV4L2,
+            request.Request);
+
+        if (_supportsSliceParamsControl)
         {
-            if (!_lastV4L2Sps.HasValue || !_lastV4L2Pps.HasValue)
-            {
-                _logger.LogError("Cannot submit frame controls without SPS/PPS");
-                return false;
-            }
-
-            _logger.LogDebug("Setting controls for frame {FrameNum} (IDR={IsIdr}, request_fd={RequestFd})",
-                header.frame_num, isIdr, request.RequestFd);
-
-            // Set SPS, PPS, and DECODE_PARAMS together on this request
-            // This is critical for stateless decoders - all metadata must be per-request
-            try
-            {
-                _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS, _lastV4L2Sps.Value, request.RequestFd);
-                _logger.LogDebug("SPS control set successfully");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to set SPS control");
-                throw;
-            }
-
-            try
-            {
-                _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS, _lastV4L2Pps.Value, request.RequestFd);
-                _logger.LogDebug("PPS control set successfully");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to set PPS control");
-                throw;
-            }
-
-            if (_supportsSliceParamsControl)
-            {
-                var sliceParams = BuildSliceParams(header);
-                try
-                {
-                    _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS, sliceParams, request.RequestFd);
-                    _logger.LogDebug("SLICE_PARAMS control set successfully");
-                }
-                catch (InvalidOperationException ex) when (IsInvalidArgument(ex))
-                {
-                    _supportsSliceParamsControl = false;
-                    _logger.LogInformation("Device rejected slice parameters control; disabling it. {Message}", ex.Message);
-                }
-            }
-
-            var decodeParams = BuildDecodeParams(header, isIdr);
-            _logger.LogDebug("DECODE_PARAMS: FrameNum={FrameNum}, NalRefIdc={NalRefIdc}, IDR={IsIdr}, DPB_count={DpbCount}",
-                decodeParams.FrameNum, decodeParams.NalRefIdc,
-                (decodeParams.Flags & V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_IDR_PIC) != 0,
-                _dpb.Count);
-
-            try
-            {
-                _device.SetSingleExtendedControl(V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS, decodeParams, request.RequestFd);
-                _logger.LogDebug("DECODE_PARAMS control set successfully");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to set DECODE_PARAMS control");
-                throw;
-            }
-
-            return true;
+            var sliceParams = BuildSliceParams(header);
+            _device.SetSingleExtendedControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS,
+                sliceParams,
+                request.Request);
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to submit stateless controls for frame {FrameNum}", header.frame_num);
-            return false;
-        }
+
+        var decodeParams = BuildDecodeParams(header, isKeyFrame, sps);
+        _device.SetSingleExtendedControl(
+            V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
+            decodeParams,
+            request.Request);
     }
 
     private static V4L2CtrlH264SliceParams BuildSliceParams(SliceHeaderState header)
@@ -641,7 +377,7 @@ public class H264V4L2StatelessDecoder
         return sliceParams;
     }
 
-    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr)
+    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps)
     {
         // Handle IDR frames - they reset the DPB
         if (isIdr)
@@ -705,9 +441,7 @@ public class H264V4L2StatelessDecoder
         }
 
         // Manage DPB size - remove oldest frames if we exceed max size
-        var maxDpbSize = _lastV4L2Sps.HasValue && _lastV4L2Sps.Value.max_num_ref_frames > 0
-            ? (int)_lastV4L2Sps.Value.max_num_ref_frames
-            : 4;
+        var maxDpbSize = sps.sps_data.max_num_ref_frames;
 
         while (_dpb.Count > maxDpbSize)
         {
@@ -770,87 +504,6 @@ public class H264V4L2StatelessDecoder
         return flags;
     }
 
-    private static bool IsInvalidArgument(Exception ex)
-    {
-        return ex is InvalidOperationException ioe && ioe.Message.Contains("EINVAL", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private bool QueueOutputBuffer(uint bufferIndex, MappedBuffer mappedBuffer, int requestFd)
-    {
-        // Validate buffer state before queuing
-        if (bufferIndex >= _outputBuffers.Count)
-        {
-            _logger.LogError("Invalid buffer index {Index}, max is {Max}", bufferIndex, _outputBuffers.Count - 1);
-            return false;
-        }
-
-        if (mappedBuffer.Planes.Length == 0 || mappedBuffer.Planes[0].BytesUsed == 0)
-        {
-            _logger.LogWarning("Buffer {Index} has no data to queue", bufferIndex);
-            return false;
-        }
-
-        _logger.LogDebug("Queuing buffer {Index} with {Bytes} bytes, requestFd={RequestFd}",
-            bufferIndex, mappedBuffer.Planes[0].BytesUsed, requestFd);
-
-        var buffer = new V4L2Buffer
-        {
-            Index = bufferIndex,
-            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-            Memory = V4L2Constants.V4L2_MEMORY_MMAP,
-            Length = (uint)mappedBuffer.Planes.Length,
-            Field = (uint)V4L2Field.NONE,
-            Flags = (uint)V4L2BufferFlags.REQUEST_FD,
-            BytesUsed = 0,
-            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-            Sequence = 0,
-            RequestFd = requestFd
-        };
-
-        unsafe
-        {
-            fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
-            {
-                buffer.Planes = planePtr;
-
-                var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
-                if (!result.Success)
-                {
-                    _logger.LogWarning(
-                        "Failed to queue output buffer {Index}: {Error} (errno: {ErrorCode})",
-                        bufferIndex,
-                        result.ErrorMessage ?? "Unknown error",
-                        result.ErrorCode);
-
-                    // For specific errors, try to recover
-                    if (result.ErrorCode == 16) // EBUSY
-                    {
-                        _logger.LogDebug("Attempting buffer recovery for EBUSY error");
-                        ReclaimOutputBuffers();
-
-                        // Small delay to let driver stabilize
-                        Thread.Sleep(1);
-
-                        // Retry once
-                        result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
-                        if (result.Success)
-                        {
-                            _logger.LogDebug("Buffer queue retry succeeded for buffer {Index}", bufferIndex);
-                            return true;
-                        }
-
-                        _logger.LogWarning("Buffer queue retry failed for buffer {Index}: {Error}",
-                            bufferIndex, result.ErrorMessage ?? $"errno {result.ErrorCode}");
-                    }
-
-                    ReturnOutputBuffer(bufferIndex);
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
 
     private void ProcessCaptureBuffers()
     {
@@ -978,7 +631,7 @@ public class H264V4L2StatelessDecoder
 
                 ReturnOutputBuffer(buffer.Index);
 
-                if (_requestApiEnabled)
+                if (_mediaDevice != null)
                 {
                     MediaRequestContext? request = null;
                     lock (_bufferLock)
@@ -992,28 +645,14 @@ public class H264V4L2StatelessDecoder
 
                     if (request != null)
                     {
-                        request.InUse = false;
-                        var reinitResult = LibMedia.ReinitRequest(request.RequestFd);
-                        if (!reinitResult.Success)
-                        {
-                            _logger.LogWarning(
-                                "MEDIA_REQUEST_IOC_REINIT failed for request fd {Fd}: {Error}",
-                                request.RequestFd,
-                                reinitResult.ErrorMessage ?? $"errno {reinitResult.ErrorCode}");
-                            Libc.close(request.RequestFd);
-                            TryAllocateMediaRequest();
-                        }
-                        else
-                        {
-                            ReleaseMediaRequest(request);
-                        }
+                        ReleaseMediaRequest(request);
                     }
                 }
             }
         }
     }
 
-    private bool TryAcquireOutputBuffer(out uint bufferIndex, out MappedBuffer mappedBuffer)
+    private (uint bufferIndex, MappedBuffer mappedBuffer) AcquireOutputBuffer()
     {
         // First try to reclaim any processed buffers
         ReclaimOutputBuffers();
@@ -1022,49 +661,15 @@ public class H264V4L2StatelessDecoder
         {
             if (_availableOutputBuffers.Count > 0)
             {
-                bufferIndex = _availableOutputBuffers.Dequeue();
-                mappedBuffer = _outputBuffers[(int)bufferIndex];
-                _logger.LogTrace("Acquired buffer {Index}, {Available} buffers remaining",
-                    bufferIndex, _availableOutputBuffers.Count);
-                return true;
+                var bufferIndex = _availableOutputBuffers.Dequeue();
+                return (bufferIndex, _outputBuffers[(int)bufferIndex]);
             }
         }
 
-        // If no buffers available, wait for hardware to release buffers
-        // This implements backpressure to prevent frame drops
-        _logger.LogDebug("No buffers available, waiting for hardware to release buffers...");
-        for (int i = 0; i < 100; i++) // Try up to 100 times (up to ~5 seconds total)
-        {
-            // Exponential backoff with cap at 50ms
-            int delayMs = Math.Min(1 + i / 2, 50);
-            Thread.Sleep(delayMs);
+        throw new Exception("No available output buffers");
+    }
 
-            ReclaimOutputBuffers();
-            ProcessCaptureBuffers(); // Also try to drain capture buffers
-
-            lock (_bufferLock)
-            {
-                if (_availableOutputBuffers.Count > 0)
-                {
-                    bufferIndex = _availableOutputBuffers.Dequeue();
-                    mappedBuffer = _outputBuffers[(int)bufferIndex];
-                    _logger.LogDebug("Acquired buffer {Index} after {Attempts} attempts (waited {Delay}ms total)",
-                        bufferIndex, i + 1, (i * (i + 1)) / 4);
-                    return true;
-                }
-            }
-
-            if ((i + 1) % 10 == 0)
-            {
-                _logger.LogInformation("Still waiting for output buffer after {Attempts} attempts...", i + 1);
-            }
-        }
-
-        _logger.LogError("Failed to acquire any output buffer after 100 attempts - decoder may be stalled");
-        bufferIndex = 0;
-        mappedBuffer = null!;
-        return false;
-    }    private void ReturnOutputBuffer(uint index)
+    private void ReturnOutputBuffer(uint index)
     {
         lock (_bufferLock)
         {
@@ -1074,9 +679,6 @@ public class H264V4L2StatelessDecoder
 
     private void InitializeDecoder()
     {
-        if (_isInitialized)
-            return;
-
         _logger.LogInformation("Initializing H.264 stateless decoder...");
 
         // Log device information for debugging
@@ -1086,7 +688,7 @@ public class H264V4L2StatelessDecoder
         // Configure decoder formats
         ConfigureFormats();
 
-    InitializeMediaRequests();
+        InitializeMediaRequests();
 
         // For RK3566 I can only set FRAME_BASED + ANNEX_B
         var decodeMode = V4L2StatelessH264DecodeMode.FRAME_BASED;
@@ -1117,7 +719,6 @@ public class H264V4L2StatelessDecoder
             throw new InvalidOperationException("Failed to verify streaming state after initialization");
         }
 
-        _isInitialized = true;
         _logger.LogInformation("Decoder initialization completed successfully");
     }
 
@@ -1125,90 +726,53 @@ public class H264V4L2StatelessDecoder
     {
         _logger.LogInformation("Configuring stateless decoder formats...");
 
-        try
+        var outputFormat = new V4L2PixFormatMplane
         {
-            // Configure output format (H.264 input) for stateless decoder
-            var outputFormat = new V4L2PixFormatMplane
-            {
-                Width = _configuration.InitialWidth,
-                Height = _configuration.InitialHeight,
-                PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264, // Use standard H264 format
-                NumPlanes = 1,
-                Field = (uint)V4L2Field.NONE,
-                Colorspace = 5, // V4L2_COLORSPACE_REC709
-                YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
-                Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
-                XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
-            };
+            Width = _configuration.InitialWidth,
+            Height = _configuration.InitialHeight,
+            PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE,
+            NumPlanes = 1,
+            Field = (uint)V4L2Field.NONE,
+            Colorspace = 5, // V4L2_COLORSPACE_REC709
+            YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
+            Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
+            XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
+        };
+        _device.SetOutputFormatMPlane(outputFormat);
 
-            _device.SetFormatMplane(V4L2BufferType.VIDEO_OUTPUT_MPLANE, outputFormat);
+        var confirmedOutputFormat = _device.GetOutputFormatMPlane();
+        _outputPlaneCount = confirmedOutputFormat.NumPlanes;
 
-            var confirmedOutputFormat = GetCurrentPixFormat(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
-            _outputPlaneCount = System.Math.Max(1, confirmedOutputFormat.NumPlanes == 0 ? 1 : confirmedOutputFormat.NumPlanes);
+        _logger.LogInformation(
+            "Set output format: {Width}x{Height} H264 ({Planes} plane(s))",
+            confirmedOutputFormat.Width,
+            confirmedOutputFormat.Height,
+            confirmedOutputFormat.NumPlanes);
 
-            _logger.LogInformation(
-                "Set output format: {Width}x{Height} H264 ({Planes} plane(s))",
-                confirmedOutputFormat.Width,
-                confirmedOutputFormat.Height,
-                _outputPlaneCount);
-
-            // Configure capture format (decoded output)
-            var captureFormat = new V4L2PixFormatMplane
-            {
-                Width = _configuration.InitialWidth,
-                Height = _configuration.InitialHeight,
-                PixelFormat = _configuration.PreferredPixelFormat, // Usually NV12
-                NumPlanes = 2, // NV12 typically has 2 planes
-                Field = (uint)V4L2Field.NONE,
-                Colorspace = 5,
-                YcbcrEncoding = 1,
-                Quantization = 1,
-                XferFunc = 1
-            };
-
-            _device.SetFormatMplane(V4L2BufferType.VIDEO_CAPTURE_MPLANE, captureFormat);
-            var confirmedCaptureFormat = GetCurrentPixFormat(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
-            _capturePlaneCount = System.Math.Max(1, confirmedCaptureFormat.NumPlanes == 0 ? 1 : confirmedCaptureFormat.NumPlanes);
-
-            if (_capturePlaneCount != captureFormat.NumPlanes)
-            {
-                _logger.LogInformation(
-                    "Capture plane count adjusted by driver from {RequestedPlanes} to {ActualPlanes}",
-                    captureFormat.NumPlanes,
-                    _capturePlaneCount);
-            }
-
-            _logger.LogInformation(
-                "Set capture format: {Width}x{Height} fmt=0x{Pixel:X8} ({Planes} plane(s))",
-                confirmedCaptureFormat.Width,
-                confirmedCaptureFormat.Height,
-                confirmedCaptureFormat.PixelFormat,
-                _capturePlaneCount);
-
-            _logger.LogInformation("Format configuration completed successfully");
-        }
-        catch (Exception ex)
+        // Configure capture format (decoded output)
+        var captureFormat = new V4L2PixFormatMplane
         {
-            _logger.LogError(ex, "Failed to configure formats");
-            throw new InvalidOperationException($"Format configuration failed: {ex.Message}", ex);
-        }
-    }
-
-    private V4L2PixFormatMplane GetCurrentPixFormat(V4L2BufferType bufferType)
-    {
-        var format = new V4L2Format
-        {
-            Type = bufferType
+            Width = _configuration.InitialWidth,
+            Height = _configuration.InitialHeight,
+            PixelFormat = _configuration.PreferredPixelFormat, // Usually NV12
+            NumPlanes = 2, // NV12 typically has 2 planes
+            Field = (uint)V4L2Field.NONE,
+            Colorspace = 5,
+            YcbcrEncoding = 1,
+            Quantization = 1,
+            XferFunc = 1
         };
 
-        var result = LibV4L2.GetFormat(_device.fd, ref format);
-        if (!result.Success)
-        {
-            throw new InvalidOperationException(
-                $"Failed to query current format for {bufferType}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
-        }
+        _device.SetCaptureFormatMPlane(captureFormat);
+        var confirmedCaptureFormat = _device.GetCaptureFormatMPlane();
+        _capturePlaneCount = confirmedCaptureFormat.NumPlanes;
 
-        return format.Pix_mp;
+        _logger.LogInformation(
+            "Set capture format: {Width}x{Height} fmt=0x{Pixel:X8} ({Planes} plane(s))",
+            confirmedCaptureFormat.Width,
+            confirmedCaptureFormat.Height,
+            confirmedCaptureFormat.PixelFormat,
+            _capturePlaneCount);
     }
 
     private void SetupAndMapBuffers()
@@ -1230,141 +794,47 @@ public class H264V4L2StatelessDecoder
 
     private void InitializeMediaRequests()
     {
-        if (_requestApiEnabled)
-            return;
-
-        var mediaPath = _configuration.MediaDevicePath;
-        if (string.IsNullOrWhiteSpace(mediaPath))
+        if (_mediaDevice == null)
         {
-            _logger.LogInformation("Media device path not provided; request API disabled.");
             return;
         }
 
-        var fd = Libc.open(mediaPath, OpenFlags.O_RDWR | OpenFlags.O_NONBLOCK);
-        if (fd < 0)
+        _mediaDevice.AllocateMediaRequests(_configuration.RequestPoolSize);
+        foreach (var requestFd in _mediaDevice.OpenedRequests)
         {
-            var errno = Marshal.GetLastPInvokeError();
-            _logger.LogWarning("Failed to open media device {Path}: errno {Errno}. Continuing without request API.", mediaPath, errno);
-            return;
-        }
-
-        _mediaFd = fd;
-        _requestApiEnabled = true;
-
-        var targetPoolSize = (int)Math.Max(1, _configuration.RequestPoolSize);
-        for (int i = 0; i < targetPoolSize; i++)
-        {
-            if (!TryAllocateMediaRequest())
+            var request = new MediaRequestContext(requestFd);
+            lock (_bufferLock)
             {
-                if (_availableRequests.Count == 0)
-                {
-                    _logger.LogWarning("Media request allocation failed; disabling request API.");
-                    DisableMediaRequests();
-                }
-                break;
+                _availableRequests.Enqueue(request);
             }
         }
-
-        if (_requestApiEnabled)
-        {
-            _logger.LogInformation("Media request API enabled via {Path} ({RequestCount} pre-allocated requests)", mediaPath, _availableRequests.Count);
-        }
     }
 
-    private bool TryAllocateMediaRequest()
+    private MediaRequestContext AcquireMediaRequest()
     {
-        if (_mediaFd < 0)
-            return false;
-
-        var (result, requestFd) = LibMedia.AllocateRequest(_mediaFd);
-        if (!result.Success || requestFd < 0)
+        if (_mediaDevice == null)
         {
-            _logger.LogWarning("MEDIA_IOC_REQUEST_ALLOC failed: {Error}", result.ErrorMessage ?? $"errno {result.ErrorCode}");
-            return false;
+            throw new Exception("Media device not available");
         }
-
-        var request = new MediaRequestContext(requestFd);
-        lock (_bufferLock)
-        {
-            _availableRequests.Enqueue(request);
-        }
-        return true;
-    }
-
-    private bool TryAcquireMediaRequest(out MediaRequestContext request)
-    {
-        request = null!;
-
-        if (!_requestApiEnabled)
-            return false;
 
         lock (_bufferLock)
         {
             if (_availableRequests.Count > 0)
             {
-                request = _availableRequests.Dequeue();
-                return true;
+                return _availableRequests.Dequeue();
             }
-        }
-
-        if (TryAllocateMediaRequest())
-        {
-            lock (_bufferLock)
+            else
             {
-                if (_availableRequests.Count > 0)
-                {
-                    request = _availableRequests.Dequeue();
-                    return true;
-                }
+                throw new Exception("No available media requests");
             }
         }
-
-        _logger.LogWarning("No media requests available when required.");
-        return false;
     }
 
     private void ReleaseMediaRequest(MediaRequestContext request)
     {
-        if (!_requestApiEnabled)
-            return;
-
         lock (_bufferLock)
         {
             _availableRequests.Enqueue(request.Reset());
-        }
-    }
-
-    private void DisableMediaRequests()
-    {
-        if (!_requestApiEnabled)
-            return;
-
-        lock (_bufferLock)
-        {
-            while (_availableRequests.Count > 0)
-            {
-                var request = _availableRequests.Dequeue();
-                Libc.close(request.RequestFd);
-            }
-        }
-
-        List<MediaRequestContext> inflight;
-        lock (_bufferLock)
-        {
-            inflight = _inFlightRequests.Values.ToList();
-            _inFlightRequests.Clear();
-        }
-
-        foreach (var entry in inflight)
-        {
-            Libc.close(entry.RequestFd);
-        }
-        _requestApiEnabled = false;
-
-        if (_mediaFd >= 0)
-        {
-            Libc.close(_mediaFd);
-            _mediaFd = -1;
         }
     }
 
@@ -1538,22 +1008,13 @@ public class H264V4L2StatelessDecoder
 
     private bool VerifyStreamingState()
     {
-        try
-        {
-            // Try to get current format to verify device is responsive
-            var outputFormat = GetCurrentPixFormat(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
-            var captureFormat = GetCurrentPixFormat(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
+        var outputFormat = _device.GetOutputFormatMPlane();
+        var captureFormat = _device.GetCaptureFormatMPlane();
 
-            _logger.LogDebug("Streaming verification: Output {OutputFormat:X8}, Capture {CaptureFormat:X8}",
-                outputFormat.PixelFormat, captureFormat.PixelFormat);
+        _logger.LogDebug("Streaming verification: Output {OutputFormat:X8}, Capture {CaptureFormat:X8}",
+            outputFormat.PixelFormat, captureFormat.PixelFormat);
 
-            return outputFormat.PixelFormat != 0 && captureFormat.PixelFormat != 0;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to verify streaming state");
-            return false;
-        }
+        return outputFormat.PixelFormat != 0 && captureFormat.PixelFormat != 0;
     }
 
     private void ResetDecoderState()
@@ -1597,9 +1058,6 @@ public class H264V4L2StatelessDecoder
 
     private void Cleanup()
     {
-        if (!_isInitialized)
-            return;
-
         _logger.LogInformation("Cleaning up decoder resources...");
 
         try
@@ -1622,9 +1080,6 @@ public class H264V4L2StatelessDecoder
                 _availableCaptureBuffers.Clear();
             }
 
-            DisableMediaRequests();
-
-            _isInitialized = false;
             _logger.LogInformation("Decoder cleanup completed");
         }
         catch (Exception ex)
@@ -1675,22 +1130,5 @@ public class H264V4L2StatelessDecoder
         await Task.CompletedTask;
     }
 
-    private sealed class MediaRequestContext
-    {
-        public MediaRequestContext(int requestFd)
-        {
-            RequestFd = requestFd;
-        }
 
-        public int RequestFd { get; }
-        public uint BufferIndex { get; set; }
-        public bool InUse { get; set; }
-
-        public MediaRequestContext Reset()
-        {
-            BufferIndex = 0;
-            InUse = false;
-            return this;
-        }
-    }
 }

@@ -37,4 +37,12 @@ public class MappedBuffer
     /// Size of the primary plane (plane 0) for convenience.
     /// </summary>
     public uint Size => PlaneSizes.Length > 0 ? PlaneSizes[0] : 0;
+
+    public Span<byte> AsSpan()
+    {
+        unsafe
+        {
+            return new Span<byte>((void*)Pointer, (int)Size);
+        }
+    }
 }
