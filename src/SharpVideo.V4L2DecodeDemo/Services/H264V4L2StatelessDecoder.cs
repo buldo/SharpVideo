@@ -24,8 +24,8 @@ public class H264V4L2StatelessDecoder
     private readonly List<MappedBuffer> _captureBuffers = new();
     private readonly Queue<uint> _availableOutputBuffers = new();
     private readonly Queue<uint> _availableCaptureBuffers = new();
-    private readonly Queue<MediaRequestContext> _availableRequests = new();
-    private readonly Dictionary<uint, MediaRequestContext> _inFlightRequests = new();
+    private readonly Queue<MediaRequest> _availableRequests = new();
+    private readonly Dictionary<uint, MediaRequest> _inFlightRequests = new();
     private readonly object _bufferLock = new();
 
     private int _outputPlaneCount = 1;
@@ -283,24 +283,22 @@ public class H264V4L2StatelessDecoder
         mappedBuffer.Planes[0].Length = mappedBuffer.PlaneSizes[0];
         mappedBuffer.Planes[0].DataOffset = 0;
 
-        MediaRequestContext? requestContext = null;
+        MediaRequest? request = null;
         if (_mediaDevice != null)
         {
-            requestContext = AcquireMediaRequest();
-            requestContext.InUse = true;
-            requestContext.BufferIndex = bufferIndex;
-            SubmitFrameControls(header, isKeyFrame, requestContext, streamState);
+            request = AcquireMediaRequest();
+            SubmitFrameControls(header, isKeyFrame, request, streamState);
         }
 
-        _device.QueueOutputBuffer(bufferIndex, mappedBuffer.Planes, requestContext?.Request);
+        _device.QueueOutputBuffer(bufferIndex, mappedBuffer.Planes, request);
 
-        if (requestContext != null)
+        if (request != null)
         {
-            requestContext.Request.Queue();
+            request.Queue();
 
             lock (_bufferLock)
             {
-                _inFlightRequests[bufferIndex] = requestContext;
+                _inFlightRequests[bufferIndex] = request;
             }
         }
     }
@@ -308,7 +306,7 @@ public class H264V4L2StatelessDecoder
     private void SubmitFrameControls(
         SliceHeaderState header,
         bool isKeyFrame,
-        MediaRequestContext request,
+        MediaRequest request,
         H264BitstreamParserState streamState)
     {
         var pps = streamState.pps[header.pic_parameter_set_id];
@@ -316,14 +314,14 @@ public class H264V4L2StatelessDecoder
         _device.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS,
             ppsV4L2,
-            request.Request);
+            request);
 
         var sps = streamState.sps[pps.seq_parameter_set_id];
         var spsV4L2 = SpsMapper.MapSpsToV4L2(sps);
         _device.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS,
             spsV4L2,
-            request.Request);
+            request);
 
         if (_supportsSliceParamsControl)
         {
@@ -331,14 +329,14 @@ public class H264V4L2StatelessDecoder
             _device.SetSingleExtendedControl(
                 V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS,
                 sliceParams,
-                request.Request);
+                request);
         }
 
         var decodeParams = BuildDecodeParams(header, isKeyFrame, sps);
         _device.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
             decodeParams,
-            request.Request);
+            request);
     }
 
     private static V4L2CtrlH264SliceParams BuildSliceParams(SliceHeaderState header)
@@ -626,7 +624,7 @@ public class H264V4L2StatelessDecoder
 
                 if (_mediaDevice != null)
                 {
-                    MediaRequestContext? request = null;
+                    MediaRequest? request = null;
                     lock (_bufferLock)
                     {
                         if (_inFlightRequests.TryGetValue(buffer.Index, out var existing))
@@ -793,9 +791,8 @@ public class H264V4L2StatelessDecoder
         }
 
         _mediaDevice.AllocateMediaRequests(_configuration.RequestPoolSize);
-        foreach (var requestFd in _mediaDevice.OpenedRequests)
+        foreach (var request in _mediaDevice.OpenedRequests)
         {
-            var request = new MediaRequestContext(requestFd);
             lock (_bufferLock)
             {
                 _availableRequests.Enqueue(request);
@@ -803,7 +800,7 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private MediaRequestContext AcquireMediaRequest()
+    private MediaRequest AcquireMediaRequest()
     {
         if (_mediaDevice == null)
         {
@@ -823,11 +820,12 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private void ReleaseMediaRequest(MediaRequestContext request)
+    private void ReleaseMediaRequest(MediaRequest request)
     {
+        request.ReInit();
         lock (_bufferLock)
         {
-            _availableRequests.Enqueue(request.Reset());
+            _availableRequests.Enqueue(request);
         }
     }
 
