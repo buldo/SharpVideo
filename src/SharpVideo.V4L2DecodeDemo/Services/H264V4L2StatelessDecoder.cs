@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -41,11 +38,9 @@ public class H264V4L2StatelessDecoder
     private readonly bool _supportsSliceParamsControl;
 
     private int _consecutiveFailures = 0;
-    private const int MAX_CONSECUTIVE_FAILURES = 10;
 
     // DPB (Decoded Picture Buffer) tracking
     private readonly List<DpbEntry> _dpb = new();
-    private const int MAX_DPB_SIZE = 16;
     private uint _maxFrameNum = 256;
 
     private class DpbEntry
@@ -57,7 +52,6 @@ public class H264V4L2StatelessDecoder
     }
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
-    public event EventHandler<DecodingProgressEventArgs>? ProgressChanged;
 
     public H264V4L2StatelessDecoder(
         V4L2Device device,
@@ -69,7 +63,8 @@ public class H264V4L2StatelessDecoder
         _mediaDevice = mediaDevice;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? new DecoderConfiguration();
-        _supportsSliceParamsControl = device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
+        _supportsSliceParamsControl =
+            device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
     }
 
     /// <summary>
@@ -89,7 +84,7 @@ public class H264V4L2StatelessDecoder
         InitializeDecoder();
 
         using var naluProvider = new H264AnnexBNaluProvider();
-    _logger.LogInformation("NALU provider created; beginning stream processing");
+        _logger.LogInformation("NALU provider created; beginning stream processing");
         var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
         var feedTask = FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
         await Task.WhenAll(naluProcessingTask, feedTask);
@@ -112,6 +107,7 @@ public class H264V4L2StatelessDecoder
                     _logger.LogInformation("Pipeline drained, all buffers returned");
                     break;
                 }
+
                 _logger.LogDebug("Still draining: {BuffersInUse} buffers in use", buffersInUse);
             }
 
@@ -125,7 +121,8 @@ public class H264V4L2StatelessDecoder
 
             Thread.Sleep(10); // Wait 10ms between drain attempts (fast for high-performance hardware)
             drainAttempts++;
-        }        // Final drain
+        } // Final drain
+
         ProcessCaptureBuffers();
 
         _decodingStopwatch.Stop();
@@ -142,7 +139,10 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Feeds stream data to NaluProvider in chunks
     /// </summary>
-    private async Task FeedStreamToNaluProviderAsync(Stream stream, H264AnnexBNaluProvider naluProvider, CancellationToken cancellationToken)
+    private async Task FeedStreamToNaluProviderAsync(
+        Stream stream,
+        H264AnnexBNaluProvider naluProvider,
+        CancellationToken cancellationToken)
     {
         const int bufferSize = 64 * 1024; // 64KB buffer
         var buffer = new byte[bufferSize];
@@ -165,18 +165,6 @@ public class H264V4L2StatelessDecoder
                         readIterations,
                         bytesRead,
                         totalBytesRead);
-                }
-
-                // Report progress periodically
-                if (stream.CanSeek)
-                {
-                    ProgressChanged?.Invoke(this, new DecodingProgressEventArgs
-                    {
-                        BytesProcessed = stream.Position,
-                        TotalBytes = stream.Length,
-                        FramesDecoded = _framesDecoded,
-                        ElapsedTime = _decodingStopwatch.Elapsed
-                    });
                 }
             }
         }
@@ -235,7 +223,8 @@ public class H264V4L2StatelessDecoder
             case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT: // Non-IDR slice
             case NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT: // IDR slice
                 _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
-                HandleSliceNalu(naluData, naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp, naluType, streamState);
+                HandleSliceNalu(naluData, naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp, naluType,
+                    streamState);
                 break;
 
             default:
@@ -259,6 +248,7 @@ public class H264V4L2StatelessDecoder
             _logger.LogDebug("Skipping non-initial slice for frame {FrameNum} in frame-based mode", header.frame_num);
             return;
         }
+
         var isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 
         // Aggressively drain capture buffers first to free up output buffers
@@ -401,6 +391,7 @@ public class H264V4L2StatelessDecoder
             {
                 dpbArray[i].Flags |= V4L2H264Constants.V4L2_H264_DPB_ENTRY_FLAG_ACTIVE;
             }
+
             if (_dpb[i].IsLongTerm)
             {
                 dpbArray[i].Flags |= V4L2H264Constants.V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM;
@@ -437,7 +428,8 @@ public class H264V4L2StatelessDecoder
                 IsLongTerm = false
             };
             _dpb.Add(newEntry);
-            _logger.LogTrace("Added reference frame to DPB: frame_num={FrameNum}, DPB size={Size}", header.frame_num, _dpb.Count);
+            _logger.LogTrace("Added reference frame to DPB: frame_num={FrameNum}, DPB size={Size}", header.frame_num,
+                _dpb.Count);
         }
 
         // Manage DPB size - remove oldest frames if we exceed max size
@@ -541,6 +533,7 @@ public class H264V4L2StatelessDecoder
                     {
                         _logger.LogTrace("Processed {Count} capture buffers this cycle", processed);
                     }
+
                     break;
                 }
 
@@ -838,7 +831,8 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private void SetupBufferQueue(V4L2BufferType bufferType, uint bufferCount, List<MappedBuffer> bufferList, Queue<uint> availableQueue)
+    private void SetupBufferQueue(V4L2BufferType bufferType, uint bufferCount, List<MappedBuffer> bufferList,
+        Queue<uint> availableQueue)
     {
         // Request buffers from V4L2
         var reqBufs = new V4L2RequestBuffers
@@ -890,7 +884,8 @@ public class H264V4L2StatelessDecoder
                 var queryResult = LibV4L2.QueryBuffer(_device.fd, ref buffer);
                 if (!queryResult.Success)
                 {
-                    throw new InvalidOperationException($"Failed to query buffer {i} for {bufferType}: {queryResult.ErrorMessage}");
+                    throw new InvalidOperationException(
+                        $"Failed to query buffer {i} for {bufferType}: {queryResult.ErrorMessage}");
                 }
 
                 for (int p = 0; p < planeCount; p++)
@@ -904,7 +899,8 @@ public class H264V4L2StatelessDecoder
                     }
 
                     var offset = planeStorage[p].Memory.MemOffset;
-                    var mapped = Libc.mmap(IntPtr.Zero, (nuint)planeSizes[p], ProtFlags.PROT_READ | ProtFlags.PROT_WRITE, MapFlags.MAP_SHARED, _device.fd, (nint)offset);
+                    var mapped = Libc.mmap(IntPtr.Zero, (nuint)planeSizes[p],
+                        ProtFlags.PROT_READ | ProtFlags.PROT_WRITE, MapFlags.MAP_SHARED, _device.fd, (nint)offset);
                     if (mapped == Libc.MAP_FAILED)
                     {
                         var errno = Marshal.GetLastPInvokeError();
@@ -917,8 +913,10 @@ public class H264V4L2StatelessDecoder
                             {
                                 Libc.munmap((void*)planePointers[rollback], planeSizes[rollback]);
                             }
+
                             planePointers[rollback] = IntPtr.Zero;
                         }
+
                         throw new InvalidOperationException($"mmap failed for buffer {i} plane {p}: errno {errno}");
                     }
 
@@ -1017,45 +1015,6 @@ public class H264V4L2StatelessDecoder
         return outputFormat.PixelFormat != 0 && captureFormat.PixelFormat != 0;
     }
 
-    private void ResetDecoderState()
-    {
-        _logger.LogWarning("Resetting decoder state due to persistent errors");
-
-        try
-        {
-            // Stop streaming
-            _device.StreamOff(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
-            _device.StreamOff(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
-
-            // Clear buffer queues
-            lock (_bufferLock)
-            {
-                _availableOutputBuffers.Clear();
-                _availableCaptureBuffers.Clear();
-
-                // Re-queue all buffers as available
-                for (uint i = 0; i < _outputBuffers.Count; i++)
-                {
-                    _availableOutputBuffers.Enqueue(i);
-                }
-                for (uint i = 0; i < _captureBuffers.Count; i++)
-                {
-                    _availableCaptureBuffers.Enqueue(i);
-                }
-            }
-
-            // Restart streaming
-            StartStreaming();
-
-            _logger.LogInformation("Decoder state reset completed");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to reset decoder state");
-            throw;
-        }
-    }
-
     private void Cleanup()
     {
         _logger.LogInformation("Cleaning up decoder resources...");
@@ -1106,7 +1065,8 @@ public class H264V4L2StatelessDecoder
                         if (result != 0)
                         {
                             var errno = Marshal.GetLastPInvokeError();
-                            _logger.LogWarning("munmap failed for buffer {Index} plane {Plane}: errno {Errno}", buffer.Index, p, errno);
+                            _logger.LogWarning("munmap failed for buffer {Index} plane {Plane}: errno {Errno}",
+                                buffer.Index, p, errno);
                         }
                     }
                 }
@@ -1116,6 +1076,7 @@ public class H264V4L2StatelessDecoder
                 }
             }
         }
+
         buffers.Clear();
     }
 
@@ -1126,9 +1087,8 @@ public class H264V4L2StatelessDecoder
             Cleanup();
             _disposed = true;
         }
+
         GC.SuppressFinalize(this);
         await Task.CompletedTask;
     }
-
-
 }

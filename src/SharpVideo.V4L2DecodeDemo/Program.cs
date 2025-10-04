@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2;
@@ -23,7 +24,6 @@ internal class Program
             logger.LogError($"Error: Test video file '{testVideoName}' not found in current directory or application base directory.");
             return;
         }
-
 
         var h264Devices = V4L2.V4L2DeviceManager.GetH264Devices();
         if (!h264Devices.Any())
@@ -62,37 +62,17 @@ internal class Program
 
         await using var decoder = new H264V4L2StatelessDecoder(device, mediaDevice, decoderLogger, config);
 
-        // Subscribe to events for real-time feedback
-        var lastProgressUpdate = DateTime.MinValue;
+        int decodedFrames = 0;
         decoder.FrameDecoded += (sender, e) =>
         {
-            if (e.FrameNumber % 30 == 0 || e.FrameNumber <= 10) // Log first 10 frames and every 30th frame
-            {
-                logger.LogInformation($"Frame {e.FrameNumber} decoded: {e.BytesUsed} bytes at {e.Timestamp:HH:mm:ss.fff}");
-            }
+            decodedFrames++;
         };
 
-        decoder.ProgressChanged += (sender, e) =>
-        {
-            // Throttle progress updates to avoid spam
-            var now = DateTime.Now;
-            if (now - lastProgressUpdate > TimeSpan.FromSeconds(1) || e.ProgressPercentage >= 100)
-            {
-                logger.LogInformation($"Progress: {e.ProgressPercentage:F1}% ({e.FramesDecoded} frames, {e.FramesPerSecond:F2} fps)");
-                lastProgressUpdate = now;
-            }
-        };
-
-        // Use NALU-by-NALU decoding for better hardware compatibility
-        logger.LogInformation("Starting NALU-by-NALU decoding for optimal hardware decoder compatibility...");
-        logger.LogInformation("This may take some time depending on file size and hardware capabilities.\n");
-
-        var startTime = DateTime.Now;
-        using var fileStream = File.OpenRead(filePath);
+        await using var fileStream = File.OpenRead(filePath);
+        var decodeStopWatch = Stopwatch.StartNew();
         await decoder.DecodeStreamAsync(fileStream);
-        var elapsed = DateTime.Now - startTime;
 
-        logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", elapsed.TotalSeconds);
-        logger.LogInformation("All frames have been processed by the hardware decoder.");
+        logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
+        logger.LogInformation("Amount of decoded frames: {DecodedFrames}", decodedFrames);
     }
 }

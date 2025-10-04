@@ -31,11 +31,6 @@ public class DecoderConfiguration
     public uint CaptureBufferCount { get; init; } = 16;
 
     /// <summary>
-    /// Buffer size for slice data (in bytes)
-    /// </summary>
-    public uint SliceBufferSize { get; init; } = 1024 * 1024; // 1MB
-
-    /// <summary>
     /// Number of media requests to keep allocated for reuse.
     /// </summary>
     public int RequestPoolSize { get; init; } = 32;
