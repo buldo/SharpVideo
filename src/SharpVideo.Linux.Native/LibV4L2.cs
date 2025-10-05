@@ -165,25 +165,6 @@ public static unsafe class LibV4L2
     }
 
     /// <summary>
-    /// Helper method to request DMABUF buffers for multiplanar capture.
-    /// </summary>
-    /// <param name="fd">Open V4L2 device file descriptor</param>
-    /// <param name="count">Number of buffers to request</param>
-    /// <returns>Result of the operation and the actual count allocated</returns>
-    public static (IoctlResult Result, uint Count) RequestMultiplanarDmaBufCapture(int fd, uint count)
-    {
-        var reqbufs = new V4L2RequestBuffers
-        {
-            Count = count,
-            Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-            Memory = V4L2Constants.V4L2_MEMORY_DMABUF
-        };
-
-        var result = RequestBuffers(fd, ref reqbufs);
-        return (result, reqbufs.Count);
-    }
-
-    /// <summary>
     /// Helper method to start decoder.
     /// </summary>
     /// <param name="fd">Open V4L2 device file descriptor</param>

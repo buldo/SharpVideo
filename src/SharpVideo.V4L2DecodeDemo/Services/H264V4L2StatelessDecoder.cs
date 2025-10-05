@@ -494,7 +494,6 @@ public class H264V4L2StatelessDecoder
         return flags;
     }
 
-
     private void ProcessCaptureBuffers()
     {
         if (_captureBuffers.Count == 0)
@@ -513,7 +512,7 @@ public class H264V4L2StatelessDecoder
                 var buffer = new V4L2Buffer
                 {
                     Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Memory =V4L2Memory.MMAP,
                     Length = (uint)planeCount,
                     Field = (uint)V4L2Field.NONE,
                     Planes = planeStorage
@@ -556,7 +555,7 @@ public class H264V4L2StatelessDecoder
                 {
                     Index = buffer.Index,
                     Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Memory = V4L2Memory.MMAP,
                     Length = (uint)mappedBuffer.Planes.Length,
                     Field = (uint)V4L2Field.NONE,
                     Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
@@ -600,7 +599,7 @@ public class H264V4L2StatelessDecoder
                 var buffer = new V4L2Buffer
                 {
                     Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Memory = V4L2Memory.MMAP,
                     Length = 1,
                     Field = (uint)V4L2Field.NONE,
                     Planes = planeStorage
@@ -770,9 +769,11 @@ public class H264V4L2StatelessDecoder
     {
         _logger.LogInformation("Setting up and mapping buffers...");
 
-
         // Setup OUTPUT buffers for slice data with proper V4L2 mmap
-        SetupBufferQueue(V4L2BufferType.VIDEO_OUTPUT_MPLANE, _configuration.OutputBufferCount, _outputBuffers,
+        SetupBufferQueue(
+            V4L2BufferType.VIDEO_OUTPUT_MPLANE,
+            _configuration.OutputBufferCount,
+            _outputBuffers,
             _availableOutputBuffers);
 
         // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
@@ -829,28 +830,18 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private void SetupBufferQueue(V4L2BufferType bufferType, uint bufferCount, List<MappedBuffer> bufferList,
+    private void SetupBufferQueue(
+        V4L2BufferType bufferType,
+        uint bufferCount,
+        List<MappedBuffer> bufferList,
         Queue<uint> availableQueue)
     {
-        // Request buffers from V4L2
-        var reqBufs = new V4L2RequestBuffers
-        {
-            Count = bufferCount,
-            Type = bufferType,
-            Memory = V4L2Constants.V4L2_MEMORY_MMAP
-        };
-
-        var result = LibV4L2.RequestBuffers(_device.fd, ref reqBufs);
-        if (!result.Success)
-        {
-            throw new InvalidOperationException($"Failed to request {bufferType} buffers: {result.ErrorMessage}");
-        }
-
+        var requested = _device.RequestBuffers(bufferCount, bufferType, V4L2Memory.MMAP);
         _logger.LogDebug("Requested {RequestedCount} {BufferType} buffers, got {ActualCount}",
-            bufferCount, bufferType, reqBufs.Count);
+            bufferCount, bufferType, requested.Count);
 
         // Map each buffer using VIDIOC_QUERYBUF + mmap
-        for (uint i = 0; i < reqBufs.Count; i++)
+        for (uint i = 0; i < requested.Count; i++)
         {
             var configuredPlaneCount = bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE
                 ? _outputPlaneCount
@@ -873,7 +864,7 @@ public class H264V4L2StatelessDecoder
                 {
                     Index = i,
                     Type = bufferType,
-                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Memory = V4L2Memory.MMAP,
                     Length = (uint)planeCount,
                     Field = (uint)V4L2Field.NONE,
                     Planes = planeStorage
@@ -955,7 +946,7 @@ public class H264V4L2StatelessDecoder
                 {
                     Index = i,
                     Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                    Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+                    Memory = V4L2Memory.MMAP,
                     Length = (uint)mappedBuffer.Planes.Length,
                     Field = (uint)V4L2Field.NONE,
                     BytesUsed = 0, // Output buffer, hardware will fill this

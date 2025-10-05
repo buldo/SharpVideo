@@ -8,5 +8,5 @@ public enum V4L2Memory : uint
     MMAP = 1,
     USERPTR = 2,
     OVERLAY = 3,
-    DMABUF = 4,
+    DMABUF = 4
 }

@@ -384,7 +384,7 @@ public unsafe class StructureCompatibilityTests
         // Verify that the managed structure fields have the expected distinctive patterns
         Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Count);
         Assert.Equal((V4L2BufferType)0xCAFEBABEu, nativeFilledStruct.Type);
-        Assert.Equal(0x12345678u, nativeFilledStruct.Memory);
+        Assert.Equal((V4L2Memory)0x12345678u, nativeFilledStruct.Memory);
     }
 
     [Fact]
@@ -413,7 +413,7 @@ public unsafe class StructureCompatibilityTests
         Assert.Equal(0x11111111L, nativeFilledStruct.Timestamp.TvSec);
         Assert.Equal(0x22222222L, nativeFilledStruct.Timestamp.TvUsec);
         Assert.Equal(0x33333333u, nativeFilledStruct.Sequence);
-        Assert.Equal(0x44444444u, nativeFilledStruct.Memory);
+        Assert.Equal((V4L2Memory)0x44444444u, nativeFilledStruct.Memory);
         Assert.Equal(0x55555555u, nativeFilledStruct.Length);
     }
 

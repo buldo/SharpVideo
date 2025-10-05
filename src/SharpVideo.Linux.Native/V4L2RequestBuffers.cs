@@ -22,7 +22,7 @@ public unsafe struct V4L2RequestBuffers
     /// <summary>
     /// Memory type
     /// </summary>
-    public uint Memory;
+    public V4L2Memory Memory;
 
     /// <summary>
     /// Driver capability flags

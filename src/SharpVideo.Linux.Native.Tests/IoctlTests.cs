@@ -170,52 +170,6 @@ public class IoctlTests
     }
 
     [Fact]
-    public void TestV4L2_HelperMethods()
-    {
-        // Test V4L2 helper methods with /dev/null (will fail but test structure)
-        int fd = Libc.open("/dev/null", OpenFlags.O_RDWR);
-
-        if (fd < 0)
-        {
-            return; // Skip test
-        }
-
-        try
-        {
-            // Test multiplanar format helper
-            var (formatResult, format) = LibV4L2.SetMultiplanarCaptureFormat(
-                fd, 1920, 1080, V4L2PixelFormats.NV12M, 2);
-
-            Assert.False(formatResult.Success); // Expected to fail with /dev/null
-
-            // Verify format structure was set up correctly
-            Assert.Equal(V4L2BufferType.VIDEO_CAPTURE_MPLANE, format.Type);
-            Assert.Equal(1920u, format.Pix_mp.Width);
-            Assert.Equal(1080u, format.Pix_mp.Height);
-            Assert.Equal(V4L2PixelFormats.NV12M, format.Pix_mp.PixelFormat);
-            Assert.Equal(2, format.Pix_mp.NumPlanes);
-
-            // Test buffer request helper
-            var (bufferResult, count) = LibV4L2.RequestMultiplanarDmaBufCapture(fd, 4);
-            Assert.False(bufferResult.Success); // Expected to fail with /dev/null
-
-            // Test decoder control helpers
-            var startResult = LibV4L2.StartDecoder(fd);
-            Assert.False(startResult.Success); // Expected to fail with /dev/null
-
-            var stopResult = LibV4L2.StopDecoder(fd);
-            Assert.False(stopResult.Success); // Expected to fail with /dev/null
-
-            var flushResult = LibV4L2.FlushDecoder(fd);
-            Assert.False(flushResult.Success); // Expected to fail with /dev/null
-        }
-        finally
-        {
-            Libc.close(fd);
-        }
-    }
-
-    [Fact]
     public void TestV4L2_TryWithRealDevice()
     {
         // Try to find and test with a real V4L2 device (system-dependent)

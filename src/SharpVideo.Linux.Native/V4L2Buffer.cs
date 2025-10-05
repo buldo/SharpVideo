@@ -84,7 +84,7 @@ public unsafe struct V4L2Buffer
     /// <summary>
     /// Memory type
     /// </summary>
-    public uint Memory;
+    public V4L2Memory Memory;
 
     /// <summary>
     /// Union for memory-specific data (offset, userptr, planes pointer, or fd)

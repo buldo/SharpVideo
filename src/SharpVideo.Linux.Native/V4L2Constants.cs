@@ -79,12 +79,6 @@ public static class V4L2Constants
     public static readonly uint VIDIOC_DECODER_CMD = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 96, 72); // sizeof(V4L2DecoderCmd)
     public static readonly uint VIDIOC_TRY_DECODER_CMD = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 97, 72); // sizeof(V4L2DecoderCmd)
 
-    // Memory types
-    public const uint V4L2_MEMORY_MMAP = 1;
-    public const uint V4L2_MEMORY_USERPTR = 2;
-    public const uint V4L2_MEMORY_OVERLAY = 3;
-    public const uint V4L2_MEMORY_DMABUF = 4;
-
     // Other useful constants
     public const uint VIDEO_MAX_FRAME = 32;
     public const uint VIDEO_MAX_PLANES = 8;

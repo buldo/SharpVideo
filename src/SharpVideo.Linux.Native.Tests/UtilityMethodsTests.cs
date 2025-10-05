@@ -129,16 +129,6 @@ public class UtilityMethodsTests
     }
 
     [Fact]
-    public void TestV4L2Constants_MemoryTypes()
-    {
-        // Test that V4L2 memory type constants have expected values
-        Assert.Equal(1u, V4L2Constants.V4L2_MEMORY_MMAP);
-        Assert.Equal(2u, V4L2Constants.V4L2_MEMORY_USERPTR);
-        Assert.Equal(3u, V4L2Constants.V4L2_MEMORY_OVERLAY);
-        Assert.Equal(4u, V4L2Constants.V4L2_MEMORY_DMABUF);
-    }
-
-    [Fact]
     public void TestV4L2Constants_IoctlMagic()
     {
         // Test that V4L2 ioctl magic number is correct
@@ -178,7 +168,7 @@ public class UtilityMethodsTests
             }
         }
     }
-    
+
     [Fact]
     public void TestV4L2Constants_OtherConstants()
     {

@@ -9,6 +9,9 @@ namespace SharpVideo.V4L2;
 public class V4L2Device : IDisposable
 {
     private readonly int _deviceFd;
+
+    private readonly Dictionary<(V4L2BufferType Type, V4L2Memory Memory), V4L2RequestedBuffers> _bufferInfos = new();
+
     private bool _disposed = false;
 
     internal V4L2Device(int deviceFd, List<V4L2DeviceControl> controls, List<V4L2DeviceExtendedControl> extendedControls)
@@ -21,6 +24,8 @@ public class V4L2Device : IDisposable
     public IReadOnlyCollection<V4L2DeviceControl> Controls { get; }
 
     public IReadOnlyCollection<V4L2DeviceExtendedControl> ExtendedControls { get; }
+
+    public IReadOnlyCollection<V4L2RequestedBuffers> RequestedBufferInfos => _bufferInfos.Values;
 
     public void SetFormat(ref V4L2Format format)
     {
@@ -144,6 +149,26 @@ public class V4L2Device : IDisposable
         }
     }
 
+    public V4L2RequestedBuffers RequestBuffers(uint count, V4L2BufferType type, V4L2Memory memory)
+    {
+        var reqBufs = new V4L2RequestBuffers
+        {
+            Count = count,
+            Type = type,
+            Memory = memory
+        };
+
+        var result = LibV4L2.RequestBuffers(_deviceFd, ref reqBufs);
+        if (!result.Success)
+        {
+            throw new Exception($"Failed to request {count} buffers with {type} and {memory}. {result.ErrorCode}: {result.ErrorMessage}");
+        }
+
+        var info = new V4L2RequestedBuffers(reqBufs.Type, reqBufs.Memory, reqBufs.Count);
+        _bufferInfos[(info.Type, info.Memory)] = info;
+        return info;
+    }
+
     private static uint GetControlClass(uint controlId)
     {
         // Mirror V4L2_CTRL_ID2CLASS behaviour while masking out NEXT_CTRL flag.
@@ -162,7 +187,7 @@ public class V4L2Device : IDisposable
         {
             Index = bufferIndex,
             Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-            Memory = V4L2Constants.V4L2_MEMORY_MMAP,
+            Memory = V4L2Memory.MMAP,
             Length = (uint)planes.Length,
             Field = (uint)V4L2Field.NONE,
             Flags = (uint)V4L2BufferFlags.REQUEST_FD,
