@@ -149,4 +149,76 @@ public static partial class Libc
         EntryPoint = "mprotect",
         SetLastError = true)]
     public static unsafe partial int mprotect(void* addr, nuint length, ProtFlags prot);
+
+    /// <summary>
+    /// Wait for some event on a file descriptor.
+    /// </summary>
+    /// <param name="fds">Array of pollfd structures.</param>
+    /// <param name="nfds">Number of file descriptors.</param>
+    /// <param name="timeout">Timeout in milliseconds (-1 for infinite).</param>
+    /// <returns>Number of file descriptors with events, 0 on timeout, -1 on error.</returns>
+    [LibraryImport(
+        LibraryName,
+        EntryPoint = "poll",
+        SetLastError = true)]
+    public static unsafe partial int poll(PollFd* fds, nuint nfds, int timeout);
+}
+
+/// <summary>
+/// Structure for poll() system call.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct PollFd
+{
+    /// <summary>
+    /// File descriptor to poll.
+    /// </summary>
+    public int fd;
+
+    /// <summary>
+    /// Events to poll for (input).
+    /// </summary>
+    public short events;
+
+    /// <summary>
+    /// Events that occurred (output).
+    /// </summary>
+    public short revents;
+}
+
+/// <summary>
+/// Poll event flags.
+/// </summary>
+[Flags]
+public enum PollEvents : short
+{
+    /// <summary>
+    /// There is data to read.
+    /// </summary>
+    POLLIN = 0x0001,
+
+    /// <summary>
+    /// There is urgent data to read.
+    /// </summary>
+    POLLPRI = 0x0002,
+
+    /// <summary>
+    /// Writing is now possible.
+    /// </summary>
+    POLLOUT = 0x0004,
+
+    /// <summary>
+    /// Error condition.
+    /// </summary>
+    POLLERR = 0x0008,
+
+    /// <summary>
+    /// Hang up.
+    /// </summary>
+    POLLHUP = 0x0010,
+
+    /// <summary>
+    /// Invalid request.
+    /// </summary>
+    POLLNVAL = 0x0020
 }

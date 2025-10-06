@@ -39,6 +39,10 @@ public class H264V4L2StatelessDecoder
 
     private int _consecutiveFailures = 0;
 
+    // Thread for processing capture buffers
+    private Thread? _captureThread;
+    private CancellationTokenSource? _captureThreadCts;
+
     // DPB (Decoded Picture Buffer) tracking
     private readonly List<DpbEntry> _dpb = new();
     private uint _maxFrameNum = 256;
@@ -95,7 +99,6 @@ public class H264V4L2StatelessDecoder
         int lastFrameCount = _framesDecoded;
         while (drainAttempts < 200) // Up to 2 seconds of draining (fast hardware)
         {
-            ProcessCaptureBuffers();
             ReclaimOutputBuffers();
 
             // Check if we have frames in the pipeline
@@ -121,9 +124,7 @@ public class H264V4L2StatelessDecoder
 
             Thread.Sleep(10); // Wait 10ms between drain attempts (fast for high-performance hardware)
             drainAttempts++;
-        } // Final drain
-
-        ProcessCaptureBuffers();
+        }
 
         _decodingStopwatch.Stop();
         var elapsedSeconds = _decodingStopwatch.Elapsed.TotalSeconds;
@@ -251,17 +252,13 @@ public class H264V4L2StatelessDecoder
 
         var isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 
-        // Aggressively drain capture buffers first to free up output buffers
+        // Reclaim output buffers that have been processed
         for (int i = 0; i < 3; i++)
         {
-            ProcessCaptureBuffers();
             ReclaimOutputBuffers();
         }
 
         SubmitFrameToDevice(nalu.Data, header, isKeyFrame, streamState);
-
-        // Drain CAPTURE buffers that are ready after queuing this frame
-        ProcessCaptureBuffers();
     }
 
     private void SubmitFrameToDevice(
@@ -490,95 +487,136 @@ public class H264V4L2StatelessDecoder
         return flags;
     }
 
-    private void ProcessCaptureBuffers()
+    /// <summary>
+    /// Thread procedure for processing capture buffers using poll.
+    /// </summary>
+    private void ProcessCaptureBuffersThreadProc()
     {
+        var cancellationToken = _captureThreadCts!.Token;
+        _logger.LogInformation("Capture buffer processing thread started");
+
         if (_captureBuffers.Count == 0)
+        {
+            _logger.LogWarning("No capture buffers available in thread");
             return;
+        }
 
         var planeCount = _captureBuffers[0].Planes.Length;
-        int processed = 0;
 
         unsafe
         {
+            var pollFd = new PollFd
+            {
+                fd = _device.fd,
+                events = (short)PollEvents.POLLIN
+            };
+
             var planeStorage = stackalloc V4L2Plane[planeCount];
 
-            // Process all available capture buffers without blocking
-            while (processed < 32) // Limit to prevent infinite loops
+            while (!cancellationToken.IsCancellationRequested)
             {
-                var buffer = new V4L2Buffer
+                // Wait for capture buffers to be ready (1 second timeout)
+                int pollResult = Libc.poll(&pollFd, 1, 1000);
+
+                if (pollResult < 0)
                 {
-                    Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                    Memory =V4L2Memory.MMAP,
-                    Length = (uint)planeCount,
-                    Field = (uint)V4L2Field.NONE,
-                    Planes = planeStorage
-                };
-
-                var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
-                if (!result.Success)
-                {
-                    if (result.ErrorCode == 11)
+                    var errno = Marshal.GetLastPInvokeError();
+                    if (errno == 4) // EINTR - interrupted by signal
                     {
-                        break;
+                        continue;
                     }
-
-                    if (processed > 0)
-                    {
-                        _logger.LogTrace("Processed {Count} capture buffers this cycle", processed);
-                    }
-
+                    _logger.LogError("Poll failed with errno {Errno}", errno);
                     break;
                 }
 
-                processed++;
-
-                uint bytesUsed = 0;
-                foreach (var plane in buffer.PlaneSpan)
+                if (pollResult == 0)
                 {
-                    bytesUsed += plane.BytesUsed;
+                    // Timeout - check cancellation and continue
+                    continue;
                 }
 
-                _framesDecoded++;
-                FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
+                // Check if there's data ready
+                if ((pollFd.revents & (short)PollEvents.POLLIN) == 0)
                 {
-                    FrameNumber = _framesDecoded,
-                    BytesUsed = bytesUsed,
-                    Timestamp = DateTime.UtcNow
-                });
-
-                var mappedBuffer = _captureBuffers[(int)buffer.Index];
-                var requeueBuffer = new V4L2Buffer
-                {
-                    Index = buffer.Index,
-                    Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                    Memory = V4L2Memory.MMAP,
-                    Length = (uint)mappedBuffer.Planes.Length,
-                    Field = (uint)V4L2Field.NONE,
-                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-                    Sequence = 0
-                };
-
-                for (int p = 0; p < mappedBuffer.Planes.Length; p++)
-                {
-                    mappedBuffer.Planes[p].BytesUsed = 0;
-                    mappedBuffer.Planes[p].Length = mappedBuffer.Planes[p].Length;
+                    continue;
                 }
 
-                fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+                // Process all available capture buffers
+                while (!cancellationToken.IsCancellationRequested)
                 {
-                    requeueBuffer.Planes = planePtr;
-
-                    var queueResult = LibV4L2.QueueBuffer(_device.fd, ref requeueBuffer);
-                    if (!queueResult.Success)
+                    var buffer = new V4L2Buffer
                     {
-                        _logger.LogWarning(
-                            "Failed to requeue capture buffer {Index}: {Error}",
-                            buffer.Index,
-                            queueResult.ErrorMessage ?? $"errno {queueResult.ErrorCode}");
+                        Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
+                        Memory = V4L2Memory.MMAP,
+                        Length = (uint)planeCount,
+                        Field = (uint)V4L2Field.NONE,
+                        Planes = planeStorage
+                    };
+
+                    var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
+                    if (!result.Success)
+                    {
+                        if (result.ErrorCode == 11) // EAGAIN - no more buffers
+                        {
+                            break;
+                        }
+
+                        _logger.LogDebug(
+                            "Failed to dequeue capture buffer: {Error}",
+                            result.ErrorMessage ?? $"errno {result.ErrorCode}");
+                        break;
+                    }
+
+                    uint bytesUsed = 0;
+                    foreach (var plane in buffer.PlaneSpan)
+                    {
+                        bytesUsed += plane.BytesUsed;
+                    }
+
+                    _framesDecoded++;
+                    FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
+                    {
+                        FrameNumber = _framesDecoded,
+                        BytesUsed = bytesUsed,
+                        Timestamp = DateTime.UtcNow
+                    });
+
+                    var mappedBuffer = _captureBuffers[(int)buffer.Index];
+                    var requeueBuffer = new V4L2Buffer
+                    {
+                        Index = buffer.Index,
+                        Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
+                        Memory = V4L2Memory.MMAP,
+                        Length = (uint)mappedBuffer.Planes.Length,
+                        Field = (uint)V4L2Field.NONE,
+                        Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                        Sequence = 0
+                    };
+
+                    for (int p = 0; p < mappedBuffer.Planes.Length; p++)
+                    {
+                        mappedBuffer.Planes[p].BytesUsed = 0;
+                        mappedBuffer.Planes[p].Length = mappedBuffer.Planes[p].Length;
+                    }
+
+                    fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+                    {
+                        requeueBuffer.Planes = planePtr;
+
+                        var queueResult = LibV4L2.QueueBuffer(_device.fd, ref requeueBuffer);
+                        if (!queueResult.Success)
+                        {
+                            _logger.LogWarning(
+                                "Failed to requeue capture buffer {Index}: {Error}",
+                                buffer.Index,
+                                queueResult.ErrorMessage ?? $"errno {queueResult.ErrorCode}");
+                        }
                     }
                 }
             }
         }
+
+        _logger.LogInformation("Capture buffer processing thread stopped");
     }
 
     private void ReclaimOutputBuffers()
@@ -900,6 +938,16 @@ public class H264V4L2StatelessDecoder
             _logger.LogTrace("Started CAPTURE streaming");
 
             _logger.LogInformation("V4L2 streaming started successfully");
+
+            // Start capture buffer processing thread
+            _captureThreadCts = new CancellationTokenSource();
+            _captureThread = new Thread(ProcessCaptureBuffersThreadProc)
+            {
+                Name = "CaptureBufferProcessor",
+                IsBackground = true
+            };
+            _captureThread.Start();
+            _logger.LogInformation("Started capture buffer processing thread");
         }
         catch (Exception ex)
         {
@@ -925,6 +973,23 @@ public class H264V4L2StatelessDecoder
 
         try
         {
+            // Stop capture buffer processing thread
+            if (_captureThreadCts != null)
+            {
+                _captureThreadCts.Cancel();
+                if (_captureThread != null && _captureThread.IsAlive)
+                {
+                    if (!_captureThread.Join(TimeSpan.FromSeconds(2)))
+                    {
+                        _logger.LogWarning("Capture thread did not stop gracefully");
+                    }
+                }
+                _captureThreadCts.Dispose();
+                _captureThreadCts = null;
+                _captureThread = null;
+                _logger.LogInformation("Stopped capture buffer processing thread");
+            }
+
             // Stop streaming
             if (_device?.fd > 0)
             {
