@@ -505,18 +505,12 @@ public class H264V4L2StatelessDecoder
 
         unsafe
         {
-            var pollFd = new PollFd
-            {
-                fd = _device.fd,
-                events = (short)PollEvents.POLLIN
-            };
-
             var planeStorage = stackalloc V4L2Plane[planeCount];
 
             while (!cancellationToken.IsCancellationRequested)
             {
                 // Wait for capture buffers to be ready (1 second timeout)
-                int pollResult = Libc.poll(&pollFd, 1, 1000);
+                var (pollResult, revents) = _device.Poll(PollEvents.POLLIN, 1000);
 
                 if (pollResult < 0)
                 {
@@ -536,7 +530,7 @@ public class H264V4L2StatelessDecoder
                 }
 
                 // Check if there's data ready
-                if ((pollFd.revents & (short)PollEvents.POLLIN) == 0)
+                if (revents.HasFlag(PollEvents.POLLIN))
                 {
                     continue;
                 }

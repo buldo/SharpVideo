@@ -58,4 +58,16 @@ public static class V4L2DeviceExtensions
 
         return format.Pix_mp;
     }
+
+    public static (int Result, PollEvents REvents) Poll(this V4L2Device device, PollEvents events, int timeout)
+    {
+        var pollFd = new PollFd
+        {
+            fd = device.fd,
+            events = PollEvents.POLLIN
+        };
+        int pollResult = Libc.poll(ref pollFd, 1, timeout);
+
+        return (pollResult, pollFd.revents);
+    }
 }
