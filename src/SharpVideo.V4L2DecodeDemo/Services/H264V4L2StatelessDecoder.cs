@@ -15,6 +15,8 @@ namespace SharpVideo.V4L2DecodeDemo.Services;
 public class H264V4L2StatelessDecoder
 {
     private readonly V4L2Device _device;
+    private readonly V4L2DeviceQueue _deviceCaptureQueue;
+    private readonly V4L2DeviceQueue _deviceOutputQueue;
     private readonly MediaDevice? _mediaDevice;
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
 
@@ -64,6 +66,8 @@ public class H264V4L2StatelessDecoder
         DecoderConfiguration? configuration = null)
     {
         _device = device ?? throw new ArgumentNullException(nameof(device));
+        _deviceCaptureQueue = device.GetQueue(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
+        _deviceOutputQueue = device.GetQueue(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
         _mediaDevice = mediaDevice;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? new DecoderConfiguration();
@@ -282,8 +286,7 @@ public class H264V4L2StatelessDecoder
             request = AcquireMediaRequest();
             SubmitFrameControls(header, isKeyFrame, request, streamState);
         }
-
-        _device.QueueOutputBuffer(bufferIndex, mappedBuffer, request);
+        _deviceOutputQueue.Enqueue(mappedBuffer, request);
 
         if (request != null)
         {

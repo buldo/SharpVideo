@@ -24,6 +24,8 @@ public class V4L2MMapMPlaneBuffer
 
     public uint Index => _buffer.Index;
 
+    public V4L2Memory Memory => V4L2Memory.MMAP;
+
     public void CopyDataToPlane(ReadOnlySpan<byte> frameData, int planeNum)
     {
         frameData.CopyTo(_mappedPlanes[planeNum].AsSpan());

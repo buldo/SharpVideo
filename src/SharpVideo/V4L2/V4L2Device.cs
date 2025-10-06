@@ -1,5 +1,4 @@
-﻿using System;
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
@@ -11,6 +10,7 @@ public class V4L2Device : IDisposable
 {
     private readonly int _deviceFd;
 
+    private readonly Dictionary<V4L2BufferType, V4L2DeviceQueue> _queues = new();
     private readonly Dictionary<(V4L2BufferType Type, V4L2Memory Memory), V4L2RequestedBuffers> _bufferInfos = new();
 
     private bool _disposed = false;
@@ -27,6 +27,17 @@ public class V4L2Device : IDisposable
     public IReadOnlyCollection<V4L2DeviceExtendedControl> ExtendedControls { get; }
 
     public IReadOnlyCollection<V4L2RequestedBuffers> RequestedBufferInfos => _bufferInfos.Values;
+
+    public V4L2DeviceQueue GetQueue(V4L2BufferType queue)
+    {
+        if (!_queues.TryGetValue(queue, out var value))
+        {
+            value = new V4L2DeviceQueue(_deviceFd, queue);
+            _queues.Add(queue, value);
+        }
+
+        return value;
+    }
 
     public void SetFormat(ref V4L2Format format)
     {
@@ -251,38 +262,6 @@ public class V4L2Device : IDisposable
         return controlClass != 0 ? controlClass : V4l2ControlsConstants.V4L2_CTRL_CLASS_USER;
     }
 
-    public void QueueOutputBuffer(uint bufferIndex, V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null)
-    {
-        var buffer = new V4L2Buffer
-        {
-            Index = bufferIndex,
-            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-            Memory = V4L2Memory.MMAP,
-            Length = (uint)mappedBuffer.MappedPlanes.Count,
-            Field = (uint)V4L2Field.NONE,
-            Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
-            BytesUsed = 0,
-            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-            Sequence = 0,
-            RequestFd = request?.Fd ?? 0
-        };
-
-        unsafe
-        {
-            fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
-            {
-                buffer.Planes = planePtr;
-
-                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
-                if (!result.Success)
-                {
-                    throw new Exception($"Failed to queue output buffer");
-                }
-            }
-        }
-    }
-
-
     // TODO: Remove
     public int fd
     {
@@ -356,5 +335,65 @@ public class V4L2Device : IDisposable
         {
             throw new ObjectDisposedException(nameof(V4L2Device));
         }
+    }
+}
+
+[SupportedOSPlatform("linux")]
+public class V4L2DeviceQueue
+{
+    private readonly int _deviceFd;
+    private readonly V4L2BufferType _type;
+
+    internal V4L2DeviceQueue(int deviceFd, V4L2BufferType type)
+    {
+        _deviceFd = deviceFd;
+        _type = type;
+    }
+
+    public void Enqueue(V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null)
+    {
+        // To enqueue a buffer applications set the type field of a struct v4l2_buffer to the same buffer type as was previously used with struct v4l2_format type and struct v4l2_requestbuffers type.
+        // Applications must also set the index field.
+        // Valid index numbers range from zero to the number of buffers allocated with ioctl VIDIOC_REQBUFS (struct v4l2_requestbuffers count) minus one.
+        // The contents of the struct v4l2_buffer returned by a ioctl VIDIOC_QUERYBUF ioctl will do as well.
+        // When the buffer is intended for output (type is V4L2_BUF_TYPE_VIDEO_OUTPUT, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE, or V4L2_BUF_TYPE_VBI_OUTPUT) applications must also initialize the bytesused, field and timestamp fields, see Buffers for details.
+        // Applications must also set flags to 0.
+        // The reserved2 and reserved fields must be set to 0.
+        // When using the multi-planar API, the m.planes field must contain a userspace pointer to a filled-in array of struct v4l2_plane and the length field must be set to the number of elements in that array.
+
+        // To enqueue a memory mapped buffer applications set the memory field to V4L2_MEMORY_MMAP.
+        // When VIDIOC_QBUF is called with a pointer to this structure the driver sets the V4L2_BUF_FLAG_MAPPED and V4L2_BUF_FLAG_QUEUED flags and clears the V4L2_BUF_FLAG_DONE flag in the flags field, or it returns an EINVAL error code.
+        var buffer = new V4L2Buffer
+        {
+            Index = mappedBuffer.Index,
+            Type = _type,
+            Memory = mappedBuffer.Memory,
+            Length = (uint)mappedBuffer.MappedPlanes.Count,
+            Field = (uint)V4L2Field.NONE,
+            Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
+            BytesUsed = 0,
+            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+            Sequence = 0,
+            RequestFd = request?.Fd ?? 0
+        };
+
+        unsafe
+        {
+            fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+            {
+                buffer.Planes = planePtr;
+
+                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+                if (!result.Success)
+                {
+                    throw new Exception($"Failed to queue output buffer");
+                }
+            }
+        }
+    }
+
+    public V4L2MMapMPlaneBuffer? Dequeue()
+    {
+        return null;
     }
 }
