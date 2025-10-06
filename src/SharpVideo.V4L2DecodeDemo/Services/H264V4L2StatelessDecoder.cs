@@ -20,8 +20,8 @@ public class H264V4L2StatelessDecoder
 
     private readonly DecoderConfiguration _configuration;
 
-    private readonly List<MappedBuffer> _outputBuffers = new();
-    private readonly List<MappedBuffer> _captureBuffers = new();
+    private readonly List<V4L2MMapMPlaneBuffer> _outputBuffers = new();
+    private readonly List<V4L2MMapMPlaneBuffer> _captureBuffers = new();
     private readonly Queue<uint> _availableOutputBuffers = new();
     private readonly Queue<uint> _availableCaptureBuffers = new();
     private readonly Queue<MediaRequest> _availableRequests = new();
@@ -272,16 +272,12 @@ public class H264V4L2StatelessDecoder
     {
         var (bufferIndex, mappedBuffer) = AcquireOutputBuffer();
 
-        if (frameData.Length > mappedBuffer.Size)
+        if (frameData.Length > mappedBuffer.MappedPlanes[0].Length)
         {
             throw new Exception("Output buffer too small");
         }
 
-        frameData.CopyTo(mappedBuffer.AsSpan());
-
-        mappedBuffer.Planes[0].BytesUsed = (uint)frameData.Length;
-        mappedBuffer.Planes[0].Length = mappedBuffer.PlaneSizes[0];
-        mappedBuffer.Planes[0].DataOffset = 0;
+        mappedBuffer.CopyDataToPlane(frameData, 0);
 
         MediaRequest? request = null;
         if (_mediaDevice != null)
@@ -290,7 +286,7 @@ public class H264V4L2StatelessDecoder
             SubmitFrameControls(header, isKeyFrame, request, streamState);
         }
 
-        _device.QueueOutputBuffer(bufferIndex, mappedBuffer.Planes, request);
+        _device.QueueOutputBuffer(bufferIndex, mappedBuffer, request);
 
         if (request != null)
         {
@@ -565,7 +561,7 @@ public class H264V4L2StatelessDecoder
                 for (int p = 0; p < mappedBuffer.Planes.Length; p++)
                 {
                     mappedBuffer.Planes[p].BytesUsed = 0;
-                    mappedBuffer.Planes[p].Length = mappedBuffer.PlaneSizes[p];
+                    mappedBuffer.Planes[p].Length = mappedBuffer.Planes[p].Length;
                 }
 
                 fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
@@ -642,7 +638,7 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private (uint bufferIndex, MappedBuffer mappedBuffer) AcquireOutputBuffer()
+    private (uint bufferIndex, V4L2MMapMPlaneBuffer mappedBuffer) AcquireOutputBuffer()
     {
         // First try to reclaim any processed buffers
         ReclaimOutputBuffers();
@@ -833,101 +829,20 @@ public class H264V4L2StatelessDecoder
     private void SetupBufferQueue(
         V4L2BufferType bufferType,
         uint bufferCount,
-        List<MappedBuffer> bufferList,
+        List<V4L2MMapMPlaneBuffer> bufferList,
         Queue<uint> availableQueue)
     {
         var requested = _device.RequestBuffers(bufferCount, bufferType, V4L2Memory.MMAP);
         _logger.LogDebug("Requested {RequestedCount} {BufferType} buffers, got {ActualCount}",
             bufferCount, bufferType, requested.Count);
 
-        // Map each buffer using VIDIOC_QUERYBUF + mmap
-        for (uint i = 0; i < requested.Count; i++)
+        var mappedBuffers = _device.RequestedBufferInfos
+            .Single(b => b.Memory == V4L2Memory.MMAP && b.Type == bufferType);
+
+        for (int i = 0; i < mappedBuffers.V4L2MMapMPlaneBuffers!.Count; i++)
         {
-            var configuredPlaneCount = bufferType == V4L2BufferType.VIDEO_OUTPUT_MPLANE
-                ? _outputPlaneCount
-                : _capturePlaneCount;
-
-            var planeCount = System.Math.Clamp(configuredPlaneCount, 1, (int)V4L2Constants.VIDEO_MAX_PLANES);
-            var planes = new V4L2Plane[planeCount];
-            var planePointers = new IntPtr[planeCount];
-            var planeSizes = new uint[planeCount];
-
-            unsafe
-            {
-                var planeStorage = stackalloc V4L2Plane[planeCount];
-                for (int p = 0; p < planeCount; p++)
-                {
-                    planeStorage[p] = new V4L2Plane();
-                }
-
-                var buffer = new V4L2Buffer
-                {
-                    Index = i,
-                    Type = bufferType,
-                    Memory = V4L2Memory.MMAP,
-                    Length = (uint)planeCount,
-                    Field = (uint)V4L2Field.NONE,
-                    Planes = planeStorage
-                };
-
-                var queryResult = LibV4L2.QueryBuffer(_device.fd, ref buffer);
-                if (!queryResult.Success)
-                {
-                    throw new InvalidOperationException(
-                        $"Failed to query buffer {i} for {bufferType}: {queryResult.ErrorMessage}");
-                }
-
-                for (int p = 0; p < planeCount; p++)
-                {
-                    planes[p] = planeStorage[p];
-                    planeSizes[p] = planeStorage[p].Length;
-
-                    if (planeSizes[p] == 0)
-                    {
-                        throw new InvalidOperationException($"Queried plane {p} for buffer {i} has zero length");
-                    }
-
-                    var offset = planeStorage[p].Memory.MemOffset;
-                    var mapped = Libc.mmap(IntPtr.Zero, (nuint)planeSizes[p],
-                        ProtFlags.PROT_READ | ProtFlags.PROT_WRITE, MapFlags.MAP_SHARED, _device.fd, (nint)offset);
-                    if (mapped == Libc.MAP_FAILED)
-                    {
-                        var errno = Marshal.GetLastPInvokeError();
-                        for (int rollback = 0; rollback < p; rollback++)
-                        {
-                            if (planePointers[rollback] == IntPtr.Zero)
-                                continue;
-
-                            unsafe
-                            {
-                                Libc.munmap((void*)planePointers[rollback], planeSizes[rollback]);
-                            }
-
-                            planePointers[rollback] = IntPtr.Zero;
-                        }
-
-                        throw new InvalidOperationException($"mmap failed for buffer {i} plane {p}: errno {errno}");
-                    }
-
-                    planePointers[p] = mapped;
-                    planes[p].BytesUsed = 0;
-                    planes[p].DataOffset = 0;
-                }
-            }
-
-            var mappedBuffer = new MappedBuffer
-            {
-                Index = i,
-                PlanePointers = planePointers,
-                PlaneSizes = planeSizes,
-                Planes = planes
-            };
-
-            bufferList.Add(mappedBuffer);
-            availableQueue.Enqueue(i);
-
-            _logger.LogTrace("Mapped buffer {Index} for {BufferType}: planes={PlaneCount}",
-                i, bufferType, planeCount);
+            bufferList.Add(mappedBuffers.V4L2MMapMPlaneBuffers[i]);
+            availableQueue.Enqueue((uint)i);
         }
     }
 
@@ -1036,13 +951,13 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private void UnmapBuffers(List<MappedBuffer> buffers)
+    private void UnmapBuffers(List<V4L2MMapMPlaneBuffer> buffers)
     {
         foreach (var buffer in buffers)
         {
-            for (int p = 0; p < buffer.PlanePointers.Length; p++)
+            for (int p = 0; p < buffer.MappedPlanes.Count; p++)
             {
-                var planePtr = buffer.PlanePointers[p];
+                var planePtr = buffer.MappedPlanes[p].Pointer;
                 if (planePtr == IntPtr.Zero)
                     continue;
 
@@ -1050,7 +965,7 @@ public class H264V4L2StatelessDecoder
                 {
                     unsafe
                     {
-                        var result = Libc.munmap((void*)planePtr, buffer.PlaneSizes[p]);
+                        var result = Libc.munmap((void*)planePtr, buffer.MappedPlanes[p].Length);
                         if (result != 0)
                         {
                             var errno = Marshal.GetLastPInvokeError();

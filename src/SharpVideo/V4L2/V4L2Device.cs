@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
@@ -164,7 +165,76 @@ public class V4L2Device : IDisposable
             throw new Exception($"Failed to request {count} buffers with {type} and {memory}. {result.ErrorCode}: {result.ErrorMessage}");
         }
 
-        var info = new V4L2RequestedBuffers(reqBufs.Type, reqBufs.Memory, reqBufs.Count);
+        var format = new V4L2Format
+        {
+            Type = type
+        };
+
+        GetFormat(ref format);
+
+        V4L2MMapMPlaneBuffer[]? mmapMplanesArray = null;
+        if ((type == V4L2BufferType.VIDEO_CAPTURE_MPLANE || type == V4L2BufferType.VIDEO_OUTPUT_MPLANE) &&
+            memory == V4L2Memory.MMAP)
+        {
+            mmapMplanesArray = new V4L2MMapMPlaneBuffer[reqBufs.Count];
+        }
+
+        unsafe
+        {
+            // 1. For each requested buffer
+            for (uint i = 0; i < reqBufs.Count; i++)
+            {
+                var planes = new V4L2Plane[format.Pix_mp.NumPlanes];
+                var buffer = new V4L2Buffer
+                {
+                    Index = i,
+                    Type = type,
+                    Memory = memory,
+                    Length = format.Pix_mp.NumPlanes,
+                    Field = (uint)V4L2Field.NONE,
+                };
+
+                fixed (V4L2Plane* planesPtr = planes)
+                {
+                    buffer.Planes = planesPtr;
+
+                    // 2. We request buffer information
+                    var queryResult = LibV4L2.QueryBuffer(_deviceFd, ref buffer);
+                    if (!queryResult.Success)
+                    {
+                        throw new Exception($"Failed to query buffer {i} for {type} and {memory}: {queryResult.ErrorMessage}");
+                    }
+                }
+
+                // 3. And if buffer MPlane and mmap
+                if ((type == V4L2BufferType.VIDEO_CAPTURE_MPLANE || type == V4L2BufferType.VIDEO_OUTPUT_MPLANE) &&
+                    memory == V4L2Memory.MMAP)
+                {
+                    var mappedPlanes = new List<V4L2MappedPlane>();
+                    // 3.1 We are mapping each plane
+                    foreach (var plane in planes)
+                    {
+                        var mapped = Libc.mmap(
+                            IntPtr.Zero,
+                            plane.Length,
+                            ProtFlags.PROT_READ | ProtFlags.PROT_WRITE,
+                            MapFlags.MAP_SHARED, _deviceFd, (nint)plane.Memory.MemOffset);
+                        if (mapped == Libc.MAP_FAILED)
+                        {
+                            throw new Exception("Failed to map buffer plane");
+                        }
+                        mappedPlanes.Add(new V4L2MappedPlane(mapped, plane.Length));
+                    }
+
+                    var bufferInfo = new V4L2MMapMPlaneBuffer(buffer, planes, mappedPlanes);
+
+                    mmapMplanesArray![i] = bufferInfo;
+                }
+            }
+        }
+
+        // Here if buffer (MPlane && mmap), mmapMplanesArray contains buffer info with mapped planes
+        var info = new V4L2RequestedBuffers(reqBufs.Type, reqBufs.Memory, reqBufs.Count, mmapMplanesArray);
         _bufferInfos[(info.Type, info.Memory)] = info;
         return info;
     }
@@ -181,16 +251,16 @@ public class V4L2Device : IDisposable
         return controlClass != 0 ? controlClass : V4l2ControlsConstants.V4L2_CTRL_CLASS_USER;
     }
 
-    public void QueueOutputBuffer(uint bufferIndex, Linux.Native.V4L2Plane[] planes, MediaRequest? request = null)
+    public void QueueOutputBuffer(uint bufferIndex, V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null)
     {
         var buffer = new V4L2Buffer
         {
             Index = bufferIndex,
             Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
             Memory = V4L2Memory.MMAP,
-            Length = (uint)planes.Length,
+            Length = (uint)mappedBuffer.MappedPlanes.Count,
             Field = (uint)V4L2Field.NONE,
-            Flags = (uint)V4L2BufferFlags.REQUEST_FD,
+            Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
             BytesUsed = 0,
             Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
             Sequence = 0,
@@ -199,7 +269,7 @@ public class V4L2Device : IDisposable
 
         unsafe
         {
-            fixed (V4L2Plane* planePtr = planes)
+            fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
             {
                 buffer.Planes = planePtr;
 
