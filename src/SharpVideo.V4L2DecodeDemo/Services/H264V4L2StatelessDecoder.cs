@@ -532,8 +532,8 @@ public class H264V4L2StatelessDecoder
                     continue;
                 }
 
-                // Check if there's data ready
-                if (revents.HasFlag(PollEvents.POLLIN))
+                // Check if there's data ready - if not, skip processing
+                if (!revents.HasFlag(PollEvents.POLLIN))
                 {
                     continue;
                 }
@@ -616,10 +616,21 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Capture buffer processing thread stopped");
     }
 
-    private void ReclaimOutputBuffers()
+    private void ReclaimOutputBuffers(int timeoutMs = 0)
     {
         if (_outputBuffers.Count == 0)
             return;
+
+        // If timeout is requested, poll first to wait for buffers
+        if (timeoutMs > 0)
+        {
+            var (pollResult, revents) = _device.Poll(PollEvents.POLLOUT, timeoutMs);
+            if (pollResult <= 0)
+            {
+                // Timeout or error - no buffers available yet
+                return;
+            }
+        }
 
         unsafe
         {
@@ -675,19 +686,56 @@ public class H264V4L2StatelessDecoder
 
     private (uint bufferIndex, V4L2MMapMPlaneBuffer mappedBuffer) AcquireOutputBuffer()
     {
-        // First try to reclaim any processed buffers
-        ReclaimOutputBuffers();
+        const int maxRetries = 10;
+        const int pollTimeoutMs = 500; // 500ms timeout for each poll attempt
 
-        lock (_bufferLock)
+        for (int attempt = 0; attempt < maxRetries; attempt++)
         {
-            if (_availableOutputBuffers.Count > 0)
+            // First try to reclaim any processed buffers without blocking
+            ReclaimOutputBuffers(timeoutMs: 0);
+
+            lock (_bufferLock)
             {
-                var bufferIndex = _availableOutputBuffers.Dequeue();
-                return (bufferIndex, _outputBuffers[(int)bufferIndex]);
+                if (_availableOutputBuffers.Count > 0)
+                {
+                    var bufferIndex = _availableOutputBuffers.Dequeue();
+                    if (attempt > 0)
+                    {
+                        _logger.LogDebug("Acquired output buffer after {Attempts} attempts", attempt + 1);
+                    }
+                    return (bufferIndex, _outputBuffers[(int)bufferIndex]);
+                }
             }
+
+            // If no buffers available, log and wait for buffers to be returned by hardware
+            if (attempt == 0)
+            {
+                int buffersInUse;
+                lock (_bufferLock)
+                {
+                    buffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
+                }
+                _logger.LogDebug(
+                    "No output buffers immediately available ({InUse}/{Total} in use), polling for available buffers...",
+                    buffersInUse,
+                    _outputBuffers.Count);
+            }
+
+            // Poll with timeout to wait for output buffers to become available
+            ReclaimOutputBuffers(timeoutMs: pollTimeoutMs);
         }
 
-        throw new Exception("No available output buffers");
+        // All retries exhausted
+        int finalBuffersInUse;
+        lock (_bufferLock)
+        {
+            finalBuffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
+        }
+
+        throw new Exception(
+            $"No available output buffers after {maxRetries} attempts (timeout: {maxRetries * pollTimeoutMs}ms). " +
+            $"Buffers in use: {finalBuffersInUse}/{_outputBuffers.Count}. " +
+            $"Hardware may be stalled or not processing buffers.");
     }
 
     private void ReturnOutputBuffer(uint index)
