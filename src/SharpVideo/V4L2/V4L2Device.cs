@@ -448,8 +448,19 @@ public class V4L2DeviceQueue
     /// <param name="events">Events to poll for (POLLIN for capture, POLLOUT for output)</param>
     /// <param name="timeoutMs">Timeout in milliseconds</param>
     /// <returns>Poll result (>0 if events occurred, 0 if timeout, <0 if error) and returned events</returns>
-    public (int result, PollEvents revents) Poll(PollEvents events, int timeoutMs)
+    public (int result, PollEvents revents) Poll(int timeoutMs)
     {
+        var events = _type switch
+        {
+            V4L2BufferType.VIDEO_CAPTURE => PollEvents.POLLIN,
+            V4L2BufferType.VIDEO_CAPTURE_MPLANE => PollEvents.POLLIN,
+
+            V4L2BufferType.VIDEO_OUTPUT => PollEvents.POLLOUT,
+            V4L2BufferType.VIDEO_OUTPUT_OVERLAY => PollEvents.POLLOUT,
+
+            _ => throw new Exception($"Type {_type} not supported")
+        };
+
         var pollFd = new PollFd
         {
             fd = _deviceFd,
@@ -457,11 +468,8 @@ public class V4L2DeviceQueue
             revents = 0
         };
 
-        unsafe
-        {
-            var result = Libc.poll(ref pollFd, 1, timeoutMs);
-            return (result, pollFd.revents);
-        }
+        var result = Libc.poll(ref pollFd, 1, timeoutMs);
+        return (result, pollFd.revents);
     }
 }
 

@@ -509,7 +509,7 @@ public class H264V4L2StatelessDecoder
         while (!cancellationToken.IsCancellationRequested)
         {
             // Wait for capture buffers to be ready (1 second timeout)
-            var (pollResult, revents) = _deviceCaptureQueue.Poll(PollEvents.POLLIN, 1000);
+            var (pollResult, revents) = _deviceCaptureQueue.Poll(1000);
 
                 if (pollResult < 0)
                 {
@@ -578,17 +578,6 @@ public class H264V4L2StatelessDecoder
     {
         if (_outputBuffers.Count == 0)
             return;
-
-        // If timeout is requested, poll first to wait for buffers
-        if (timeoutMs > 0)
-        {
-            var (pollResult, revents) = _deviceOutputQueue.Poll(PollEvents.POLLOUT, timeoutMs);
-            if (pollResult <= 0)
-            {
-                // Timeout or error - no buffers available yet
-                return;
-            }
-        }
 
         while (true)
         {
