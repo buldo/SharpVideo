@@ -22,16 +22,10 @@ public class H264V4L2StatelessDecoder
 
     private readonly DecoderConfiguration _configuration;
 
-    private readonly List<V4L2MMapMPlaneBuffer> _outputBuffers = new();
-    private readonly List<V4L2MMapMPlaneBuffer> _captureBuffers = new();
     private readonly Queue<uint> _availableOutputBuffers = new();
-    private readonly Queue<uint> _availableCaptureBuffers = new();
     private readonly Queue<MediaRequest> _availableRequests = new();
     private readonly Dictionary<uint, MediaRequest> _inFlightRequests = new();
     private readonly object _bufferLock = new();
-
-    private int _outputPlaneCount = 1;
-    private int _capturePlaneCount = 1;
 
     private bool _disposed;
     private int _framesDecoded;
@@ -66,8 +60,8 @@ public class H264V4L2StatelessDecoder
         DecoderConfiguration? configuration = null)
     {
         _device = device ?? throw new ArgumentNullException(nameof(device));
-        _deviceCaptureQueue = device.GetQueue(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
-        _deviceOutputQueue = device.GetQueue(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
+        _deviceCaptureQueue = device.GetQueue(V4L2BufferType.VIDEO_CAPTURE_MPLANE, V4L2Memory.MMAP);
+        _deviceOutputQueue = device.GetQueue(V4L2BufferType.VIDEO_OUTPUT_MPLANE, V4L2Memory.MMAP);
         _mediaDevice = mediaDevice;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? new DecoderConfiguration();
@@ -108,7 +102,7 @@ public class H264V4L2StatelessDecoder
             // Check if we have frames in the pipeline
             lock (_bufferLock)
             {
-                int buffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
+                int buffersInUse = _deviceOutputQueue.Buffers.Count - _availableOutputBuffers.Count;
                 if (buffersInUse == 0)
                 {
                     _logger.LogInformation("Pipeline drained, all buffers returned");
@@ -498,14 +492,6 @@ public class H264V4L2StatelessDecoder
         var cancellationToken = _captureThreadCts!.Token;
         _logger.LogInformation("Capture buffer processing thread started");
 
-        if (_captureBuffers.Count == 0)
-        {
-            _logger.LogWarning("No capture buffers available in thread");
-            return;
-        }
-
-        var planeCount = _captureBuffers[0].Planes.Length;
-
         while (!cancellationToken.IsCancellationRequested)
         {
             // Wait for capture buffers to be ready (1 second timeout)
@@ -537,7 +523,7 @@ public class H264V4L2StatelessDecoder
                 // Process all available capture buffers
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    var dequeuedBuffer = _deviceCaptureQueue.Dequeue(planeCount);
+                    var dequeuedBuffer = _deviceCaptureQueue.Dequeue();
                     if (dequeuedBuffer == null)
                     {
                         // No more buffers available
@@ -552,7 +538,7 @@ public class H264V4L2StatelessDecoder
                         Timestamp = DateTime.UtcNow
                     });
 
-                    var mappedBuffer = _captureBuffers[(int)dequeuedBuffer.Index];
+                    var mappedBuffer = _deviceCaptureQueue.Buffers[(int)dequeuedBuffer.Index];
 
                     // Reset plane bytes used before requeueing
                     for (int p = 0; p < mappedBuffer.Planes.Length; p++)
@@ -576,12 +562,9 @@ public class H264V4L2StatelessDecoder
 
     private void ReclaimOutputBuffers(int timeoutMs = 0)
     {
-        if (_outputBuffers.Count == 0)
-            return;
-
         while (true)
         {
-            var dequeuedBuffer = _deviceOutputQueue.Dequeue(_outputPlaneCount);
+            var dequeuedBuffer = _deviceOutputQueue.Dequeue();
             if (dequeuedBuffer == null)
             {
                 // No more buffers available
@@ -629,7 +612,7 @@ public class H264V4L2StatelessDecoder
                     {
                         _logger.LogDebug("Acquired output buffer after {Attempts} attempts", attempt + 1);
                     }
-                    return (bufferIndex, _outputBuffers[(int)bufferIndex]);
+                    return (bufferIndex, _deviceOutputQueue.Buffers[(int)bufferIndex]);
                 }
             }
 
@@ -639,12 +622,12 @@ public class H264V4L2StatelessDecoder
                 int buffersInUse;
                 lock (_bufferLock)
                 {
-                    buffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
+                    buffersInUse = _deviceOutputQueue.Buffers.Count - _availableOutputBuffers.Count;
                 }
                 _logger.LogDebug(
                     "No output buffers immediately available ({InUse}/{Total} in use), polling for available buffers...",
                     buffersInUse,
-                    _outputBuffers.Count);
+                    _deviceOutputQueue.Buffers.Count);
             }
 
             // Poll with timeout to wait for output buffers to become available
@@ -655,12 +638,12 @@ public class H264V4L2StatelessDecoder
         int finalBuffersInUse;
         lock (_bufferLock)
         {
-            finalBuffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
+            finalBuffersInUse = _deviceOutputQueue.Buffers.Count - _availableOutputBuffers.Count;
         }
 
         throw new Exception(
             $"No available output buffers after {maxRetries} attempts (timeout: {maxRetries * pollTimeoutMs}ms). " +
-            $"Buffers in use: {finalBuffersInUse}/{_outputBuffers.Count}. " +
+            $"Buffers in use: {finalBuffersInUse}/{_deviceOutputQueue.Buffers.Count}. " +
             $"Hardware may be stalled or not processing buffers.");
     }
 
@@ -736,7 +719,6 @@ public class H264V4L2StatelessDecoder
         _device.SetOutputFormatMPlane(outputFormat);
 
         var confirmedOutputFormat = _device.GetOutputFormatMPlane();
-        _outputPlaneCount = confirmedOutputFormat.NumPlanes;
 
         _logger.LogInformation(
             "Set output format: {Width}x{Height} H264 ({Planes} plane(s))",
@@ -760,14 +742,12 @@ public class H264V4L2StatelessDecoder
 
         _device.SetCaptureFormatMPlane(captureFormat);
         var confirmedCaptureFormat = _device.GetCaptureFormatMPlane();
-        _capturePlaneCount = confirmedCaptureFormat.NumPlanes;
 
         _logger.LogInformation(
-            "Set capture format: {Width}x{Height} fmt=0x{Pixel:X8} ({Planes} plane(s))",
+            "Set capture format: {Width}x{Height} fmt=0x{Pixel:X8}",
             confirmedCaptureFormat.Width,
             confirmedCaptureFormat.Height,
-            confirmedCaptureFormat.PixelFormat,
-            _capturePlaneCount);
+            confirmedCaptureFormat.PixelFormat);
     }
 
     private void SetupAndMapBuffers()
@@ -778,15 +758,11 @@ public class H264V4L2StatelessDecoder
         SetupBufferQueue(
             V4L2BufferType.VIDEO_OUTPUT_MPLANE,
             _configuration.OutputBufferCount,
-            _outputBuffers,
             _availableOutputBuffers);
 
         // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
-        SetupBufferQueue(V4L2BufferType.VIDEO_CAPTURE_MPLANE, _configuration.CaptureBufferCount, _captureBuffers,
-            _availableCaptureBuffers);
-
-        _logger.LogInformation("Buffer setup completed: {OutputBuffers} output, {CaptureBuffers} capture",
-            _outputBuffers.Count, _captureBuffers.Count);
+        SetupBufferQueue(V4L2BufferType.VIDEO_CAPTURE_MPLANE, _configuration.CaptureBufferCount,
+            null);
     }
 
     private void InitializeMediaRequests()
@@ -838,20 +814,18 @@ public class H264V4L2StatelessDecoder
     private void SetupBufferQueue(
         V4L2BufferType bufferType,
         uint bufferCount,
-        List<V4L2MMapMPlaneBuffer> bufferList,
-        Queue<uint> availableQueue)
+        Queue<uint>? availableQueue)
     {
-        var requested = _device.RequestBuffers(bufferCount, bufferType, V4L2Memory.MMAP);
-        _logger.LogDebug("Requested {RequestedCount} {BufferType} buffers, got {ActualCount}",
-            bufferCount, bufferType, requested.Count);
+        var queue = _device.GetQueue(bufferType, V4L2Memory.MMAP);
+        queue.RequestBuffers(bufferCount);
+        var mappedBuffers = queue.Buffers;
 
-        var mappedBuffers = _device.RequestedBufferInfos
-            .Single(b => b.Memory == V4L2Memory.MMAP && b.Type == bufferType);
-
-        for (int i = 0; i < mappedBuffers.V4L2MMapMPlaneBuffers!.Count; i++)
+        if (availableQueue != null)
         {
-            bufferList.Add(mappedBuffers.V4L2MMapMPlaneBuffers[i]);
-            availableQueue.Enqueue((uint)i);
+            for (int i = 0; i < mappedBuffers.Count; i++)
+            {
+                availableQueue.Enqueue((uint)i);
+            }
         }
     }
 
@@ -862,42 +836,10 @@ public class H264V4L2StatelessDecoder
         try
         {
             // Queue all capture buffers before starting streaming
-            for (uint i = 0; i < _captureBuffers.Count; i++)
+            for (uint i = 0; i < _deviceCaptureQueue.Buffers.Count; i++)
             {
-                var mappedBuffer = _captureBuffers[(int)i];
-
-                var buffer = new V4L2Buffer
-                {
-                    Index = i,
-                    Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                    Memory = V4L2Memory.MMAP,
-                    Length = (uint)mappedBuffer.Planes.Length,
-                    Field = (uint)V4L2Field.NONE,
-                    BytesUsed = 0, // Output buffer, hardware will fill this
-                    Flags = 0,
-                    Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-                    Sequence = 0
-                };
-
-                unsafe
-                {
-                    // Set up planes for multiplanar capture buffer
-                    fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
-                    {
-                        buffer.Planes = planePtr;
-                    }
-                }
-
-                var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
-                if (!result.Success)
-                {
-                    _logger.LogWarning("Failed to queue capture buffer {Index}: {Error}", i, result.ErrorMessage);
-                    // Don't throw here, continue with other buffers
-                }
-                else
-                {
-                    _logger.LogTrace("Successfully queued capture buffer {Index}", i);
-                }
+                var mappedBuffer = _deviceCaptureQueue.Buffers[(int)i];
+                _deviceCaptureQueue.Enqueue(mappedBuffer);
             }
 
             // Start streaming on OUTPUT queue first
@@ -969,14 +911,13 @@ public class H264V4L2StatelessDecoder
             }
 
             // Unmap buffers
-            UnmapBuffers(_outputBuffers);
-            UnmapBuffers(_captureBuffers);
+            UnmapBuffers(_deviceOutputQueue);
+            UnmapBuffers(_deviceCaptureQueue);
 
             // Clear buffer queues
             lock (_bufferLock)
             {
                 _availableOutputBuffers.Clear();
-                _availableCaptureBuffers.Clear();
             }
 
             _logger.LogInformation("Decoder cleanup completed");
@@ -987,9 +928,9 @@ public class H264V4L2StatelessDecoder
         }
     }
 
-    private void UnmapBuffers(List<V4L2MMapMPlaneBuffer> buffers)
+    private void UnmapBuffers(V4L2DeviceQueue queue)
     {
-        foreach (var buffer in buffers)
+        foreach (var buffer in queue.Buffers)
         {
             for (int p = 0; p < buffer.MappedPlanes.Count; p++)
             {
@@ -1016,8 +957,6 @@ public class H264V4L2StatelessDecoder
                 }
             }
         }
-
-        buffers.Clear();
     }
 
     public async ValueTask DisposeAsync()
