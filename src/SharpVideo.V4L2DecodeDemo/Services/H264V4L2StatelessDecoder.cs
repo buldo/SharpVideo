@@ -30,11 +30,17 @@ public class H264V4L2StatelessDecoder
     private readonly Dictionary<uint, MediaRequest> _inFlightRequests = new();
     private readonly object _bufferLock = new();
 
+    // Track which capture buffers are being processed for frame saving
+    private readonly HashSet<uint> _captureBuffersInProcessing = new();
+
     private int _outputPlaneCount = 1;
     private int _capturePlaneCount = 1;
 
     private bool _disposed;
     private int _framesDecoded;
+    private int _captureWidth = 1920;
+    private int _captureHeight = 1080;
+    private uint _capturePixelFormat = 0x3231564E; // NV12
     private readonly Stopwatch _decodingStopwatch = new();
 
     private readonly bool _supportsSliceParamsControl;
@@ -55,6 +61,14 @@ public class H264V4L2StatelessDecoder
         public uint PicOrderCnt { get; set; }
         public bool IsReference { get; set; }
         public bool IsLongTerm { get; set; }
+    }
+
+    private class CaptureBufferData
+    {
+        public uint BufferIndex { get; set; }
+        public byte[] FrameData { get; set; } = Array.Empty<byte>();
+        public int FrameNumber { get; set; }
+        public uint BytesUsed { get; set; }
     }
 
     public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
@@ -491,6 +505,67 @@ public class H264V4L2StatelessDecoder
     }
 
     /// <summary>
+    /// Extracts frame data from mapped buffer
+    /// </summary>
+    private byte[] ExtractFrameData(V4L2MMapMPlaneBuffer mappedBuffer, uint bytesUsed)
+    {
+        // Calculate total size needed for all planes
+        int totalSize = 0;
+        for (int p = 0; p < mappedBuffer.MappedPlanes.Count; p++)
+        {
+            totalSize += (int)mappedBuffer.MappedPlanes[p].Length;
+        }
+
+        var frameData = new byte[totalSize];
+        int offset = 0;
+
+        // Copy data from all planes
+        for (int p = 0; p < mappedBuffer.MappedPlanes.Count; p++)
+        {
+            var planePtr = mappedBuffer.MappedPlanes[p].Pointer;
+            var planeLength = (int)mappedBuffer.MappedPlanes[p].Length;
+
+            if (planePtr != IntPtr.Zero && planeLength > 0)
+            {
+                unsafe
+                {
+                    var source = (byte*)planePtr;
+                    Marshal.Copy((IntPtr)source, frameData, offset, planeLength);
+                }
+                offset += planeLength;
+            }
+        }
+
+        return frameData;
+    }
+
+    private void RequeueCaptureBuffer(uint bufferIndex)
+    {
+        try
+        {
+            var mappedBuffer = _captureBuffers[(int)bufferIndex];
+
+            // Reset plane bytes used before requeueing
+            for (int p = 0; p < mappedBuffer.Planes.Length; p++)
+            {
+                mappedBuffer.Planes[p].BytesUsed = 0;
+            }
+
+            _deviceCaptureQueue.Enqueue(mappedBuffer);
+
+            // Remove from processing set
+            lock (_bufferLock)
+            {
+                _captureBuffersInProcessing.Remove(bufferIndex);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to requeue capture buffer {Index}", bufferIndex);
+        }
+    }
+
+    /// <summary>
     /// Thread procedure for processing capture buffers using poll.
     /// </summary>
     private void ProcessCaptureBuffersThreadProc()
@@ -545,28 +620,57 @@ public class H264V4L2StatelessDecoder
                     }
 
                     _framesDecoded++;
-                    FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
-                    {
-                        FrameNumber = _framesDecoded,
-                        BytesUsed = dequeuedBuffer.TotalBytesUsed,
-                        Timestamp = DateTime.UtcNow
-                    });
+                    var bufferIndex = dequeuedBuffer.Index;
+                    var mappedBuffer = _captureBuffers[(int)bufferIndex];
 
-                    var mappedBuffer = _captureBuffers[(int)dequeuedBuffer.Index];
+                    // Check if we should extract frame data (if event handler exists)
+                    bool shouldProcessFrame = FrameDecoded != null;
 
-                    // Reset plane bytes used before requeueing
-                    for (int p = 0; p < mappedBuffer.Planes.Length; p++)
+                    if (shouldProcessFrame)
                     {
-                        mappedBuffer.Planes[p].BytesUsed = 0;
+                        // Extract frame data while buffer is valid
+                        var frameData = ExtractFrameData(mappedBuffer, dequeuedBuffer.TotalBytesUsed);
+                        var frameNumber = _framesDecoded;
+                        var bytesUsed = dequeuedBuffer.TotalBytesUsed;
+
+                        // Mark buffer as in processing
+                        lock (_bufferLock)
+                        {
+                            _captureBuffersInProcessing.Add(bufferIndex);
+                        }
+
+                        // Fire event asynchronously, requeue buffer when done
+                        _ = Task.Run(() =>
+                        {
+                            try
+                            {
+                                FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
+                                {
+                                    FrameNumber = frameNumber,
+                                    BytesUsed = bytesUsed,
+                                    Timestamp = DateTime.UtcNow,
+                                    Width = _captureWidth,
+                                    Height = _captureHeight,
+                                    PixelFormat = _capturePixelFormat,
+                                    PlaneCount = _capturePlaneCount,
+                                    ExtractFrameData = () => frameData
+                                });
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "Error in FrameDecoded event handler");
+                            }
+                            finally
+                            {
+                                // Requeue the buffer after processing
+                                RequeueCaptureBuffer(bufferIndex);
+                            }
+                        });
                     }
-
-                    try
+                    else
                     {
-                        _deviceCaptureQueue.Enqueue(mappedBuffer);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to requeue capture buffer {Index}", dequeuedBuffer.Index);
+                        // No event handler, requeue immediately
+                        RequeueCaptureBuffer(bufferIndex);
                     }
                 }
             }
@@ -612,10 +716,11 @@ public class H264V4L2StatelessDecoder
 
     private (uint bufferIndex, V4L2MMapMPlaneBuffer mappedBuffer) AcquireOutputBuffer()
     {
-        const int maxRetries = 10;
-        const int pollTimeoutMs = 500; // 500ms timeout for each poll attempt
+        const int pollTimeoutMs = 1000; // 1 second timeout for each poll attempt
+        int attempt = 0;
+        bool loggedWaiting = false;
 
-        for (int attempt = 0; attempt < maxRetries; attempt++)
+        while (true) // Wait indefinitely
         {
             // First try to reclaim any processed buffers without blocking
             ReclaimOutputBuffers(timeoutMs: 0);
@@ -625,43 +730,48 @@ public class H264V4L2StatelessDecoder
                 if (_availableOutputBuffers.Count > 0)
                 {
                     var bufferIndex = _availableOutputBuffers.Dequeue();
-                    if (attempt > 0)
+                    if (loggedWaiting)
                     {
-                        _logger.LogDebug("Acquired output buffer after {Attempts} attempts", attempt + 1);
+                        _logger.LogInformation("Output buffer became available after {Attempts} attempts", attempt + 1);
                     }
                     return (bufferIndex, _outputBuffers[(int)bufferIndex]);
                 }
             }
 
-            // If no buffers available, log and wait for buffers to be returned by hardware
-            if (attempt == 0)
+            // Log once when we start waiting
+            if (!loggedWaiting)
             {
                 int buffersInUse;
                 lock (_bufferLock)
                 {
                     buffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
                 }
-                _logger.LogDebug(
-                    "No output buffers immediately available ({InUse}/{Total} in use), polling for available buffers...",
+                _logger.LogWarning(
+                    "No output buffers immediately available ({InUse}/{Total} in use), waiting for buffers to be returned...",
+                    buffersInUse,
+                    _outputBuffers.Count);
+                loggedWaiting = true;
+            }
+
+            // Log progress every 10 seconds
+            if (attempt > 0 && attempt % 10 == 0)
+            {
+                int buffersInUse;
+                lock (_bufferLock)
+                {
+                    buffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
+                }
+                _logger.LogWarning(
+                    "Still waiting for output buffers... ({Attempts} attempts, {InUse}/{Total} buffers in use)",
+                    attempt,
                     buffersInUse,
                     _outputBuffers.Count);
             }
 
             // Poll with timeout to wait for output buffers to become available
             ReclaimOutputBuffers(timeoutMs: pollTimeoutMs);
+            attempt++;
         }
-
-        // All retries exhausted
-        int finalBuffersInUse;
-        lock (_bufferLock)
-        {
-            finalBuffersInUse = _outputBuffers.Count - _availableOutputBuffers.Count;
-        }
-
-        throw new Exception(
-            $"No available output buffers after {maxRetries} attempts (timeout: {maxRetries * pollTimeoutMs}ms). " +
-            $"Buffers in use: {finalBuffersInUse}/{_outputBuffers.Count}. " +
-            $"Hardware may be stalled or not processing buffers.");
     }
 
     private void ReturnOutputBuffer(uint index)
@@ -761,6 +871,9 @@ public class H264V4L2StatelessDecoder
         _device.SetCaptureFormatMPlane(captureFormat);
         var confirmedCaptureFormat = _device.GetCaptureFormatMPlane();
         _capturePlaneCount = confirmedCaptureFormat.NumPlanes;
+        _captureWidth = (int)confirmedCaptureFormat.Width;
+        _captureHeight = (int)confirmedCaptureFormat.Height;
+        _capturePixelFormat = confirmedCaptureFormat.PixelFormat;
 
         _logger.LogInformation(
             "Set capture format: {Width}x{Height} fmt=0x{Pixel:X8} ({Planes} plane(s))",

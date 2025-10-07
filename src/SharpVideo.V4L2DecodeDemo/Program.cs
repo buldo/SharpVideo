@@ -57,10 +57,31 @@ internal class Program
 
         await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config);
 
+        // Create background frame saver
+        var outputDir = Path.Combine(Directory.GetCurrentDirectory(), "decoded_frames");
+        using var frameSaver = new FrameSaver(outputDir, logger, queueCapacity: 50);
+
         int decodedFrames = 0;
+        const int maxFramesToSave = 20; // Limit total frames to save
+        int savedFrames = 0;
+
         decoder.FrameDecoded += (sender, e) =>
         {
-            decodedFrames++;
+            Interlocked.Increment(ref decodedFrames);
+
+            // Save only a limited number of frames to avoid blocking decoder
+            // First 5 frames + every 100th frame, up to 20 total frames
+            var currentFrame = decodedFrames;
+            var currentSaved = Interlocked.CompareExchange(ref savedFrames, 0, 0);
+
+            bool shouldSave = currentSaved < maxFramesToSave &&
+                              (currentFrame <= 5 || currentFrame % 100 == 0);
+
+            if (shouldSave && e.ExtractFrameData != null)
+            {
+                Interlocked.Increment(ref savedFrames);
+                frameSaver.TryEnqueueFrame(e);
+            }
         };
 
         await using var fileStream = File.OpenRead(filePath);
@@ -69,5 +90,8 @@ internal class Program
 
         logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
         logger.LogInformation("Amount of decoded frames: {DecodedFrames}", decodedFrames);
+
+        logger.LogInformation("Waiting for frame saving to complete...");
+        // Dispose will wait for background processing to finish
     }
 }
