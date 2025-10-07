@@ -33,15 +33,12 @@ public class H264V4L2StatelessDecoder
 
     private readonly bool _supportsSliceParamsControl;
 
-    private int _consecutiveFailures = 0;
-
     // Thread for processing capture buffers
     private Thread? _captureThread;
     private CancellationTokenSource? _captureThreadCts;
 
     // DPB (Decoded Picture Buffer) tracking
     private readonly List<DpbEntry> _dpb = new();
-    private uint _maxFrameNum = 256;
 
     private class DpbEntry
     {
