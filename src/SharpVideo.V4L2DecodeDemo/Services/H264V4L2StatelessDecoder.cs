@@ -506,14 +506,10 @@ public class H264V4L2StatelessDecoder
 
         var planeCount = _captureBuffers[0].Planes.Length;
 
-        unsafe
+        while (!cancellationToken.IsCancellationRequested)
         {
-            var planeStorage = stackalloc V4L2Plane[planeCount];
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                // Wait for capture buffers to be ready (1 second timeout)
-                var (pollResult, revents) = _device.Poll(PollEvents.POLLIN, 1000);
+            // Wait for capture buffers to be ready (1 second timeout)
+            var (pollResult, revents) = _deviceCaptureQueue.Poll(PollEvents.POLLIN, 1000);
 
                 if (pollResult < 0)
                 {
@@ -541,77 +537,39 @@ public class H264V4L2StatelessDecoder
                 // Process all available capture buffers
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    var buffer = new V4L2Buffer
+                    var dequeuedBuffer = _deviceCaptureQueue.Dequeue(planeCount);
+                    if (dequeuedBuffer == null)
                     {
-                        Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                        Memory = V4L2Memory.MMAP,
-                        Length = (uint)planeCount,
-                        Field = (uint)V4L2Field.NONE,
-                        Planes = planeStorage
-                    };
-
-                    var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
-                    if (!result.Success)
-                    {
-                        if (result.ErrorCode == 11) // EAGAIN - no more buffers
-                        {
-                            break;
-                        }
-
-                        _logger.LogDebug(
-                            "Failed to dequeue capture buffer: {Error}",
-                            result.ErrorMessage ?? $"errno {result.ErrorCode}");
+                        // No more buffers available
                         break;
-                    }
-
-                    uint bytesUsed = 0;
-                    foreach (var plane in buffer.PlaneSpan)
-                    {
-                        bytesUsed += plane.BytesUsed;
                     }
 
                     _framesDecoded++;
                     FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
                     {
                         FrameNumber = _framesDecoded,
-                        BytesUsed = bytesUsed,
+                        BytesUsed = dequeuedBuffer.TotalBytesUsed,
                         Timestamp = DateTime.UtcNow
                     });
 
-                    var mappedBuffer = _captureBuffers[(int)buffer.Index];
-                    var requeueBuffer = new V4L2Buffer
-                    {
-                        Index = buffer.Index,
-                        Type = V4L2BufferType.VIDEO_CAPTURE_MPLANE,
-                        Memory = V4L2Memory.MMAP,
-                        Length = (uint)mappedBuffer.Planes.Length,
-                        Field = (uint)V4L2Field.NONE,
-                        Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-                        Sequence = 0
-                    };
+                    var mappedBuffer = _captureBuffers[(int)dequeuedBuffer.Index];
 
+                    // Reset plane bytes used before requeueing
                     for (int p = 0; p < mappedBuffer.Planes.Length; p++)
                     {
                         mappedBuffer.Planes[p].BytesUsed = 0;
-                        mappedBuffer.Planes[p].Length = mappedBuffer.Planes[p].Length;
                     }
 
-                    fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+                    try
                     {
-                        requeueBuffer.Planes = planePtr;
-
-                        var queueResult = LibV4L2.QueueBuffer(_device.fd, ref requeueBuffer);
-                        if (!queueResult.Success)
-                        {
-                            _logger.LogWarning(
-                                "Failed to requeue capture buffer {Index}: {Error}",
-                                buffer.Index,
-                                queueResult.ErrorMessage ?? $"errno {queueResult.ErrorCode}");
-                        }
+                        _deviceCaptureQueue.Enqueue(mappedBuffer);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to requeue capture buffer {Index}", dequeuedBuffer.Index);
                     }
                 }
             }
-        }
 
         _logger.LogInformation("Capture buffer processing thread stopped");
     }
@@ -624,7 +582,7 @@ public class H264V4L2StatelessDecoder
         // If timeout is requested, poll first to wait for buffers
         if (timeoutMs > 0)
         {
-            var (pollResult, revents) = _device.Poll(PollEvents.POLLOUT, timeoutMs);
+            var (pollResult, revents) = _deviceOutputQueue.Poll(PollEvents.POLLOUT, timeoutMs);
             if (pollResult <= 0)
             {
                 // Timeout or error - no buffers available yet
@@ -632,53 +590,32 @@ public class H264V4L2StatelessDecoder
             }
         }
 
-        unsafe
+        while (true)
         {
-            var planeStorage = stackalloc V4L2Plane[1];
-
-            while (true)
+            var dequeuedBuffer = _deviceOutputQueue.Dequeue(_outputPlaneCount);
+            if (dequeuedBuffer == null)
             {
-                var buffer = new V4L2Buffer
-                {
-                    Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-                    Memory = V4L2Memory.MMAP,
-                    Length = 1,
-                    Field = (uint)V4L2Field.NONE,
-                    Planes = planeStorage
-                };
+                // No more buffers available
+                break;
+            }
 
-                var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
-                if (!result.Success)
+            ReturnOutputBuffer(dequeuedBuffer.Index);
+
+            if (_mediaDevice != null)
+            {
+                MediaRequest? request = null;
+                lock (_bufferLock)
                 {
-                    if (result.ErrorCode == 11 || result.ErrorCode == 35) // EAGAIN or EWOULDBLOCK
+                    if (_inFlightRequests.TryGetValue(dequeuedBuffer.Index, out var existing))
                     {
-                        break;
+                        request = existing;
+                        _inFlightRequests.Remove(dequeuedBuffer.Index);
                     }
-
-                    _logger.LogDebug(
-                        "Failed to dequeue output buffer: {Error}",
-                        result.ErrorMessage ?? $"errno {result.ErrorCode}");
-                    break;
                 }
 
-                ReturnOutputBuffer(buffer.Index);
-
-                if (_mediaDevice != null)
+                if (request != null)
                 {
-                    MediaRequest? request = null;
-                    lock (_bufferLock)
-                    {
-                        if (_inFlightRequests.TryGetValue(buffer.Index, out var existing))
-                        {
-                            request = existing;
-                            _inFlightRequests.Remove(buffer.Index);
-                        }
-                    }
-
-                    if (request != null)
-                    {
-                        ReleaseMediaRequest(request);
-                    }
+                    ReleaseMediaRequest(request);
                 }
             }
         }

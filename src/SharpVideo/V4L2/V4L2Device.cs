@@ -386,14 +386,107 @@ public class V4L2DeviceQueue
                 var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
                 if (!result.Success)
                 {
-                    throw new Exception($"Failed to queue output buffer");
+                    throw new Exception($"Failed to queue buffer for {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
                 }
             }
         }
     }
 
-    public V4L2MMapMPlaneBuffer? Dequeue()
+    /// <summary>
+    /// Dequeues a buffer from the queue. Returns null if no buffer is available (EAGAIN).
+    /// </summary>
+    /// <param name="planeCount">Number of planes for the buffer</param>
+    /// <returns>Dequeued buffer with metadata, or null if no buffer available</returns>
+    public DequeuedBuffer? Dequeue(int planeCount)
     {
-        return null;
+        unsafe
+        {
+            var planeStorage = stackalloc V4L2Plane[planeCount];
+
+            var buffer = new V4L2Buffer
+            {
+                Type = _type,
+                Memory = V4L2Memory.MMAP,
+                Length = (uint)planeCount,
+                Field = (uint)V4L2Field.NONE,
+                Planes = planeStorage
+            };
+
+            var result = LibV4L2.DequeueBuffer(_deviceFd, ref buffer);
+            if (!result.Success)
+            {
+                if (result.ErrorCode == 11 || result.ErrorCode == 35) // EAGAIN or EWOULDBLOCK
+                {
+                    return null;
+                }
+
+                throw new Exception(
+                    $"Failed to dequeue buffer from {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
+            }
+
+            // Copy plane data from stack to managed array
+            var planes = new V4L2Plane[planeCount];
+            for (int i = 0; i < planeCount; i++)
+            {
+                planes[i] = planeStorage[i];
+            }
+
+            return new DequeuedBuffer
+            {
+                Index = buffer.Index,
+                Planes = planes,
+                Timestamp = buffer.Timestamp,
+                Sequence = buffer.Sequence,
+                Flags = buffer.Flags
+            };
+        }
+    }
+
+    /// <summary>
+    /// Polls the device for events
+    /// </summary>
+    /// <param name="events">Events to poll for (POLLIN for capture, POLLOUT for output)</param>
+    /// <param name="timeoutMs">Timeout in milliseconds</param>
+    /// <returns>Poll result (>0 if events occurred, 0 if timeout, <0 if error) and returned events</returns>
+    public (int result, PollEvents revents) Poll(PollEvents events, int timeoutMs)
+    {
+        var pollFd = new PollFd
+        {
+            fd = _deviceFd,
+            events = events,
+            revents = 0
+        };
+
+        unsafe
+        {
+            var result = Libc.poll(ref pollFd, 1, timeoutMs);
+            return (result, pollFd.revents);
+        }
+    }
+}
+
+/// <summary>
+/// Represents a dequeued buffer with metadata
+/// </summary>
+[SupportedOSPlatform("linux")]
+public class DequeuedBuffer
+{
+    public uint Index { get; init; }
+    public V4L2Plane[] Planes { get; init; } = Array.Empty<V4L2Plane>();
+    public TimeVal Timestamp { get; init; }
+    public uint Sequence { get; init; }
+    public uint Flags { get; init; }
+
+    public uint TotalBytesUsed
+    {
+        get
+        {
+            uint total = 0;
+            foreach (var plane in Planes)
+            {
+                total += plane.BytesUsed;
+            }
+            return total;
+        }
     }
 }
