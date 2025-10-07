@@ -62,6 +62,7 @@ public class V4L2MMapMPlaneBuffer
             mappedPlanes.Add(new V4L2MappedPlane(mapped, plane.Length));
         }
 
+        _mappedPlanes = mappedPlanes;
         _isMapped = true;
     }
 }
