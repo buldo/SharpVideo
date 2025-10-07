@@ -1,6 +1,4 @@
-﻿using System.Runtime.InteropServices;
-
-namespace SharpVideo.DmaBuffers;
+﻿namespace SharpVideo.DmaBuffers;
 
 public class DmaBuffersManager
 {

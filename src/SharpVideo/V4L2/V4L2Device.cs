@@ -19,32 +19,18 @@ public class V4L2Device : IDisposable
         _deviceFd = deviceFd;
         Controls = controls.AsReadOnly();
         ExtendedControls = extendedControls.AsReadOnly();
+
+        OutputMPlaneQueue = new V4L2DeviceQueue(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_OUTPUT_MPLANE));
+        CaptureMPlaneQueue = new V4L2DeviceQueue(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_CAPTURE_MPLANE));
     }
+
+    public V4L2DeviceQueue OutputMPlaneQueue { get; }
+
+    public V4L2DeviceQueue CaptureMPlaneQueue { get; }
 
     public IReadOnlyCollection<V4L2DeviceControl> Controls { get; }
 
     public IReadOnlyCollection<V4L2DeviceExtendedControl> ExtendedControls { get; }
-
-    /// <summary>
-    /// Call only after format setup
-    /// </summary>
-    public V4L2DeviceQueue GetQueue(V4L2BufferType type, V4L2Memory memory)
-    {
-        if (!_queues.TryGetValue((type, memory), out var value))
-        {
-            var format = new V4L2Format
-            {
-                Type = type
-            };
-
-            GetFormat(ref format);
-
-            value = new V4L2DeviceQueue(this, type, memory, format.Pix_mp.NumPlanes);
-            _queues.Add((type, memory), value);
-        }
-
-        return value;
-    }
 
     public void SetFormat(ref V4L2Format format)
     {
@@ -253,5 +239,17 @@ public class V4L2Device : IDisposable
         {
             throw new ObjectDisposedException(nameof(V4L2Device));
         }
+    }
+
+    private uint PlanesCountAccessor(V4L2BufferType type)
+    {
+        var format = new V4L2Format
+        {
+            Type = type
+        };
+
+        GetFormat(ref format);
+
+        return format.Pix_mp.NumPlanes;
     }
 }

@@ -1,4 +1,5 @@
 ﻿using System.Runtime.Versioning;
+
 using SharpVideo.Linux.Native;
 
 namespace SharpVideo.V4L2;
@@ -6,28 +7,32 @@ namespace SharpVideo.V4L2;
 [SupportedOSPlatform("linux")]
 public class V4L2DeviceQueue
 {
-    private readonly V4L2Device _device;
+    private readonly int _deviceFd;
     private readonly V4L2BufferType _type;
-    private readonly V4L2Memory _memory;
-    private readonly uint _planesCount;
-    private V4L2RequestedBuffers _requestedBuffers;
+    private readonly Func<uint> _planesCountAccessor;
+
+    private bool _isInitialized;
+    private V4L2Memory _memory;
+    private V4L2QueueBufferPool? _buffersPool;
 
     internal V4L2DeviceQueue(
-        V4L2Device device,
+        int deviceFd,
         V4L2BufferType type,
-        V4L2Memory memory,
-        uint planesCount)
+        Func<uint> planesCountAccessor)
     {
-        _device = device;
+        _deviceFd = deviceFd;
         _type = type;
-        _memory = memory;
-        _planesCount = planesCount;
+        _planesCountAccessor = planesCountAccessor;
     }
 
-    public IReadOnlyList<V4L2MMapMPlaneBuffer> Buffers => _requestedBuffers.V4L2MMapMPlaneBuffers;
+    public V4L2Memory Memory => _isInitialized ? _memory : throw new Exception("Not initialised");
+
+    public V4L2QueueBufferPool BuffersPool => _isInitialized ? _buffersPool! : throw new Exception("Not initialised");
 
     public void Enqueue(V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null)
     {
+        EnsureInitialised();
+
         // To enqueue a buffer applications set the type field of a struct v4l2_buffer to the same buffer type as was previously used with struct v4l2_format type and struct v4l2_requestbuffers type.
         // Applications must also set the index field.
         // Valid index numbers range from zero to the number of buffers allocated with ioctl VIDIOC_REQBUFS (struct v4l2_requestbuffers count) minus one.
@@ -59,7 +64,7 @@ public class V4L2DeviceQueue
             {
                 buffer.Planes = planePtr;
 
-                var result = LibV4L2.QueueBuffer(_device.fd, ref buffer);
+                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
                 if (!result.Success)
                 {
                     throw new Exception($"Failed to queue buffer for {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
@@ -71,24 +76,25 @@ public class V4L2DeviceQueue
     /// <summary>
     /// Dequeues a buffer from the queue. Returns null if no buffer is available (EAGAIN).
     /// </summary>
-    /// <param name="planeCount">Number of planes for the buffer</param>
     /// <returns>Dequeued buffer with metadata, or null if no buffer available</returns>
     public DequeuedBuffer? Dequeue()
     {
+        EnsureInitialised();
+
         unsafe
         {
-            var planeStorage = stackalloc V4L2Plane[(int)_planesCount];
+            var planeStorage = stackalloc V4L2Plane[(int)_buffersPool!.BufferPlaneCount];
 
             var buffer = new V4L2Buffer
             {
                 Type = _type,
                 Memory = V4L2Memory.MMAP,
-                Length = _planesCount,
+                Length = _buffersPool.BufferPlaneCount,
                 Field = (uint)V4L2Field.NONE,
                 Planes = planeStorage
             };
 
-            var result = LibV4L2.DequeueBuffer(_device.fd, ref buffer);
+            var result = LibV4L2.DequeueBuffer(_deviceFd, ref buffer);
             if (!result.Success)
             {
                 if (result.ErrorCode == 11 || result.ErrorCode == 35) // EAGAIN or EWOULDBLOCK
@@ -101,8 +107,8 @@ public class V4L2DeviceQueue
             }
 
             // Copy plane data from stack to managed array
-            var planes = new V4L2Plane[_planesCount];
-            for (int i = 0; i < _planesCount; i++)
+            var planes = new V4L2Plane[_buffersPool.BufferPlaneCount];
+            for (int i = 0; i < _buffersPool.BufferPlaneCount; i++)
             {
                 planes[i] = planeStorage[i];
             }
@@ -121,11 +127,12 @@ public class V4L2DeviceQueue
     /// <summary>
     /// Polls the device for events
     /// </summary>
-    /// <param name="events">Events to poll for (POLLIN for capture, POLLOUT for output)</param>
     /// <param name="timeoutMs">Timeout in milliseconds</param>
     /// <returns>Poll result (>0 if events occurred, 0 if timeout, <0 if error) and returned events</returns>
     public (int result, PollEvents revents) Poll(int timeoutMs)
     {
+        EnsureInitialised();
+
         var events = _type switch
         {
             V4L2BufferType.VIDEO_CAPTURE => PollEvents.POLLIN,
@@ -139,7 +146,7 @@ public class V4L2DeviceQueue
 
         var pollFd = new PollFd
         {
-            fd = _device.fd,
+            fd = _deviceFd,
             events = events,
             revents = 0
         };
@@ -148,86 +155,29 @@ public class V4L2DeviceQueue
         return (result, pollFd.revents);
     }
 
-    public void RequestBuffers(uint count)
+    /// <summary>
+    /// Initialising queue.
+    /// This method requesting buffer with specified type
+    /// </summary>
+    /// <param name="memory">Memory type</param>
+    /// <param name="buffersCount">Buffers count</param>
+    public void Init(V4L2Memory memory, uint buffersCount)
     {
-        var reqBufs = new V4L2RequestBuffers
+        if (_isInitialized)
         {
-            Count = count,
-            Type = _type,
-            Memory = _memory
-        };
-
-        var result = LibV4L2.RequestBuffers(_device.fd, ref reqBufs);
-        if (!result.Success)
-        {
-            throw new Exception($"Failed to request {count} buffers with {_type} and {_memory}. {result.ErrorCode}: {result.ErrorMessage}");
+            throw new Exception("Already initialised");
         }
 
-
-
-        V4L2MMapMPlaneBuffer[]? mmapMplanesArray = null;
-        if ((_type == V4L2BufferType.VIDEO_CAPTURE_MPLANE || _type == V4L2BufferType.VIDEO_OUTPUT_MPLANE) &&
-            _memory == V4L2Memory.MMAP)
-        {
-            mmapMplanesArray = new V4L2MMapMPlaneBuffer[reqBufs.Count];
-        }
-
-        unsafe
-        {
-            // 1. For each requested buffer
-            for (uint i = 0; i < reqBufs.Count; i++)
-            {
-                var planes = new V4L2Plane[_planesCount];
-                var buffer = new V4L2Buffer
-                {
-                    Index = i,
-                    Type = _type,
-                    Memory = _memory,
-                    Length = _planesCount,
-                    Field = (uint)V4L2Field.NONE,
-                };
-
-                fixed (V4L2Plane* planesPtr = planes)
-                {
-                    buffer.Planes = planesPtr;
-
-                    // 2. We request buffer information
-                    var queryResult = LibV4L2.QueryBuffer(_device.fd, ref buffer);
-                    if (!queryResult.Success)
-                    {
-                        throw new Exception($"Failed to query buffer {i} for {_type} and {_memory}: {queryResult.ErrorMessage}");
-                    }
-                }
-
-                // 3. And if buffer MPlane and mmap
-                if ((_type == V4L2BufferType.VIDEO_CAPTURE_MPLANE || _type == V4L2BufferType.VIDEO_OUTPUT_MPLANE) &&
-                    _memory == V4L2Memory.MMAP)
-                {
-                    var mappedPlanes = new List<V4L2MappedPlane>();
-                    // 3.1 We are mapping each plane
-                    foreach (var plane in planes)
-                    {
-                        var mapped = Libc.mmap(
-                            IntPtr.Zero,
-                            plane.Length,
-                            ProtFlags.PROT_READ | ProtFlags.PROT_WRITE,
-                            MapFlags.MAP_SHARED, _device.fd, (nint)plane.Memory.MemOffset);
-                        if (mapped == Libc.MAP_FAILED)
-                        {
-                            throw new Exception("Failed to map buffer plane");
-                        }
-                        mappedPlanes.Add(new V4L2MappedPlane(mapped, plane.Length));
-                    }
-
-                    var bufferInfo = new V4L2MMapMPlaneBuffer(buffer, planes, mappedPlanes);
-
-                    mmapMplanesArray![i] = bufferInfo;
-                }
-            }
-        }
-
-        // Here if buffer (MPlane && mmap), mmapMplanesArray contains buffer info with mapped planes
-        _requestedBuffers = new V4L2RequestedBuffers(reqBufs.Type, reqBufs.Memory, reqBufs.Count, mmapMplanesArray);
+        _memory = memory;
+        _buffersPool = V4L2QueueBufferPool.CreatePool(_deviceFd, buffersCount, _type, memory, _planesCountAccessor());
+        _isInitialized = true;
     }
 
+    private void EnsureInitialised()
+    {
+        if (!_isInitialized)
+        {
+            throw new Exception("Device queue not initialized");
+        }
+    }
 }
