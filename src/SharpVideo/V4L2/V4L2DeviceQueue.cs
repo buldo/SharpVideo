@@ -12,7 +12,6 @@ public class V4L2DeviceQueue
     private readonly Func<uint> _planesCountAccessor;
 
     private bool _isInitialized;
-    private V4L2Memory _memory;
     private V4L2QueueBufferPool? _buffersPool;
 
     internal V4L2DeviceQueue(
@@ -24,8 +23,6 @@ public class V4L2DeviceQueue
         _type = type;
         _planesCountAccessor = planesCountAccessor;
     }
-
-    public V4L2Memory Memory => _isInitialized ? _memory : throw new Exception("Not initialised");
 
     public V4L2QueueBufferPool BuffersPool => _isInitialized ? _buffersPool! : throw new Exception("Not initialised");
 
@@ -117,9 +114,6 @@ public class V4L2DeviceQueue
             {
                 Index = buffer.Index,
                 Planes = planes,
-                Timestamp = buffer.Timestamp,
-                Sequence = buffer.Sequence,
-                Flags = buffer.Flags
             };
         }
     }
@@ -168,7 +162,6 @@ public class V4L2DeviceQueue
             throw new Exception("Already initialised");
         }
 
-        _memory = memory;
         _buffersPool = V4L2QueueBufferPool.CreatePool(_deviceFd, buffersCount, _type, memory, _planesCountAccessor());
         _isInitialized = true;
     }
