@@ -1,4 +1,5 @@
 ﻿using System.Runtime.Versioning;
+using System.Threading.Tasks.Dataflow;
 
 using SharpVideo.Linux.Native;
 
@@ -155,7 +156,7 @@ public class V4L2DeviceQueue
     /// </summary>
     /// <param name="memory">Memory type</param>
     /// <param name="buffersCount">Buffers count</param>
-    public void Init(V4L2Memory memory, uint buffersCount)
+    public virtual void Init(V4L2Memory memory, uint buffersCount)
     {
         if (_isInitialized)
         {
@@ -166,11 +167,19 @@ public class V4L2DeviceQueue
         _isInitialized = true;
     }
 
-    private void EnsureInitialised()
+    protected void EnsureInitialised()
     {
         if (!_isInitialized)
         {
             throw new Exception("Device queue not initialized");
         }
+    }
+}
+
+[SupportedOSPlatform("linux")]
+public class V4L2DeviceCaptureQueue : V4L2DeviceQueue
+{
+    internal V4L2DeviceCaptureQueue(int deviceFd, V4L2BufferType type, Func<uint> planesCountAccessor) : base(deviceFd, type, planesCountAccessor)
+    {
     }
 }

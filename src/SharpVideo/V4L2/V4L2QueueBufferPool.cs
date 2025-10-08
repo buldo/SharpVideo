@@ -8,10 +8,12 @@ namespace SharpVideo.V4L2;
 public class V4L2QueueBufferPool
 {
     private readonly V4L2MMapMPlaneBuffer[] _buffers;
+    private readonly BufferStatus[] _statuses;
 
     private V4L2QueueBufferPool(V4L2MMapMPlaneBuffer[] buffers, uint bufferPlaneCount)
     {
         _buffers = buffers;
+        _statuses = new BufferStatus[buffers.Length];
         BufferPlaneCount = bufferPlaneCount;
     }
 
@@ -40,8 +42,7 @@ public class V4L2QueueBufferPool
                 $"Failed to request {buffersCount} buffers with {bufferType} and {memory}. {result.ErrorCode}: {result.ErrorMessage}");
         }
 
-        V4L2MMapMPlaneBuffer[] buffers = new V4L2MMapMPlaneBuffer[reqBufs.Count];
-
+        var buffers = new V4L2MMapMPlaneBuffer[reqBufs.Count];
 
         // 1. For each requested buffer
         for (uint i = 0; i < reqBufs.Count; i++)
@@ -76,5 +77,32 @@ public class V4L2QueueBufferPool
         }
 
         return new V4L2QueueBufferPool(buffers, bufferPlaneCount);
+    }
+
+    // IMHO, AcquireBuffer and SetBufferState - maybe should be in V4L2DeviceQueue
+
+    internal V4L2MMapMPlaneBuffer AcquireBuffer()
+    {
+        for (int i = 0; i < _statuses.Length; i++)
+        {
+            if (_statuses[i] == BufferStatus.InPool)
+            {
+                _statuses[i] = BufferStatus.InUse;
+                return _buffers[i];
+            }
+        }
+
+        throw new Exception("No free buffers");
+    }
+
+    internal void Release(uint index)
+    {
+        _statuses[index] = BufferStatus.InPool;
+    }
+
+    internal enum BufferStatus
+    {
+        InPool,
+        InUse
     }
 }

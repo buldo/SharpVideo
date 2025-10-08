@@ -20,13 +20,13 @@ public class V4L2Device : IDisposable
         Controls = controls.AsReadOnly();
         ExtendedControls = extendedControls.AsReadOnly();
 
-        OutputMPlaneQueue = new V4L2DeviceQueue(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_OUTPUT_MPLANE));
-        CaptureMPlaneQueue = new V4L2DeviceQueue(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_CAPTURE_MPLANE));
+        OutputMPlaneQueue = new V4L2DeviceOutputQueue(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_OUTPUT_MPLANE));
+        CaptureMPlaneQueue = new V4L2DeviceCaptureQueue(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_CAPTURE_MPLANE));
     }
 
-    public V4L2DeviceQueue OutputMPlaneQueue { get; }
+    public V4L2DeviceOutputQueue OutputMPlaneQueue { get; }
 
-    public V4L2DeviceQueue CaptureMPlaneQueue { get; }
+    public V4L2DeviceCaptureQueue CaptureMPlaneQueue { get; }
 
     public IReadOnlyCollection<V4L2DeviceControl> Controls { get; }
 
