@@ -1,4 +1,6 @@
-﻿using System.Runtime.Versioning;
+﻿using System;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
 
@@ -64,5 +66,32 @@ public class V4L2MMapMPlaneBuffer
 
         _mappedPlanes = mappedPlanes;
         _isMapped = true;
+    }
+
+    public void Unmap()
+    {
+        if (!_isMapped)
+        {
+            throw new Exception("Buffer was not mapped");
+        }
+
+        foreach (var plane in MappedPlanes)
+        {
+            var planePtr = plane.Pointer;
+            if (planePtr == IntPtr.Zero)
+            {
+                continue;
+            }
+
+            unsafe
+            {
+                var result = Libc.munmap((void*)planePtr, plane.Length);
+                if (result != 0)
+                {
+                    // TODO: error handling
+                    continue;
+                }
+            }
+        }
     }
 }

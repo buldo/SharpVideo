@@ -268,7 +268,7 @@ public class H264V4L2StatelessDecoder
 
         if (_supportsSliceParamsControl)
         {
-            var sliceParams = BuildSliceParams(header);
+            var sliceParams = SliceParamsMapper.BuildSliceParams(header);
             _device.SetSingleExtendedControl(
                 V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS,
                 sliceParams,
@@ -280,32 +280,6 @@ public class H264V4L2StatelessDecoder
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
             decodeParams,
             request);
-    }
-
-    private static V4L2CtrlH264SliceParams BuildSliceParams(SliceHeaderState header)
-    {
-        var sliceParams = new V4L2CtrlH264SliceParams
-        {
-            HeaderBitSize = 0,
-            FirstMbInSlice = header.first_mb_in_slice,
-            SliceType = (byte)(header.slice_type & 0x1F),
-            ColourPlaneId = (byte)(header.colour_plane_id & 0x3),
-            RedundantPicCnt = (byte)Math.Min(header.redundant_pic_cnt, byte.MaxValue),
-            CabacInitIdc = (byte)Math.Min(header.cabac_init_idc, byte.MaxValue),
-            SliceQpDelta = ClampToSByte(header.slice_qp_delta),
-            SliceQsDelta = ClampToSByte(header.slice_qs_delta),
-            DisableDeblockingFilterIdc = (byte)Math.Min(header.disable_deblocking_filter_idc, byte.MaxValue),
-            SliceAlphaC0OffsetDiv2 = ClampToSByte(header.slice_alpha_c0_offset_div2),
-            SliceBetaOffsetDiv2 = ClampToSByte(header.slice_beta_offset_div2),
-            NumRefIdxL0ActiveMinus1 = (byte)Math.Min(header.num_ref_idx_l0_active_minus1, byte.MaxValue),
-            NumRefIdxL1ActiveMinus1 = (byte)Math.Min(header.num_ref_idx_l1_active_minus1, byte.MaxValue),
-            Reserved = 0,
-            RefPicList0 = CreateReferenceList(),
-            RefPicList1 = CreateReferenceList(),
-            Flags = 0
-        };
-
-        return sliceParams;
     }
 
     private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps)
@@ -385,11 +359,6 @@ public class H264V4L2StatelessDecoder
         return decodeParams;
     }
 
-    private static V4L2H264Reference[] CreateReferenceList()
-    {
-        return new V4L2H264Reference[V4L2H264Constants.V4L2_H264_REF_LIST_LEN];
-    }
-
     private static V4L2H264DpbEntry[] CreateEmptyDpb()
     {
         var dpb = new V4L2H264DpbEntry[V4L2H264Constants.V4L2_H264_NUM_DPB_ENTRIES];
@@ -402,15 +371,6 @@ public class H264V4L2StatelessDecoder
         }
 
         return dpb;
-    }
-
-    private static sbyte ClampToSByte(int value)
-    {
-        if (value < sbyte.MinValue)
-            return sbyte.MinValue;
-        if (value > sbyte.MaxValue)
-            return sbyte.MaxValue;
-        return (sbyte)value;
     }
 
     private static uint DetermineDecodeFlags(SliceHeaderState header, bool isIdr)
@@ -504,10 +464,11 @@ public class H264V4L2StatelessDecoder
         StartStreaming();
 
         // Verify streaming is actually working
-        if (!VerifyStreamingState())
-        {
-            throw new InvalidOperationException("Failed to verify streaming state after initialization");
-        }
+        var outputFormat = _device.GetOutputFormatMPlane();
+        var captureFormat = _device.GetCaptureFormatMPlane();
+
+        _logger.LogDebug("Streaming verification: Output {OutputFormat:X8}, Capture {CaptureFormat:X8}",
+            outputFormat.PixelFormat, captureFormat.PixelFormat);
 
         _logger.LogInformation("Decoder initialization completed successfully");
     }
@@ -553,13 +514,6 @@ public class H264V4L2StatelessDecoder
         };
 
         _device.SetCaptureFormatMPlane(captureFormat);
-        var confirmedCaptureFormat = _device.GetCaptureFormatMPlane();
-
-        _logger.LogInformation(
-            "Set capture format: {Width}x{Height} fmt=0x{Pixel:X8}",
-            confirmedCaptureFormat.Width,
-            confirmedCaptureFormat.Height,
-            confirmedCaptureFormat.PixelFormat);
     }
 
     private void SetupAndMapBuffers()
@@ -605,87 +559,41 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Started capture buffer processing thread");
     }
 
-    private bool VerifyStreamingState()
-    {
-        var outputFormat = _device.GetOutputFormatMPlane();
-        var captureFormat = _device.GetCaptureFormatMPlane();
-
-        _logger.LogDebug("Streaming verification: Output {OutputFormat:X8}, Capture {CaptureFormat:X8}",
-            outputFormat.PixelFormat, captureFormat.PixelFormat);
-
-        return outputFormat.PixelFormat != 0 && captureFormat.PixelFormat != 0;
-    }
-
     private void Cleanup()
     {
         _logger.LogInformation("Cleaning up decoder resources...");
 
-        try
+        if (_captureThreadCts != null)
         {
-            // Stop capture buffer processing thread
-            if (_captureThreadCts != null)
+            _captureThreadCts.Cancel();
+            if (_captureThread is { IsAlive: true })
             {
-                _captureThreadCts.Cancel();
-                if (_captureThread != null && _captureThread.IsAlive)
+                if (!_captureThread.Join(TimeSpan.FromSeconds(2)))
                 {
-                    if (!_captureThread.Join(TimeSpan.FromSeconds(2)))
-                    {
-                        _logger.LogWarning("Capture thread did not stop gracefully");
-                    }
+                    _logger.LogWarning("Capture thread did not stop gracefully");
                 }
-                _captureThreadCts.Dispose();
-                _captureThreadCts = null;
-                _captureThread = null;
-                _logger.LogInformation("Stopped capture buffer processing thread");
             }
 
-            // Stop streaming
-            if (_device?.fd > 0)
-            {
-                _device.OutputMPlaneQueue.StreamOff();
-                _device.CaptureMPlaneQueue.StreamOff();
-            }
-
-            // Unmap buffers
-            UnmapBuffers(_device.OutputMPlaneQueue);
-            UnmapBuffers(_device.CaptureMPlaneQueue);
-
-            _logger.LogInformation("Decoder cleanup completed");
+            _captureThreadCts.Dispose();
+            _captureThreadCts = null;
+            _captureThread = null;
+            _logger.LogInformation("Stopped capture buffer processing thread");
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error during cleanup");
-        }
+
+        _device.OutputMPlaneQueue.StreamOff();
+        _device.CaptureMPlaneQueue.StreamOff();
+
+        UnmapBuffers(_device.OutputMPlaneQueue);
+        UnmapBuffers(_device.CaptureMPlaneQueue);
+
+        _logger.LogInformation("Decoder cleanup completed");
     }
 
     private void UnmapBuffers(V4L2DeviceQueue queue)
     {
         foreach (var buffer in queue.BuffersPool.Buffers)
         {
-            for (int p = 0; p < buffer.MappedPlanes.Count; p++)
-            {
-                var planePtr = buffer.MappedPlanes[p].Pointer;
-                if (planePtr == IntPtr.Zero)
-                    continue;
-
-                try
-                {
-                    unsafe
-                    {
-                        var result = Libc.munmap((void*)planePtr, buffer.MappedPlanes[p].Length);
-                        if (result != 0)
-                        {
-                            var errno = Marshal.GetLastPInvokeError();
-                            _logger.LogWarning("munmap failed for buffer {Index} plane {Plane}: errno {Errno}",
-                                buffer.Index, p, errno);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to munmap buffer {Index} plane {Plane}", buffer.Index, p);
-                }
-            }
+            buffer.Unmap();
         }
     }
 
