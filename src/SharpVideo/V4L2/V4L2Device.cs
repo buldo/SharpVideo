@@ -52,24 +52,6 @@ public class V4L2Device : IDisposable
         }
     }
 
-    public void StreamOn(V4L2BufferType type)
-    {
-        var outputResult = LibV4L2.StreamOn(_deviceFd, type);
-        if (!outputResult.Success)
-        {
-            throw new Exception($"Failed to start {type} streaming: {outputResult.ErrorMessage}");
-        }
-    }
-
-    public void StreamOff(V4L2BufferType type)
-    {
-        var outputResult = LibV4L2.StreamOff(_deviceFd, type);
-        if (!outputResult.Success)
-        {
-            throw new Exception($"Failed to start {type} streaming: {outputResult.ErrorMessage}");
-        }
-    }
-
     /// <summary>
     /// Try to set a simple V4L2 control
     /// </summary>
@@ -94,7 +76,6 @@ public class V4L2Device : IDisposable
             return false;
         }
     }
-
 
     /// <summary>
     /// Set a single extended control - much simpler and more predictable

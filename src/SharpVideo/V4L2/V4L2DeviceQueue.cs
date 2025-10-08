@@ -168,6 +168,24 @@ public class V4L2DeviceQueue
         _isInitialized = true;
     }
 
+    public void StreamOn()
+    {
+        var outputResult = LibV4L2.StreamOn(_deviceFd, _type);
+        if (!outputResult.Success)
+        {
+            throw new Exception($"Failed to start {_type} streaming: {outputResult.ErrorMessage}");
+        }
+    }
+
+    public void StreamOff()
+    {
+        var outputResult = LibV4L2.StreamOff(_deviceFd, _type);
+        if (!outputResult.Success)
+        {
+            throw new Exception($"Failed to start {_type} streaming: {outputResult.ErrorMessage}");
+        }
+    }
+
     protected void EnsureInitialised()
     {
         if (!_isInitialized)

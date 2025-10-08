@@ -603,12 +603,10 @@ public class H264V4L2StatelessDecoder
                 _device.CaptureMPlaneQueue.ReuseBuffer(i);
             }
 
-            // Start streaming on OUTPUT queue first
-            _device.StreamOn(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
+            _device.OutputMPlaneQueue.StreamOn();
             _logger.LogTrace("Started OUTPUT streaming");
 
-            // Start streaming on CAPTURE queue
-            _device.StreamOn(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
+            _device.CaptureMPlaneQueue.StreamOn();
             _logger.LogTrace("Started CAPTURE streaming");
 
             _logger.LogInformation("V4L2 streaming started successfully");
@@ -667,8 +665,8 @@ public class H264V4L2StatelessDecoder
             // Stop streaming
             if (_device?.fd > 0)
             {
-                _device.StreamOff(V4L2BufferType.VIDEO_OUTPUT_MPLANE);
-                _device.StreamOff(V4L2BufferType.VIDEO_CAPTURE_MPLANE);
+                _device.OutputMPlaneQueue.StreamOff();
+                _device.CaptureMPlaneQueue.StreamOff();
             }
 
             // Unmap buffers
