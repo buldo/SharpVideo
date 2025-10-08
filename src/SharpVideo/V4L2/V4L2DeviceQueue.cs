@@ -1,4 +1,5 @@
-﻿using System.Runtime.Versioning;
+﻿using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Threading.Tasks.Dataflow;
 
 using SharpVideo.Linux.Native;
@@ -27,7 +28,7 @@ public class V4L2DeviceQueue
 
     public V4L2QueueBufferPool BuffersPool => _isInitialized ? _buffersPool! : throw new Exception("Not initialised");
 
-    public void Enqueue(V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null)
+    internal void Enqueue(V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null)
     {
         EnsureInitialised();
 
@@ -75,7 +76,7 @@ public class V4L2DeviceQueue
     /// Dequeues a buffer from the queue. Returns null if no buffer is available (EAGAIN).
     /// </summary>
     /// <returns>Dequeued buffer with metadata, or null if no buffer available</returns>
-    public DequeuedBuffer? Dequeue()
+    internal DequeuedBuffer? Dequeue()
     {
         EnsureInitialised();
 
@@ -124,7 +125,7 @@ public class V4L2DeviceQueue
     /// </summary>
     /// <param name="timeoutMs">Timeout in milliseconds</param>
     /// <returns>Poll result (>0 if events occurred, 0 if timeout, <0 if error) and returned events</returns>
-    public (int result, PollEvents revents) Poll(int timeoutMs)
+    internal (int result, PollEvents revents) Poll(int timeoutMs)
     {
         EnsureInitialised();
 
@@ -173,13 +174,5 @@ public class V4L2DeviceQueue
         {
             throw new Exception("Device queue not initialized");
         }
-    }
-}
-
-[SupportedOSPlatform("linux")]
-public class V4L2DeviceCaptureQueue : V4L2DeviceQueue
-{
-    internal V4L2DeviceCaptureQueue(int deviceFd, V4L2BufferType type, Func<uint> planesCountAccessor) : base(deviceFd, type, planesCountAccessor)
-    {
     }
 }

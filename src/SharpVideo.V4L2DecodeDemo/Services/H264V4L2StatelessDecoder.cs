@@ -447,68 +447,22 @@ public class H264V4L2StatelessDecoder
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            // Wait for capture buffers to be ready (1 second timeout)
-            var (pollResult, revents) = _device.CaptureMPlaneQueue.Poll(1000);
-
-                if (pollResult < 0)
-                {
-                    var errno = Marshal.GetLastPInvokeError();
-                    if (errno == 4) // EINTR - interrupted by signal
-                    {
-                        continue;
-                    }
-                    _logger.LogError("Poll failed with errno {Errno}", errno);
-                    break;
-                }
-
-                if (pollResult == 0)
-                {
-                    // Timeout - check cancellation and continue
-                    continue;
-                }
-
-                // Check if there's data ready - if not, skip processing
-                if (!revents.HasFlag(PollEvents.POLLIN))
-                {
-                    continue;
-                }
-
-                // Process all available capture buffers
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    var dequeuedBuffer = _device.CaptureMPlaneQueue.Dequeue();
-                    if (dequeuedBuffer == null)
-                    {
-                        // No more buffers available
-                        break;
-                    }
-
-                    _framesDecoded++;
-                    FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
-                    {
-                        FrameNumber = _framesDecoded,
-                        BytesUsed = dequeuedBuffer.TotalBytesUsed,
-                        Timestamp = DateTime.UtcNow
-                    });
-
-                    var mappedBuffer = _device.CaptureMPlaneQueue.BuffersPool.Buffers[(int)dequeuedBuffer.Index];
-
-                    // Reset plane bytes used before requeueing
-                    for (int p = 0; p < mappedBuffer.Planes.Length; p++)
-                    {
-                        mappedBuffer.Planes[p].BytesUsed = 0;
-                    }
-
-                    try
-                    {
-                        _device.CaptureMPlaneQueue.Enqueue(mappedBuffer);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to requeue capture buffer {Index}", dequeuedBuffer.Index);
-                    }
-                }
+            var dequeuedBuffer = _device.CaptureMPlaneQueue.WaitForReadyBuffer(1000);
+            if (dequeuedBuffer == null)
+            {
+                continue;
             }
+
+            _framesDecoded++;
+            FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
+            {
+                FrameNumber = _framesDecoded,
+                BytesUsed = dequeuedBuffer.TotalBytesUsed,
+                Timestamp = DateTime.UtcNow
+            });
+
+            _device.CaptureMPlaneQueue.ReuseBuffer(dequeuedBuffer.Index);
+        }
 
         _logger.LogInformation("Capture buffer processing thread stopped");
     }
@@ -644,10 +598,9 @@ public class H264V4L2StatelessDecoder
         try
         {
             // Queue all capture buffers before starting streaming
-            for (int i = 0; i < _device.CaptureMPlaneQueue.BuffersPool.Buffers.Count; i++)
+            for (uint i = 0; i < _device.CaptureMPlaneQueue.BuffersPool.Buffers.Count; i++)
             {
-                var mappedBuffer = _device.CaptureMPlaneQueue.BuffersPool.Buffers[i];
-                _device.CaptureMPlaneQueue.Enqueue(mappedBuffer);
+                _device.CaptureMPlaneQueue.ReuseBuffer(i);
             }
 
             // Start streaming on OUTPUT queue first
