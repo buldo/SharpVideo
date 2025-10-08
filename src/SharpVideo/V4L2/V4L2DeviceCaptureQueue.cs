@@ -45,4 +45,13 @@ public class V4L2DeviceCaptureQueue : V4L2DeviceQueue
 
         Enqueue(mappedBuffer);
     }
+
+    public void EnqueueAllBuffers()
+    {
+        foreach (var _ in BuffersPool.Buffers)
+        {
+            var buffer = BuffersPool.AcquireBuffer();
+            ReuseBuffer(buffer.Index);
+        }
+    }
 }

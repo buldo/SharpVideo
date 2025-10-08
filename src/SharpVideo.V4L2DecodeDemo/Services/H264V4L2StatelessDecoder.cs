@@ -450,9 +450,11 @@ public class H264V4L2StatelessDecoder
             var dequeuedBuffer = _device.CaptureMPlaneQueue.WaitForReadyBuffer(1000);
             if (dequeuedBuffer == null)
             {
+                _logger.LogInformation("dequeuedBuffer is empty");
                 continue;
             }
 
+            _logger.LogInformation("Got dequeuedBuffer with data");
             _framesDecoded++;
             FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
             {
@@ -565,9 +567,7 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Setting up and mapping buffers...");
 
         // Setup OUTPUT buffers for slice data with proper V4L2 mmap
-        SetupBufferQueue(
-            _device.OutputMPlaneQueue,
-            _configuration.OutputBufferCount);
+        SetupBufferQueue(_device.OutputMPlaneQueue, _configuration.OutputBufferCount);
         if (_mediaDevice != null)
         {
             _mediaDevice.AllocateMediaRequests(_configuration.RequestPoolSize);
@@ -575,14 +575,10 @@ public class H264V4L2StatelessDecoder
         }
 
         // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
-        SetupBufferQueue(
-            _device.CaptureMPlaneQueue,
-            _configuration.CaptureBufferCount);
+        SetupBufferQueue(_device.CaptureMPlaneQueue, _configuration.CaptureBufferCount);
     }
 
-    private void SetupBufferQueue(
-        V4L2DeviceQueue queue,
-        uint bufferCount)
+    private void SetupBufferQueue(V4L2DeviceQueue queue, uint bufferCount)
     {
         queue.Init(V4L2Memory.MMAP, bufferCount);
         foreach (var buffer in queue.BuffersPool.Buffers)
@@ -595,37 +591,18 @@ public class H264V4L2StatelessDecoder
     {
         _logger.LogInformation("Starting V4L2 streaming...");
 
-        try
+        _device.CaptureMPlaneQueue.EnqueueAllBuffers();
+        _device.OutputMPlaneQueue.StreamOn();
+        _device.CaptureMPlaneQueue.StreamOn();
+
+        _captureThreadCts = new CancellationTokenSource();
+        _captureThread = new Thread(ProcessCaptureBuffersThreadProc)
         {
-            // Queue all capture buffers before starting streaming
-            for (uint i = 0; i < _device.CaptureMPlaneQueue.BuffersPool.Buffers.Count; i++)
-            {
-                _device.CaptureMPlaneQueue.ReuseBuffer(i);
-            }
-
-            _device.OutputMPlaneQueue.StreamOn();
-            _logger.LogTrace("Started OUTPUT streaming");
-
-            _device.CaptureMPlaneQueue.StreamOn();
-            _logger.LogTrace("Started CAPTURE streaming");
-
-            _logger.LogInformation("V4L2 streaming started successfully");
-
-            // Start capture buffer processing thread
-            _captureThreadCts = new CancellationTokenSource();
-            _captureThread = new Thread(ProcessCaptureBuffersThreadProc)
-            {
-                Name = "CaptureBufferProcessor",
-                IsBackground = true
-            };
-            _captureThread.Start();
-            _logger.LogInformation("Started capture buffer processing thread");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to start streaming");
-            throw new InvalidOperationException($"Failed to start streaming: {ex.Message}", ex);
-        }
+            Name = "CaptureBufferProcessor",
+            IsBackground = true
+        };
+        _captureThread.Start();
+        _logger.LogInformation("Started capture buffer processing thread");
     }
 
     private bool VerifyStreamingState()
