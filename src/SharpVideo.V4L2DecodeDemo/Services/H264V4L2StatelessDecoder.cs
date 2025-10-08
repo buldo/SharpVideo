@@ -410,11 +410,9 @@ public class H264V4L2StatelessDecoder
             var dequeuedBuffer = _device.CaptureMPlaneQueue.WaitForReadyBuffer(1000);
             if (dequeuedBuffer == null)
             {
-                _logger.LogInformation("dequeuedBuffer is empty");
                 continue;
             }
 
-            _logger.LogInformation("Got dequeuedBuffer with data");
             _framesDecoded++;
             FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
             {

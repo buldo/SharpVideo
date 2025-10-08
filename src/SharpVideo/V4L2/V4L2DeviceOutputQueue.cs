@@ -34,6 +34,7 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
         EnsureInitialised();
         var buffer = BuffersPool.AcquireBuffer();
         buffer.CopyDataToPlane(data, 0);
+        _associatedMediaRequests[buffer.Index] = request;
         Enqueue(buffer, request);
     }
 
