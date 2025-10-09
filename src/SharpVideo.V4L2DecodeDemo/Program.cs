@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2DecodeDemo.Services;
+using SixLabors.ImageSharp;
 
 namespace SharpVideo.V4L2DecodeDemo;
 
@@ -55,13 +56,14 @@ internal class Program
             RequestPoolSize = 32
         };
 
-        await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config);
+        var saver = new FrameSaver("frames", loggerFactory.CreateLogger<FrameSaver>());
 
         int decodedFrames = 0;
-        decoder.FrameDecoded += (sender, e) =>
+        await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config, span =>
         {
             decodedFrames++;
-        };
+            saver.TryEnqueueFrame(span, 1920, 1080);
+        });
 
         await using var fileStream = File.OpenRead(filePath);
         var decodeStopWatch = Stopwatch.StartNew();
@@ -70,4 +72,5 @@ internal class Program
         logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
         logger.LogInformation("Amount of decoded frames: {DecodedFrames}", decodedFrames);
     }
+
 }

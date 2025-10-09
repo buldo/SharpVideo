@@ -19,6 +19,7 @@ public class H264V4L2StatelessDecoder
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
 
     private readonly DecoderConfiguration _configuration;
+    private readonly Action<ReadOnlySpan<byte>> _processDecodedAction;
 
     private bool _disposed;
     private int _framesDecoded;
@@ -41,18 +42,18 @@ public class H264V4L2StatelessDecoder
         public bool IsLongTerm { get; set; }
     }
 
-    public event EventHandler<FrameDecodedEventArgs>? FrameDecoded;
-
     public H264V4L2StatelessDecoder(
         V4L2Device device,
         MediaDevice? mediaDevice,
         ILogger<H264V4L2StatelessDecoder> logger,
-        DecoderConfiguration? configuration = null)
+        DecoderConfiguration configuration,
+        Action<ReadOnlySpan<byte>> processDecodedAction)
     {
-        _device = device ?? throw new ArgumentNullException(nameof(device));
+        _device = device;
         _mediaDevice = mediaDevice;
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _configuration = configuration ?? new DecoderConfiguration();
+        _logger = logger;
+        _configuration = configuration;
+        _processDecodedAction = processDecodedAction;
         _supportsSliceParamsControl =
             device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
     }
@@ -414,12 +415,9 @@ public class H264V4L2StatelessDecoder
             }
 
             _framesDecoded++;
-            FrameDecoded?.Invoke(this, new FrameDecodedEventArgs
-            {
-                FrameNumber = _framesDecoded,
-                BytesUsed = dequeuedBuffer.TotalBytesUsed,
-                Timestamp = DateTime.UtcNow
-            });
+
+            var buffer = _device.CaptureMPlaneQueue.BuffersPool.Buffers[(int)dequeuedBuffer.Index];
+            _processDecodedAction(buffer.MappedPlanes[0].AsSpan());
 
             _device.CaptureMPlaneQueue.ReuseBuffer(dequeuedBuffer.Index);
         }
