@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\SharpVideo.Linux.Native\SharpVideo.Linux.Native.csproj" />
-    <ProjectReference Include="..\SharpVideo\SharpVideo.csproj" />
+    <ProjectReference Include="../../SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
+    <ProjectReference Include="../../SharpVideo/SharpVideo.csproj" />
   </ItemGroup>
 
 </Project>

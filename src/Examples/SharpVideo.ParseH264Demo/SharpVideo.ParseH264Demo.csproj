@@ -5,12 +5,11 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\SharpVideo\SharpVideo.csproj" />
-    <ProjectReference Include="..\SharpVideo.Linux.Native\SharpVideo.Linux.Native.csproj" />
+    <ProjectReference Include="../SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
+    <ProjectReference Include="../../SharpVideo/SharpVideo.csproj" />
   </ItemGroup>
 
 </Project>

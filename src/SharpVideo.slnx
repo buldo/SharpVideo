@@ -1,0 +1,17 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="Examples/SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
+  <Project Path="Examples/SharpVideo.DrmDemo/SharpVideo.DrmDemo.csproj" />
+  <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
+  <Project Path="SharpVideo.Linux.Native.Tests/SharpVideo.Linux.Native.Tests.csproj" />
+  <Project Path="SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
+  <Project Path="Examples/SharpVideo.ParseH264Demo/SharpVideo.ParseH264Demo.csproj" />
+  <Project Path="SharpVideo.Tests/SharpVideo.Tests.csproj" />
+  <Project Path="Examples/SharpVideo.V4L2DecodeDemo/SharpVideo.V4L2DecodeDemo.csproj" />
+  <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
+  <Project Path="SharpVideo/SharpVideo.csproj" />
+</Solution>
