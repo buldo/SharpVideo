@@ -2,7 +2,8 @@ using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2DecodeDemo.Services;
+using SharpVideo.V4L2StatelessDecoder.Models;
+using SharpVideo.V4L2StatelessDecoder.Services;
 using SixLabors.ImageSharp;
 
 namespace SharpVideo.V4L2DecodeDemo;
@@ -49,7 +50,7 @@ internal class Program
         }
 
         var decoderLogger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
-        var config = new Models.DecoderConfiguration
+        var config = new DecoderConfiguration
         {
             OutputBufferCount = 16,
             CaptureBufferCount = 16,

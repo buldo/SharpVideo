@@ -12,15 +12,11 @@
   <ItemGroup>
     <ProjectReference Include="../../SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
     <ProjectReference Include="../../SharpVideo/SharpVideo.csproj" />
+    <ProjectReference Include="..\SharpVideo.DemoMedia\SharpVideo.DemoMedia.csproj" />
+    <ProjectReference Include="..\SharpVideo.V4L2StatelessDecoder\SharpVideo.V4L2StatelessDecoder.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.9" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.9" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <None Update="test_video.h264">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
 
 </Project>
