@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace SharpVideo.H264;
+﻿namespace SharpVideo.H264;
 
 /// <summary>
 /// The parsed state of an seq_parameter_set_data() RBSP. Only some select

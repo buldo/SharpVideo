@@ -10,7 +10,7 @@ public class V4L2Device : IDisposable
 {
     private readonly int _deviceFd;
 
-    private readonly Dictionary<(V4L2BufferType Type, V4L2Memory Memory), V4L2RequestedBuffers> _bufferInfos = new();
+    private readonly Dictionary<(V4L2BufferType queue, V4L2Memory memory), V4L2DeviceQueue> _queues = new();
 
     private bool _disposed = false;
 
@@ -19,13 +19,18 @@ public class V4L2Device : IDisposable
         _deviceFd = deviceFd;
         Controls = controls.AsReadOnly();
         ExtendedControls = extendedControls.AsReadOnly();
+
+        OutputMPlaneQueue = new V4L2DeviceOutputQueue(_deviceFd, V4L2BufferType.VIDEO_OUTPUT_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_OUTPUT_MPLANE));
+        CaptureMPlaneQueue = new V4L2DeviceCaptureQueue(_deviceFd, V4L2BufferType.VIDEO_CAPTURE_MPLANE, () => PlanesCountAccessor(V4L2BufferType.VIDEO_CAPTURE_MPLANE));
     }
+
+    public V4L2DeviceOutputQueue OutputMPlaneQueue { get; }
+
+    public V4L2DeviceCaptureQueue CaptureMPlaneQueue { get; }
 
     public IReadOnlyCollection<V4L2DeviceControl> Controls { get; }
 
     public IReadOnlyCollection<V4L2DeviceExtendedControl> ExtendedControls { get; }
-
-    public IReadOnlyCollection<V4L2RequestedBuffers> RequestedBufferInfos => _bufferInfos.Values;
 
     public void SetFormat(ref V4L2Format format)
     {
@@ -44,24 +49,6 @@ public class V4L2Device : IDisposable
         {
             throw new Exception(
                 $"Failed to get format {format.Type}: {result.ErrorCode}: {result.ErrorMessage}");
-        }
-    }
-
-    public void StreamOn(V4L2BufferType type)
-    {
-        var outputResult = LibV4L2.StreamOn(_deviceFd, type);
-        if (!outputResult.Success)
-        {
-            throw new Exception($"Failed to start {type} streaming: {outputResult.ErrorMessage}");
-        }
-    }
-
-    public void StreamOff(V4L2BufferType type)
-    {
-        var outputResult = LibV4L2.StreamOff(_deviceFd, type);
-        if (!outputResult.Success)
-        {
-            throw new Exception($"Failed to start {type} streaming: {outputResult.ErrorMessage}");
         }
     }
 
@@ -89,7 +76,6 @@ public class V4L2Device : IDisposable
             return false;
         }
     }
-
 
     /// <summary>
     /// Set a single extended control - much simpler and more predictable
@@ -149,26 +135,6 @@ public class V4L2Device : IDisposable
         }
     }
 
-    public V4L2RequestedBuffers RequestBuffers(uint count, V4L2BufferType type, V4L2Memory memory)
-    {
-        var reqBufs = new V4L2RequestBuffers
-        {
-            Count = count,
-            Type = type,
-            Memory = memory
-        };
-
-        var result = LibV4L2.RequestBuffers(_deviceFd, ref reqBufs);
-        if (!result.Success)
-        {
-            throw new Exception($"Failed to request {count} buffers with {type} and {memory}. {result.ErrorCode}: {result.ErrorMessage}");
-        }
-
-        var info = new V4L2RequestedBuffers(reqBufs.Type, reqBufs.Memory, reqBufs.Count);
-        _bufferInfos[(info.Type, info.Memory)] = info;
-        return info;
-    }
-
     private static uint GetControlClass(uint controlId)
     {
         // Mirror V4L2_CTRL_ID2CLASS behaviour while masking out NEXT_CTRL flag.
@@ -180,38 +146,6 @@ public class V4L2Device : IDisposable
 
         return controlClass != 0 ? controlClass : V4l2ControlsConstants.V4L2_CTRL_CLASS_USER;
     }
-
-    public void QueueOutputBuffer(uint bufferIndex, Linux.Native.V4L2Plane[] planes, MediaRequest? request = null)
-    {
-        var buffer = new V4L2Buffer
-        {
-            Index = bufferIndex,
-            Type = V4L2BufferType.VIDEO_OUTPUT_MPLANE,
-            Memory = V4L2Memory.MMAP,
-            Length = (uint)planes.Length,
-            Field = (uint)V4L2Field.NONE,
-            Flags = (uint)V4L2BufferFlags.REQUEST_FD,
-            BytesUsed = 0,
-            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-            Sequence = 0,
-            RequestFd = request?.Fd ?? 0
-        };
-
-        unsafe
-        {
-            fixed (V4L2Plane* planePtr = planes)
-            {
-                buffer.Planes = planePtr;
-
-                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
-                if (!result.Success)
-                {
-                    throw new Exception($"Failed to queue output buffer");
-                }
-            }
-        }
-    }
-
 
     // TODO: Remove
     public int fd
@@ -286,5 +220,17 @@ public class V4L2Device : IDisposable
         {
             throw new ObjectDisposedException(nameof(V4L2Device));
         }
+    }
+
+    private uint PlanesCountAccessor(V4L2BufferType type)
+    {
+        var format = new V4L2Format
+        {
+            Type = type
+        };
+
+        GetFormat(ref format);
+
+        return format.Pix_mp.NumPlanes;
     }
 }

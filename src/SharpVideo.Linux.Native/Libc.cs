@@ -149,4 +149,17 @@ public static partial class Libc
         EntryPoint = "mprotect",
         SetLastError = true)]
     public static unsafe partial int mprotect(void* addr, nuint length, ProtFlags prot);
+
+    /// <summary>
+    /// Wait for some event on a file descriptor.
+    /// </summary>
+    /// <param name="fds">Array of pollfd structures.</param>
+    /// <param name="nfds">Number of file descriptors.</param>
+    /// <param name="timeout">Timeout in milliseconds (-1 for infinite).</param>
+    /// <returns>Number of file descriptors with events, 0 on timeout, -1 on error.</returns>
+    [LibraryImport(
+        LibraryName,
+        EntryPoint = "poll",
+        SetLastError = true)]
+    public static unsafe partial int poll(ref PollFd fds, nuint nfds, int timeout);
 }
