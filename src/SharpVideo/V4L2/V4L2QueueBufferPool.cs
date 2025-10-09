@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Runtime.Versioning;
+using System.Threading;
 
 using SharpVideo.Linux.Native;
 
@@ -11,7 +12,7 @@ public class V4L2QueueBufferPool
     private readonly V4L2MMapMPlaneBuffer[] _buffers;
 
     private readonly ConcurrentQueue<V4L2MMapMPlaneBuffer> _freeBuffers = new();
-    private readonly SemaphoreSlim _semaphore = new(0);
+    private readonly AutoResetEvent _waitHandle = new(false);
 
     private V4L2QueueBufferPool(V4L2MMapMPlaneBuffer[] buffers, uint bufferPlaneCount)
     {
@@ -85,11 +86,20 @@ public class V4L2QueueBufferPool
 
     internal V4L2MMapMPlaneBuffer AcquireBuffer()
     {
-        _semaphore.Wait();
-
-        if (_freeBuffers.TryDequeue(out var item))
+        // TODO: rewrite
+        //while (!_disposed)
+        while (true)
         {
-            return item;
+            if (_freeBuffers.TryDequeue(out var item))
+            {
+                return item;
+            }
+
+            // Wait for signal that item is available
+            if (!_waitHandle.WaitOne())
+            {
+                throw new TimeoutException("Dequeue operation timed out");
+            }
         }
 
         throw new Exception("Failed to acquire buffer");
@@ -99,6 +109,6 @@ public class V4L2QueueBufferPool
     {
         var buffer = _buffers[index];
         _freeBuffers.Enqueue(buffer);
-        _semaphore.Release();
+        _waitHandle.Set();
     }
 }
