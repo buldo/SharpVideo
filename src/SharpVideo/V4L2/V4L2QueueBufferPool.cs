@@ -18,6 +18,10 @@ public class V4L2QueueBufferPool
     {
         _buffers = buffers;
         BufferPlaneCount = bufferPlaneCount;
+        foreach(var buf in _buffers)
+        {
+            _freeBuffers.Enqueue(buf);
+        }
     }
 
     public uint BufferPlaneCount { get; }

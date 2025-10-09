@@ -62,7 +62,7 @@ internal class Program
         await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config, span =>
         {
             decodedFrames++;
-            saver.TryEnqueueFrame(span, 1920, 1080);
+            //saver.TryEnqueueFrame(span, 1920, 1080);
         });
 
         await using var fileStream = File.OpenRead(filePath);
