@@ -4,6 +4,9 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path="../README.md" />
+  </Folder>
   <Project Path="Examples/SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
   <Project Path="Examples/SharpVideo.DrmDemo/SharpVideo.DrmDemo.csproj" />
   <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
