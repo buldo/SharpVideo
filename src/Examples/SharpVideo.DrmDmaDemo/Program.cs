@@ -41,8 +41,8 @@ namespace SharpVideo.DrmDmaDemo
             // Use 1080p resolution for the buffer
             const int width = 1920;
             const int height = 1080;
-            const int bpp = 4; // XR24 has 4 bytes per pixel
-            ulong bufferSize = (ulong)(width * height * bpp);
+            // NV12 format: Y plane (width * height) + UV plane (width * height / 2)
+            ulong bufferSize = (ulong)(width * height * 3.0 / 2.0);
 
             var dmaBuf = allocator.Allocate(bufferSize);
             if (dmaBuf == null)
@@ -65,9 +65,9 @@ namespace SharpVideo.DrmDmaDemo
             Console.WriteLine($"DMA buffer mapped");
 
             // Fill with test pattern
-            TestPattern.FillXR24(dmaBuf.GetMappedSpan(), width, height);
+            TestPattern.FillNV12(dmaBuf.GetMappedSpan(), width, height);
 
-            Console.WriteLine("Filled DMA buffer with XR24 test pattern.");
+            Console.WriteLine("Filled DMA buffer with NV12 test pattern.");
 
             dmaBuf.SyncMap();
             Console.WriteLine("Synced DMA buffer.");
@@ -204,12 +204,16 @@ namespace SharpVideo.DrmDmaDemo
 
                 Console.WriteLine($"Converted DMA FD {dmaBuffer.Fd} to handle {handle}");
 
-                // Create framebuffer
-                uint pitch = (uint)(width * 4); // XR24 has 4 bytes per pixel
-                uint* handles = stackalloc uint[4] { handle, 0, 0, 0 };
-                uint* pitches = stackalloc uint[4] { pitch, 0, 0, 0 };
-                uint* offsets = stackalloc uint[4] { 0, 0, 0, 0 };
-                var format = KnownPixelFormats.DRM_FORMAT_XRGB8888;
+                // Create framebuffer for NV12 format
+                // NV12 has 2 planes: Y plane and interleaved UV plane
+                uint yPitch = (uint)width;
+                uint uvPitch = (uint)width;
+                uint yOffset = 0;
+                uint uvOffset = (uint)(width * height);
+                uint* handles = stackalloc uint[4] { handle, handle, 0, 0 };
+                uint* pitches = stackalloc uint[4] { yPitch, uvPitch, 0, 0 };
+                uint* offsets = stackalloc uint[4] { yOffset, uvOffset, 0, 0 };
+                var format = KnownPixelFormats.DRM_FORMAT_NV12;
                 var resultAddFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, format.Fourcc, handles, pitches, offsets, out var fbId, 0);
                 if (resultAddFb != 0)
                 {
@@ -219,47 +223,66 @@ namespace SharpVideo.DrmDmaDemo
 
                 Console.WriteLine($"Created framebuffer with ID: {fbId}");
 
-                // Set plane
+                // For NV12 (YUV format), we need to ensure CRTC is enabled first
+                // We'll set up the CRTC without a framebuffer (or with a dummy one)
+                // Then use the plane to display the NV12 content
+                
+                // First, check if CRTC is already active
+                var crtcInfo = LibDrm.drmModeGetCrtc(drmDevice.DeviceFd, crtcId);
+                bool needsCrtcSetup = crtcInfo == null || crtcInfo->BufferId == 0;
+
+                if (needsCrtcSetup)
+                {
+                    Console.WriteLine("CRTC needs to be initialized, setting up mode...");
+                    
+                    // Convert managed mode to native mode
+                    var nativeMode = new DrmModeModeInfo
+                    {
+                        Clock = mode.Clock,
+                        HDisplay = mode.HDisplay,
+                        HSyncStart = mode.HSyncStart,
+                        HSyncEnd = mode.HSyncEnd,
+                        HTotal = mode.HTotal,
+                        HSkew = mode.HSkew,
+                        VDisplay = mode.VDisplay,
+                        VSyncStart = mode.VSyncStart,
+                        VSyncEnd = mode.VSyncEnd,
+                        VTotal = mode.VTotal,
+                        VScan = mode.VScan,
+                        VRefresh = mode.VRefresh,
+                        Flags = mode.Flags,
+                        Type = mode.Type
+                    };
+
+                    // Copy the mode name
+                    var nameBytes = System.Text.Encoding.UTF8.GetBytes(mode.Name ?? "");
+                    for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
+                    {
+                        nativeMode.Name[i] = nameBytes[i];
+                    }
+
+                    // Set CRTC with mode but no framebuffer (0 = no framebuffer)
+                    uint connectorId = connector.ConnectorId;
+                    result = LibDrm.drmModeSetCrtc(drmDevice.DeviceFd, crtcId, 0, 0, 0, &connectorId, 1, &nativeMode);
+                    if (result != 0)
+                    {
+                        Console.WriteLine($"Failed to set CRTC mode: {result}");
+                        LibDrm.drmModeRmFB(drmDevice.DeviceFd, fbId);
+                        return false;
+                    }
+                    Console.WriteLine("CRTC mode set successfully");
+                }
+
+                if (crtcInfo != null)
+                {
+                    LibDrm.drmModeFreeCrtc(crtcInfo);
+                }
+
+                // Now set the plane with the NV12 framebuffer
                 result = LibDrm.drmModeSetPlane(drmDevice.DeviceFd, plane.Id, crtcId, fbId, 0, 0, 0, (uint)width, (uint)height, 0, 0, (uint)width << 16, (uint)height << 16);
                 if (result != 0)
                 {
                     Console.WriteLine($"Failed to set plane: {result}");
-                    LibDrm.drmModeRmFB(drmDevice.DeviceFd, fbId);
-                    return false;
-                }
-
-                // Convert managed mode to native mode using normal initialization
-                var nativeMode = new DrmModeModeInfo
-                {
-                    Clock = mode.Clock,
-                    HDisplay = mode.HDisplay,
-                    HSyncStart = mode.HSyncStart,
-                    HSyncEnd = mode.HSyncEnd,
-                    HTotal = mode.HTotal,
-                    HSkew = mode.HSkew,
-                    VDisplay = mode.VDisplay,
-                    VSyncStart = mode.VSyncStart,
-                    VSyncEnd = mode.VSyncEnd,
-                    VTotal = mode.VTotal,
-                    VScan = mode.VScan,
-                    VRefresh = mode.VRefresh,
-                    Flags = mode.Flags,
-                    Type = mode.Type
-                };
-
-                // Copy the mode name
-                var nameBytes = System.Text.Encoding.UTF8.GetBytes(mode.Name ?? "");
-                for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
-                {
-                    nativeMode.Name[i] = nameBytes[i];
-                }
-
-                // Set CRTC
-                uint connectorId = connector.ConnectorId;
-                result = LibDrm.drmModeSetCrtc(drmDevice.DeviceFd, crtcId, fbId, 0, 0, &connectorId, 1, &nativeMode);
-                if (result != 0)
-                {
-                    Console.WriteLine($"Failed to set CRTC: {result}");
                     LibDrm.drmModeRmFB(drmDevice.DeviceFd, fbId);
                     return false;
                 }

@@ -68,4 +68,43 @@ public static class TestPattern
             }
         }
     }
+
+    public static void FillNV12(Span<byte> buffer, int width, int height)
+    {
+        // NV12 format: Y plane followed by interleaved UV plane
+        // Y plane is full resolution (width * height)
+        // UV plane is half resolution (width * height / 2)
+        int yPlaneSize = width * height;
+        int uvPlaneSize = width * height / 2;
+
+        var yPlane = buffer.Slice(0, yPlaneSize);
+        var uvPlane = buffer.Slice(yPlaneSize, uvPlaneSize);
+
+        // Fill with color bar pattern using standard ITU-R BT.601 values
+        var barWidth = width / ColorBars.Length;
+
+        // Fill Y plane
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                var barIndex = Math.Min(x / barWidth, ColorBars.Length - 1);
+                var color = ColorBars[barIndex];
+                yPlane[y * width + x] = color.Y;
+            }
+        }
+
+        // Fill UV plane (interleaved, half resolution)
+        for (int y = 0; y < height / 2; y++)
+        {
+            for (int x = 0; x < width / 2; x++)
+            {
+                var barIndex = Math.Min((x * 2) / barWidth, ColorBars.Length - 1);
+                var color = ColorBars[barIndex];
+                int uvIndex = (y * width) + (x * 2);
+                uvPlane[uvIndex] = color.U;
+                uvPlane[uvIndex + 1] = color.V;
+            }
+        }
+    }
 }
