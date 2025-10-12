@@ -79,7 +79,7 @@ namespace SharpVideo.DrmDmaDemo
                 : "Warning: Failed to make buffer read-only, continuing anyway.");
 
             // Present the buffer on the display
-            if (PresentBuffer(drmDevice, dmaBuf, width, height))
+            if (PresentBuffer(drmDevice, dmaBuf, width, height, allocator))
             {
                 Console.WriteLine("Successfully presented buffer on display.");
 
@@ -101,7 +101,7 @@ namespace SharpVideo.DrmDmaDemo
         }
 
         [SupportedOSPlatform("linux")]
-        private static bool PresentBuffer(DrmDevice drmDevice, DmaBuffers.DmaBuffer nv12Buffer, int width, int height)
+        private static bool PresentBuffer(DrmDevice drmDevice, DmaBuffers.DmaBuffer nv12Buffer, int width, int height, DmaBuffersAllocator allocator)
         {
             var resources = drmDevice.GetResources();
             if (resources == null)
@@ -320,29 +320,117 @@ namespace SharpVideo.DrmDmaDemo
                 }
             }
 
-            // Find a plane that supports NV12 format and is compatible with this CRTC
-            var nv12Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc;
-            Console.WriteLine($"\n=== Selecting plane for NV12 display (format 0x{nv12Format:X8}) ===");
+            // Find primary plane and overlay plane
+            Console.WriteLine($"\n=== Finding planes for mode setting and NV12 display ===");
 
-            var nv12Planes = crtcCompatiblePlanes
-                .Where(p => p.Formats.Contains(nv12Format))
-                .ToList();
+            // Find primary plane (for mode setting with RGB)
+            var primaryPlane = crtcCompatiblePlanes
+                .FirstOrDefault(p =>
+                {
+                    var props = p.GetProperties();
+                    var typeProp = props.FirstOrDefault(prop => prop.Name.Equals("type", StringComparison.OrdinalIgnoreCase));
+                    return typeProp != null && typeProp.EnumNames != null &&
+                           typeProp.Value < (ulong)typeProp.EnumNames.Count &&
+                           typeProp.EnumNames[(int)typeProp.Value].Equals("Primary", StringComparison.OrdinalIgnoreCase);
+                });
 
-            Console.WriteLine($"Found {nv12Planes.Count} NV12-capable planes");
-
-            // Prefer overlay planes (not currently active) over primary plane
-            var plane = nv12Planes.FirstOrDefault(p => p.CrtcId != crtcId) ?? nv12Planes.FirstOrDefault();
-            if (plane == null)
+            if (primaryPlane == null)
             {
-                Console.WriteLine("ERROR: No plane found that supports NV12 format for the selected CRTC.");
+                Console.WriteLine("ERROR: No primary plane found for CRTC mode setting.");
                 return false;
             }
 
-            Console.WriteLine($"Selected plane ID {plane.Id} for NV12 display");
-            Console.WriteLine($"  Currently active: {(plane.CrtcId != 0 ? "yes (on CRTC " + plane.CrtcId + ")" : "no")}");
+            Console.WriteLine($"Found primary plane: ID {primaryPlane.Id}");
+
+            // Find overlay plane for NV12
+            var nv12Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc;
+            var nv12Plane = crtcCompatiblePlanes
+                .FirstOrDefault(p =>
+                {
+                    var props = p.GetProperties();
+                    var typeProp = props.FirstOrDefault(prop => prop.Name.Equals("type", StringComparison.OrdinalIgnoreCase));
+                    bool isOverlay = typeProp != null && typeProp.EnumNames != null &&
+                                    typeProp.Value < (ulong)typeProp.EnumNames.Count &&
+                                    typeProp.EnumNames[(int)typeProp.Value].Equals("Overlay", StringComparison.OrdinalIgnoreCase);
+                    return isOverlay && p.Formats.Contains(nv12Format);
+                });
+
+            if (nv12Plane == null)
+            {
+                Console.WriteLine("ERROR: No overlay plane found that supports NV12 format.");
+                return false;
+            }
+
+            Console.WriteLine($"Found NV12-capable overlay plane: ID {nv12Plane.Id}");
 
             unsafe
             {
+                // Step 1: Allocate RGB buffer for primary plane (mode setting)
+                Console.WriteLine("\n=== Step 1: Setting up RGB buffer for mode setting ===");
+                ulong rgbBufferSize = (ulong)(width * height * 4); // XRGB8888 = 4 bytes per pixel
+                var rgbBuf = allocator.Allocate(rgbBufferSize);
+                if (rgbBuf == null)
+                {
+                    Console.WriteLine("Failed to allocate RGB buffer.");
+                    return false;
+                }
+                Console.WriteLine($"Allocated RGB buffer of size {rgbBuf.Size} with fd {rgbBuf.Fd}");
+
+                // Map and fill with black (or any solid color to see primary plane)
+                rgbBuf.MapBuffer();
+                if (rgbBuf.MapStatus == MapStatus.FailedToMap)
+                {
+                    Console.WriteLine("Failed to mmap RGB buffer.");
+                    rgbBuf.Dispose();
+                    return false;
+                }
+
+                var rgbSpan = rgbBuf.GetMappedSpan();
+                rgbSpan.Fill(0); // Fill with black
+                rgbBuf.SyncMap();
+                Console.WriteLine("Filled RGB buffer with black");
+
+                // Convert RGB DMA buffer FD to DRM handle
+                var resultRgb = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, rgbBuf.Fd, out uint rgbHandle);
+                if (resultRgb != 0)
+                {
+                    Console.WriteLine($"Failed to convert RGB DMA FD to handle: {resultRgb}");
+                    rgbBuf.Dispose();
+                    return false;
+                }
+                Console.WriteLine($"Converted RGB DMA FD {rgbBuf.Fd} to handle {rgbHandle}");
+
+                // Create RGB framebuffer
+                var rgbFormat = KnownPixelFormats.DRM_FORMAT_XRGB8888.Fourcc;
+                uint rgbPitch = (uint)(width * 4);
+                uint* rgbHandles = stackalloc uint[4] { rgbHandle, 0, 0, 0 };
+                uint* rgbPitches = stackalloc uint[4] { rgbPitch, 0, 0, 0 };
+                uint* rgbOffsets = stackalloc uint[4] { 0, 0, 0, 0 };
+                var resultRgbFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, rgbFormat, rgbHandles, rgbPitches, rgbOffsets, out var rgbFbId, 0);
+                if (resultRgbFb != 0)
+                {
+                    Console.WriteLine($"Failed to create RGB framebuffer: {resultRgbFb}");
+                    rgbBuf.Dispose();
+                    return false;
+                }
+                Console.WriteLine($"Created RGB framebuffer with ID: {rgbFbId}");
+
+                // Set the primary plane with RGB buffer to establish 1080p mode
+                Console.WriteLine($"\n=== Step 2: Setting primary plane to 1080p with RGB buffer ===");
+                var resultPrimary = LibDrm.drmModeSetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, 0,
+                                                     0, 0, (uint)width, (uint)height,
+                                                     0, 0, (uint)width << 16, (uint)height << 16);
+                if (resultPrimary != 0)
+                {
+                    Console.WriteLine($"Failed to set primary plane: {resultPrimary}");
+                    LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
+                    rgbBuf.Dispose();
+                    return false;
+                }
+                Console.WriteLine("Successfully set primary plane with RGB framebuffer at 1080p");
+
+                // Step 3: Now set up NV12 overlay
+                Console.WriteLine($"\n=== Step 3: Setting up NV12 overlay ===");
                 // Convert NV12 DMA buffer FD to DRM handle
                 var resultNv12 = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, nv12Buffer.Fd, out uint nv12Handle);
                 if (resultNv12 != 0)
@@ -369,58 +457,29 @@ namespace SharpVideo.DrmDmaDemo
                 }
                 Console.WriteLine($"Created NV12 framebuffer with ID: {nv12FbId}");
 
-                // Check if CRTC is already active and get current mode
-                var crtcInfo = LibDrm.drmModeGetCrtc(drmDevice.DeviceFd, crtcId);
-
-                if (crtcInfo == null || crtcInfo->BufferId == 0)
-                {
-                    Console.WriteLine("\nERROR: CRTC is not active.");
-                    Console.WriteLine("The display must be active (initialized by bootloader/kernel) to use plane overlays.");
-                    Console.WriteLine("NV12 can only be displayed on overlay planes, not on the primary CRTC plane.");
-                    if (crtcInfo != null)
-                    {
-                        LibDrm.drmModeFreeCrtc(crtcInfo);
-                    }
-                    LibDrm.drmModeRmFB(drmDevice.DeviceFd, nv12FbId);
-                    return false;
-                }
-
-                Console.WriteLine($"\nCurrent CRTC state: BufferId={crtcInfo->BufferId}, Mode={crtcInfo->Mode.HDisplay}x{crtcInfo->Mode.VDisplay}");
-
-                // Check if current mode matches our requirement
-                if (crtcInfo->Mode.HDisplay != mode.HDisplay || crtcInfo->Mode.VDisplay != mode.VDisplay)
-                {
-                    Console.WriteLine($"\nERROR: Display is at {crtcInfo->Mode.HDisplay}x{crtcInfo->Mode.VDisplay}, but we need {mode.HDisplay}x{mode.VDisplay}");
-                    Console.WriteLine("Cannot change display mode using NV12-only buffer.");
-                    Console.WriteLine("Explanation: CRTC (display controller) only accepts RGB formats for mode changes.");
-                    Console.WriteLine("             NV12 (YUV format) can only be used on overlay planes.");
-                    Console.WriteLine("Solutions:");
-                    Console.WriteLine("  1. Set display to 1080p before running this program (using xrandr, kernel cmdline, etc.)");
-                    Console.WriteLine("  2. Modify program to allocate RGB buffer for CRTC mode setting");
-                    LibDrm.drmModeFreeCrtc(crtcInfo);
-                    LibDrm.drmModeRmFB(drmDevice.DeviceFd, nv12FbId);
-                    return false;
-                }
-
-                Console.WriteLine($"CRTC already at required resolution {mode.HDisplay}x{mode.VDisplay}");
-
-                LibDrm.drmModeFreeCrtc(crtcInfo);
-
-                // Now set the plane with the NV12 framebuffer as an overlay
-                Console.WriteLine($"\nSetting plane overlay with NV12 content at {width}x{height}");
-                var result = LibDrm.drmModeSetPlane(drmDevice.DeviceFd, plane.Id, crtcId, nv12FbId, 0,
+                // Now set the NV12 overlay plane
+                Console.WriteLine($"Setting NV12 overlay plane at {width}x{height}");
+                var resultOverlay = LibDrm.drmModeSetPlane(drmDevice.DeviceFd, nv12Plane.Id, crtcId, nv12FbId, 0,
                                                0, 0, (uint)width, (uint)height,  // Display area (CRTC coordinates)
                                                0, 0, (uint)width << 16, (uint)height << 16);  // Source area (framebuffer coordinates)
-                if (result != 0)
+                if (resultOverlay != 0)
                 {
-                    Console.WriteLine($"Failed to set plane overlay: {result}");
+                    Console.WriteLine($"Failed to set NV12 overlay plane: {resultOverlay}");
                     LibDrm.drmModeRmFB(drmDevice.DeviceFd, nv12FbId);
+                    LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
+                    rgbBuf.Dispose();
                     return false;
                 }
 
-                Console.WriteLine("Successfully set plane overlay with NV12 framebuffer!");
+                Console.WriteLine("Successfully set NV12 overlay plane!");
+                Console.WriteLine("\n=== Display Setup Complete ===");
+                Console.WriteLine($"  Primary plane (ID {primaryPlane.Id}): RGB framebuffer at 1080p");
+                Console.WriteLine($"  Overlay plane (ID {nv12Plane.Id}): NV12 content covering full screen");
 
-                Console.WriteLine("Successfully set CRTC and displayed image");
+                // Keep RGB buffer alive - we'll clean it up when done displaying
+                // Note: In a real app, you'd want to manage this differently
+                rgbBuf.UnmapBuffer();
+
                 return true;
             }
         }
