@@ -63,7 +63,21 @@ internal class Program
             };
 
             int decodedFrames = 0;
-            DmaBuffers.DmaBuffer? lastDisplayBuffer = null;
+            
+            // Pre-allocate display buffers for double buffering
+            var displayBuffer1 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
+            var displayBuffer2 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
+            
+            if (displayBuffer1 == null || displayBuffer2 == null)
+            {
+                logger.LogError("Failed to allocate display buffers");
+                displayBuffer1?.Dispose();
+                displayBuffer2?.Dispose();
+                return;
+            }
+
+            bool useBuffer1 = true;
+            DmaBuffers.DmaBuffer? currentDisplayBuffer = displayBuffer1;
 
             await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config, span =>
             {
@@ -74,18 +88,14 @@ internal class Program
                 {
                     try
                     {
-                        var newBuffer = CopyFrameToDmaBuffer(span, Width, Height, allocator, logger);
-                        if (newBuffer != null)
-                        {
-                            DisplayNv12Buffer(drmDevice, displayContext, newBuffer, Width, Height, logger);
+                        // Toggle between the two buffers
+                        currentDisplayBuffer = useBuffer1 ? displayBuffer1 : displayBuffer2;
+                        useBuffer1 = !useBuffer1;
 
-                            // Cleanup old buffer
-                            if (lastDisplayBuffer != null)
-                            {
-                                lastDisplayBuffer.UnmapBuffer();
-                                lastDisplayBuffer.Dispose();
-                            }
-                            lastDisplayBuffer = newBuffer;
+                        // Copy frame data to the buffer
+                        if (CopyFrameToExistingBuffer(span, currentDisplayBuffer, logger))
+                        {
+                            DisplayNv12Buffer(drmDevice, displayContext, currentDisplayBuffer, Width, Height, logger);
                         }
                     }
                     catch (Exception ex)
@@ -103,11 +113,16 @@ internal class Program
             logger.LogInformation("Press Enter to exit...");
             Console.ReadLine();
 
-            // Cleanup last buffer
-            if (lastDisplayBuffer != null)
+            // Cleanup display buffers
+            if (displayBuffer1 != null)
             {
-                lastDisplayBuffer.UnmapBuffer();
-                lastDisplayBuffer.Dispose();
+                displayBuffer1.UnmapBuffer();
+                displayBuffer1.Dispose();
+            }
+            if (displayBuffer2 != null)
+            {
+                displayBuffer2.UnmapBuffer();
+                displayBuffer2.Dispose();
             }
         }
         finally
@@ -451,8 +466,7 @@ internal class Program
         return true;
     }
 
-    private static DmaBuffers.DmaBuffer? CopyFrameToDmaBuffer(
-        ReadOnlySpan<byte> frameData,
+    private static DmaBuffers.DmaBuffer? AllocateAndMapDisplayBuffer(
         int width,
         int height,
         DmaBuffersAllocator allocator,
@@ -474,20 +488,28 @@ internal class Program
             return null;
         }
 
+        logger.LogDebug("Allocated display buffer with FD {Fd}", dmaBuf.Fd);
+        return dmaBuf;
+    }
+
+    private static bool CopyFrameToExistingBuffer(
+        ReadOnlySpan<byte> frameData,
+        DmaBuffers.DmaBuffer dmaBuf,
+        ILogger logger)
+    {
+        if (dmaBuf.MapStatus != MapStatus.Mapped)
+        {
+            logger.LogError("Buffer is not mapped");
+            return false;
+        }
+
         // Copy frame data to DMA buffer
         var dmaSpan = dmaBuf.GetMappedSpan();
         var copySize = Math.Min(frameData.Length, dmaSpan.Length);
         frameData.Slice(0, copySize).CopyTo(dmaSpan);
 
         dmaBuf.SyncMap();
-
-        var roResult = dmaBuf.MakeMapReadOnly();
-        if (!roResult)
-        {
-            logger.LogWarning("Failed to make buffer read-only");
-        }
-
-        return dmaBuf;
+        return true;
     }
 
     private static unsafe void DisplayNv12Buffer(
