@@ -63,11 +63,13 @@ internal class Program
             };
 
             int decodedFrames = 0;
-            
+            int copiedFrames = 0;
+            int presentedFrames = 0;
+
             // Pre-allocate display buffers for double buffering
             var displayBuffer1 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
             var displayBuffer2 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
-            
+
             if (displayBuffer1 == null || displayBuffer2 == null)
             {
                 logger.LogError("Failed to allocate display buffers");
@@ -84,7 +86,7 @@ internal class Program
                 decodedFrames++;
 
                 // Copy decoded NV12 frame to DMA buffer and display it
-                if (decodedFrames % 30 == 0) // Display every 30th frame to reduce overhead
+                // Display every frame
                 {
                     try
                     {
@@ -95,7 +97,22 @@ internal class Program
                         // Copy frame data to the buffer
                         if (CopyFrameToExistingBuffer(span, currentDisplayBuffer, logger))
                         {
-                            DisplayNv12Buffer(drmDevice, displayContext, currentDisplayBuffer, Width, Height, logger);
+                            copiedFrames++;
+                            logger.LogDebug("Frame {FrameNumber} copied to buffer (total copied: {CopiedCount})", decodedFrames, copiedFrames);
+                            
+                            if (DisplayNv12Buffer(drmDevice, displayContext, currentDisplayBuffer, Width, Height, logger))
+                            {
+                                presentedFrames++;
+                                logger.LogDebug("Frame {FrameNumber} presented on display (total presented: {PresentedCount})", decodedFrames, presentedFrames);
+                            }
+                            else
+                            {
+                                logger.LogWarning("Frame {FrameNumber} copied but failed to present", decodedFrames);
+                            }
+                        }
+                        else
+                        {
+                            logger.LogWarning("Failed to copy frame {FrameNumber} to buffer", decodedFrames);
                         }
                     }
                     catch (Exception ex)
@@ -109,7 +126,12 @@ internal class Program
             await decoder.DecodeStreamAsync(fileStream);
 
             logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
-            logger.LogInformation("Amount of decoded frames: {DecodedFrames}", decodedFrames);
+            logger.LogInformation("=== Decoding Statistics ===");
+            logger.LogInformation("Total decoded frames: {DecodedFrames}", decodedFrames);
+            logger.LogInformation("Frames copied to DMA buffers: {CopiedFrames}", copiedFrames);
+            logger.LogInformation("Frames presented on display: {PresentedFrames}", presentedFrames);
+            logger.LogInformation("Display interval: Every frame");
+            logger.LogInformation("Expected frames to display: {ExpectedFrames}", decodedFrames);
             logger.LogInformation("Press Enter to exit...");
             Console.ReadLine();
 
@@ -512,7 +534,7 @@ internal class Program
         return true;
     }
 
-    private static unsafe void DisplayNv12Buffer(
+    private static unsafe bool DisplayNv12Buffer(
         DrmDevice drmDevice,
         DisplayContext context,
         DmaBuffers.DmaBuffer nv12Buffer,
@@ -532,7 +554,7 @@ internal class Program
         if (result != 0)
         {
             logger.LogError("Failed to convert NV12 DMA FD to handle: {Result}", result);
-            return;
+            return false;
         }
 
         var nv12Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc;
@@ -549,7 +571,7 @@ internal class Program
         if (resultFb != 0)
         {
             logger.LogError("Failed to create NV12 framebuffer: {Result}", resultFb);
-            return;
+            return false;
         }
 
         context.Nv12FbId = nv12FbId;
@@ -558,7 +580,10 @@ internal class Program
         if (!SetPlane(drmDevice.DeviceFd, context.Nv12Plane.Id, context.CrtcId, nv12FbId, width, height, logger))
         {
             logger.LogError("Failed to set NV12 overlay plane");
+            return false;
         }
+        
+        return true;
     }
 
     private static void CleanupDisplay(DrmDevice drmDevice, DisplayContext? context, ILogger logger)
