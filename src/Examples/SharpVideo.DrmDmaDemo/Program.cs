@@ -398,8 +398,49 @@ namespace SharpVideo.DrmDmaDemo
                 }
                 Console.WriteLine($"Created RGB framebuffer with ID: {rgbFbId}");
 
-                // Set the primary plane with RGB buffer to establish 1080p mode
-                Console.WriteLine($"=== Step 2: Setting primary plane to 1080p with RGB buffer ===");
+                // Set the CRTC mode to 1080p
+                Console.WriteLine($"=== Step 2: Setting CRTC to 1080p mode ===");
+
+                // Convert managed DrmModeInfo to native DrmModeModeInfo
+                var nativeMode = new DrmModeModeInfo
+                {
+                    Clock = mode.Clock,
+                    HDisplay = mode.HDisplay,
+                    HSyncStart = mode.HSyncStart,
+                    HSyncEnd = mode.HSyncEnd,
+                    HTotal = mode.HTotal,
+                    HSkew = mode.HSkew,
+                    VDisplay = mode.VDisplay,
+                    VSyncStart = mode.VSyncStart,
+                    VSyncEnd = mode.VSyncEnd,
+                    VTotal = mode.VTotal,
+                    VScan = mode.VScan,
+                    VRefresh = mode.VRefresh,
+                    Flags = mode.Flags,
+                    Type = mode.Type
+                };
+
+                // Copy the mode name
+                var nameBytes = System.Text.Encoding.UTF8.GetBytes(mode.Name);
+                for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
+                {
+                    nativeMode.Name[i] = nameBytes[i];
+                }
+
+                uint connectorId = connector.ConnectorId;
+                var resultSetCrtc = LibDrm.drmModeSetCrtc(drmDevice.DeviceFd, crtcId, rgbFbId, 0, 0,
+                                                          &connectorId, 1, &nativeMode);
+                if (resultSetCrtc != 0)
+                {
+                    Console.WriteLine($"Failed to set CRTC mode: {resultSetCrtc}");
+                    LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
+                    rgbBuf.Dispose();
+                    return false;
+                }
+                Console.WriteLine($"Successfully set CRTC to mode {mode.Name} ({mode.HDisplay}x{mode.VDisplay}@{mode.VRefresh}Hz)");
+
+                // Set the primary plane with RGB buffer
+                Console.WriteLine($"=== Step 3: Setting primary plane with RGB buffer ===");
                 var resultPrimary = LibDrm.drmModeSetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, 0,
                                                      0, 0, (uint)width, (uint)height,
                                                      0, 0, (uint)width << 16, (uint)height << 16);
@@ -412,8 +453,8 @@ namespace SharpVideo.DrmDmaDemo
                 }
                 Console.WriteLine("Successfully set primary plane with RGB framebuffer at 1080p");
 
-                // Step 3: Now set up NV12 overlay
-                Console.WriteLine($"=== Step 3: Setting up NV12 overlay ===");
+                // Step 4: Now set up NV12 overlay
+                Console.WriteLine($"=== Step 4: Setting up NV12 overlay ===");
                 // Convert NV12 DMA buffer FD to DRM handle
                 var resultNv12 = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, nv12Buffer.Fd, out uint nv12Handle);
                 if (resultNv12 != 0)
