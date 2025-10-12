@@ -27,6 +27,18 @@ public class DrmDevice
             return null;
         }
 
+        // Enable universal planes capability to expose all planes (including primary planes)
+        var capResult = LibDrm.drmSetClientCap(deviceFd, LibDrm.DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
+        if (capResult != 0)
+        {
+            Console.WriteLine($"Warning: Failed to enable universal planes capability: {capResult}");
+            Console.WriteLine("This may result in primary planes not being visible.");
+        }
+        else
+        {
+            Console.WriteLine("Successfully enabled universal planes capability");
+        }
+
         unsafe
         {
             var resources = LibDrm.drmModeGetResources(deviceFd);
@@ -133,6 +145,8 @@ public class DrmDevice
                         {
                             Id = prop->PropId,
                             Name = prop->NameString,
+                            Type = (PropertyType)prop->Flags,
+                            Value = origValues[i],
                         });
 
                         LibDrm.drmModeFreeProperty(prop);
@@ -161,10 +175,26 @@ public class DrmDevice
                 {
                     try
                     {
-                        foreach (var planeId in planeResources->Planes)
+                        Console.WriteLine($"DEBUG: drmModeGetPlaneResources returned {planeResources->CountPlanes} planes");
+                        var planeIds = planeResources->Planes;
+                        Console.WriteLine($"DEBUG: Plane IDs from native: {string.Join(", ", planeIds.ToArray())}");
+
+                        foreach (var planeId in planeIds)
                         {
-                            planes.Add(new DrmPlane(_deviceFd, planeId));
+                            Console.WriteLine($"DEBUG: Loading plane ID {planeId}");
+                            try
+                            {
+                                planes.Add(new DrmPlane(_deviceFd, planeId));
+                                Console.WriteLine($"DEBUG: Successfully loaded plane {planeId}");
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log and continue - don't let one bad plane stop us from loading others
+                                Console.WriteLine($"Warning: Failed to load plane {planeId}: {ex.Message}");
+                            }
                         }
+
+                        Console.WriteLine($"DEBUG: Total planes loaded into list: {planes.Count}");
                     }
                     finally
                     {

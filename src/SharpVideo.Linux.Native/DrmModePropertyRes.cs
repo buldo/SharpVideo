@@ -42,7 +42,7 @@ public unsafe struct DrmModePropertyRes
     /// <summary>
     /// Pointer to enum values array.
     /// </summary>
-    private readonly void* _enums; // drm_mode_property_enum*
+    private readonly DrmModePropertyEnum* _enums;
 
     /// <summary>
     /// Number of blob IDs.
@@ -84,6 +84,13 @@ public unsafe struct DrmModePropertyRes
     public ReadOnlySpan<uint> BlobIds => _blobIds == null
         ? ReadOnlySpan<uint>.Empty
         : new ReadOnlySpan<uint>(_blobIds, CountBlobs);
+
+    /// <summary>
+    /// Gets a span over the enum values.
+    /// </summary>
+    public ReadOnlySpan<DrmModePropertyEnum> Enums => _enums == null
+        ? ReadOnlySpan<DrmModePropertyEnum>.Empty
+        : new ReadOnlySpan<DrmModePropertyEnum>(_enums, CountEnums);
 
     public PropertyType Type => (PropertyType)(Flags & ((uint)PropertyType.DRM_MODE_PROP_LEGACY_TYPE | (uint)PropertyType.DRM_MODE_PROP_EXTENDED_TYPE));
 }

@@ -4,17 +4,15 @@ namespace SharpVideo.DrmDmaDemo;
 
 public static class TestPattern
 {
-    // Standard ITU-R BT.601 color bar values for YUV
+    // 5 vertical color bars: Red, Green, Blue, Yellow, Cyan
+    // Using standard ITU-R BT.601 color values for YUV
     private static readonly (byte Y, byte U, byte V)[] ColorBars =
     {
-        (235, 128, 128), // White
-        (210, 16, 146),  // Yellow
-        (170, 166, 16),   // Cyan
-        (145, 54, 34),   // Green
-        (107, 202, 222), // Magenta
         (81, 90, 240),   // Red
+        (145, 54, 34),   // Green
         (41, 240, 110),  // Blue
-        (16, 128, 128)   // Black
+        (210, 16, 146),  // Yellow
+        (170, 166, 16)   // Cyan
     };
 
     public static void FillYuv422(Span<byte> buffer, int width, int height)
