@@ -34,26 +34,27 @@ public static unsafe partial class LibDrm
     /// <summary>DRM mode object type: Plane</summary>
     public const uint DRM_MODE_OBJECT_PLANE = 0xeeeeeeee;
 
-    /// <summary>DRM client capability: Stereo 3D</summary>
-    public const ulong DRM_CLIENT_CAP_STEREO_3D = 1;
-
-    /// <summary>DRM client capability: Universal planes (exposes all planes including primary)</summary>
-    public const ulong DRM_CLIENT_CAP_UNIVERSAL_PLANES = 2;
-
-    /// <summary>DRM client capability: Atomic modesetting</summary>
-    public const ulong DRM_CLIENT_CAP_ATOMIC = 3;
-
     // -------------------- P/Invoke ------------------------------
 
     /// <summary>
     /// Set a capability for the DRM client.
     /// </summary>
     /// <param name="fd">Open DRM device file descriptor</param>
-    /// <param name="capability">The capability to set (e.g., DRM_CLIENT_CAP_UNIVERSAL_PLANES)</param>
+    /// <param name="capability">The capability to set</param>
     /// <param name="value">The value to set (1 to enable, 0 to disable)</param>
     /// <returns>0 on success, negative error code on failure</returns>
     [LibraryImport(LibraryName, EntryPoint = "drmSetClientCap")]
-    public static partial int drmSetClientCap(int fd, ulong capability, ulong value);
+    public static partial int drmSetClientCap(int fd, DrmClientCapability capability, ulong value);
+
+    /// <summary>
+    /// Query a capability of the DRM device.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="capability">The capability to query</param>
+    /// <param name="value">Returned capability value</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmGetCap")]
+    public static partial int drmGetCap(int fd, DrmCapability capability, out ulong value);
 
     /// <summary>
     /// Retrieve resource handles for a given DRM file descriptor.

@@ -27,16 +27,28 @@ public class DrmDevice
             return null;
         }
 
-        // Enable universal planes capability to expose all planes (including primary planes)
-        var capResult = LibDrm.drmSetClientCap(deviceFd, LibDrm.DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1);
-        if (capResult != 0)
+        // Enable DRM client capabilities
+        Console.WriteLine("Enabling DRM client capabilities:");
+
+        var capabilitiesToEnable = new[]
         {
-            Console.WriteLine($"Warning: Failed to enable universal planes capability: {capResult}");
-            Console.WriteLine("This may result in primary planes not being visible.");
-        }
-        else
+            (DrmClientCapability.UniversalPlanes, "Universal Planes (exposes all planes including primary)"),
+            (DrmClientCapability.Atomic, "Atomic Modesetting"),
+            (DrmClientCapability.AspectRatio, "Aspect Ratio"),
+            (DrmClientCapability.WritebackConnectors, "Writeback Connectors")
+        };
+
+        foreach (var (capability, description) in capabilitiesToEnable)
         {
-            Console.WriteLine("Successfully enabled universal planes capability");
+            var result = LibDrm.drmSetClientCap(deviceFd, capability, 1);
+            if (result != 0)
+            {
+                Console.WriteLine($"  {capability}: Failed (error {result}) - {description}");
+            }
+            else
+            {
+                Console.WriteLine($"  {capability}: Enabled - {description}");
+            }
         }
 
         unsafe

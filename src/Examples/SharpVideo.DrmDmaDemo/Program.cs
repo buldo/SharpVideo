@@ -120,6 +120,63 @@ namespace SharpVideo.DrmDmaDemo
 
             Console.WriteLine($"Found connected display: {connector.ConnectorType}");
 
+            // Query and display DRM capabilities
+            Console.WriteLine("\n=== DRM Device Capabilities ===");
+            var capabilities = new[]
+            {
+                DrmCapability.DumbBuffer,
+                DrmCapability.VblankHighCrtc,
+                DrmCapability.DumbPreferredDepth,
+                DrmCapability.DumbPreferShadow,
+                DrmCapability.Prime,
+                DrmCapability.TimestampMonotonic,
+                DrmCapability.AsyncPageFlip,
+                DrmCapability.CursorWidth,
+                DrmCapability.CursorHeight,
+                DrmCapability.AddFB2Modifiers,
+                DrmCapability.PageFlipTarget,
+                DrmCapability.CrtcInVblankEvent,
+                DrmCapability.SyncObj,
+                DrmCapability.SyncObjTimeline,
+                DrmCapability.AtomicAsyncPageFlip
+            };
+
+            foreach (var cap in capabilities)
+            {
+                var result = LibDrm.drmGetCap(drmDevice.DeviceFd, cap, out ulong value);
+                if (result == 0)
+                {
+                    string displayValue = cap switch
+                    {
+                        DrmCapability.Prime => value switch
+                        {
+                            0 => "0 (not supported)",
+                            1 => "1 (import only)",
+                            2 => "2 (export only)",
+                            3 => "3 (import & export)",
+                            _ => value.ToString()
+                        },
+                        DrmCapability.DumbBuffer or
+                        DrmCapability.VblankHighCrtc or
+                        DrmCapability.DumbPreferShadow or
+                        DrmCapability.TimestampMonotonic or
+                        DrmCapability.AsyncPageFlip or
+                        DrmCapability.AddFB2Modifiers or
+                        DrmCapability.PageFlipTarget or
+                        DrmCapability.CrtcInVblankEvent or
+                        DrmCapability.SyncObj or
+                        DrmCapability.SyncObjTimeline or
+                        DrmCapability.AtomicAsyncPageFlip => value == 1 ? "Yes" : "No",
+                        _ => value.ToString()
+                    };
+                    Console.WriteLine($"  {cap}: {displayValue}");
+                }
+                else
+                {
+                    Console.WriteLine($"  {cap}: <query failed: {result}>");
+                }
+            }
+
             // Debug: Print all available modes
             Console.WriteLine($"Available modes ({connector.Modes.Count}):");
             foreach (var m in connector.Modes)
