@@ -42,6 +42,67 @@ public class DrmDevice
         return new DrmDevice(deviceFd);
     }
 
+    public bool TrySetClientCapability(DrmClientCapability cap, bool value, out int resultCode)
+    {
+        resultCode = LibDrm.drmSetClientCap(_deviceFd, cap, value ? 1u : 0u);
+        return resultCode == 0;
+    }
+
+    public DrmCapabilitiesState GetDeviceCapabilities()
+    {
+        return new DrmCapabilitiesState()
+        {
+            AddFB2Modifiers = GetOrFailBool(DrmCapability.DRM_CAP_ADDFB2_MODIFIERS),
+            AsyncPageFlip = GetOrFailBool(DrmCapability.DRM_CAP_ASYNC_PAGE_FLIP),
+            AtomicAsyncPageFlip = GetOrFailBool(DrmCapability.DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP),
+            CrtcInVblankEvent = GetOrFailBool(DrmCapability.DRM_CAP_CRTC_IN_VBLANK_EVENT),
+            CursorHeight = GetOrFailUInt64(DrmCapability.DRM_CAP_CURSOR_HEIGHT),
+            CursorWidth = GetOrFailUInt64(DrmCapability.DRM_CAP_CURSOR_WIDTH),
+            DumbBuffer = GetOrFailBool(DrmCapability.DRM_CAP_DUMB_BUFFER),
+            DumbPreferShadow = GetOrFailBool(DrmCapability.DRM_CAP_DUMB_PREFER_SHADOW),
+            DumbPreferredDepth = GetOrFailUInt64(DrmCapability.DRM_CAP_DUMB_PREFERRED_DEPTH),
+            PageFlipTarget = GetOrFailBool(DrmCapability.DRM_CAP_PAGE_FLIP_TARGET),
+            Prime = GetOrFailPrime(DrmCapability.DRM_CAP_PRIME),
+            SyncObj = GetOrFailBool(DrmCapability.DRM_CAP_SYNCOBJ),
+            SyncObjTimeline = GetOrFailBool(DrmCapability.DRM_CAP_SYNCOBJ_TIMELINE),
+            TimestampMonotonic = GetOrFailBool(DrmCapability.DRM_CAP_TIMESTAMP_MONOTONIC),
+            VblankHighCrtc = GetOrFailBool(DrmCapability.DRM_CAP_VBLANK_HIGH_CRTC),
+        };
+
+        bool GetOrFailBool(DrmCapability cap)
+        {
+            var result = LibDrm.drmGetCap(_deviceFd, cap, out var value);
+            if (result != 0)
+            {
+                throw new Exception($"Failed to get capability {cap}");
+            }
+
+            return value == 1;
+        }
+
+        UInt64 GetOrFailUInt64(DrmCapability cap)
+        {
+            var result = LibDrm.drmGetCap(_deviceFd, cap, out var value);
+            if (result != 0)
+            {
+                throw new Exception($"Failed to get capability {cap}");
+            }
+
+            return value;
+        }
+
+        DrmPrimeCap GetOrFailPrime(DrmCapability cap)
+        {
+            var result = LibDrm.drmGetCap(_deviceFd, cap, out var value);
+            if (result != 0)
+            {
+                throw new Exception($"Failed to get capability {cap}");
+            }
+
+            return (DrmPrimeCap)value;
+        }
+    }
+
     public DrmDeviceResources? GetResources()
     {
         unsafe
@@ -133,6 +194,8 @@ public class DrmDevice
                         {
                             Id = prop->PropId,
                             Name = prop->NameString,
+                            Type = (PropertyType)prop->Flags,
+                            Value = origValues[i],
                         });
 
                         LibDrm.drmModeFreeProperty(prop);
@@ -161,10 +224,26 @@ public class DrmDevice
                 {
                     try
                     {
-                        foreach (var planeId in planeResources->Planes)
+                        Console.WriteLine($"DEBUG: drmModeGetPlaneResources returned {planeResources->CountPlanes} planes");
+                        var planeIds = planeResources->Planes;
+                        Console.WriteLine($"DEBUG: Plane IDs from native: {string.Join(", ", planeIds.ToArray())}");
+
+                        foreach (var planeId in planeIds)
                         {
-                            planes.Add(new DrmPlane(_deviceFd, planeId));
+                            Console.WriteLine($"DEBUG: Loading plane ID {planeId}");
+                            try
+                            {
+                                planes.Add(new DrmPlane(_deviceFd, planeId));
+                                Console.WriteLine($"DEBUG: Successfully loaded plane {planeId}");
+                            }
+                            catch (Exception ex)
+                            {
+                                // Log and continue - don't let one bad plane stop us from loading others
+                                Console.WriteLine($"Warning: Failed to load plane {planeId}: {ex.Message}");
+                            }
                         }
+
+                        Console.WriteLine($"DEBUG: Total planes loaded into list: {planes.Count}");
                     }
                     finally
                     {

@@ -8,7 +8,53 @@ public static unsafe partial class LibDrm
 {
     private const string LibraryName = "drm";
 
+    // -------------------- Constants ------------------------------
+
+    /// <summary>DRM mode object type: CRTC</summary>
+    public const uint DRM_MODE_OBJECT_CRTC = 0xcccccccc;
+
+    /// <summary>DRM mode object type: Connector</summary>
+    public const uint DRM_MODE_OBJECT_CONNECTOR = 0xc0c0c0c0;
+
+    /// <summary>DRM mode object type: Encoder</summary>
+    public const uint DRM_MODE_OBJECT_ENCODER = 0xe0e0e0e0;
+
+    /// <summary>DRM mode object type: Mode</summary>
+    public const uint DRM_MODE_OBJECT_MODE = 0xdededede;
+
+    /// <summary>DRM mode object type: Property</summary>
+    public const uint DRM_MODE_OBJECT_PROPERTY = 0xb0b0b0b0;
+
+    /// <summary>DRM mode object type: Framebuffer</summary>
+    public const uint DRM_MODE_OBJECT_FB = 0xfbfbfbfb;
+
+    /// <summary>DRM mode object type: Blob</summary>
+    public const uint DRM_MODE_OBJECT_BLOB = 0xbbbbbbbb;
+
+    /// <summary>DRM mode object type: Plane</summary>
+    public const uint DRM_MODE_OBJECT_PLANE = 0xeeeeeeee;
+
     // -------------------- P/Invoke ------------------------------
+
+    /// <summary>
+    /// Set a capability for the DRM client.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="capability">The capability to set</param>
+    /// <param name="value">The value to set (1 to enable, 0 to disable)</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmSetClientCap")]
+    public static partial int drmSetClientCap(int fd, DrmClientCapability capability, UInt64 value);
+
+    /// <summary>
+    /// Query a capability of the DRM device.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="capability">The capability to query</param>
+    /// <param name="value">Returned capability value</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmGetCap")]
+    public static partial nint drmGetCap(int fd, DrmCapability capability, out UInt64 value);
 
     /// <summary>
     /// Retrieve resource handles for a given DRM file descriptor.
