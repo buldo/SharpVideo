@@ -44,7 +44,7 @@ public static unsafe partial class LibDrm
     /// <param name="value">The value to set (1 to enable, 0 to disable)</param>
     /// <returns>0 on success, negative error code on failure</returns>
     [LibraryImport(LibraryName, EntryPoint = "drmSetClientCap")]
-    public static partial int drmSetClientCap(int fd, DrmClientCapability capability, ulong value);
+    public static partial int drmSetClientCap(int fd, DrmClientCapability capability, UInt64 value);
 
     /// <summary>
     /// Query a capability of the DRM device.
@@ -54,7 +54,7 @@ public static unsafe partial class LibDrm
     /// <param name="value">Returned capability value</param>
     /// <returns>0 on success, negative error code on failure</returns>
     [LibraryImport(LibraryName, EntryPoint = "drmGetCap")]
-    public static partial int drmGetCap(int fd, DrmCapability capability, out ulong value);
+    public static partial nint drmGetCap(int fd, DrmCapability capability, out UInt64 value);
 
     /// <summary>
     /// Retrieve resource handles for a given DRM file descriptor.

@@ -5,9 +5,9 @@ using System.Runtime.Versioning;
 
 namespace SharpVideo.DrmDmaDemo
 {
+    [SupportedOSPlatform("linux")]
     internal class Program
     {
-        [SupportedOSPlatform("linux")]
         static void Main(string[] args)
         {
             var devices = Directory.EnumerateFiles("/dev/dri", "card*", SearchOption.TopDirectoryOnly);
@@ -31,6 +31,26 @@ namespace SharpVideo.DrmDmaDemo
                 Console.WriteLine("No DRM devices could be opened.");
                 return;
             }
+
+            var capsToEnable = new[]
+            {
+                DrmClientCapability.DRM_CLIENT_CAP_UNIVERSAL_PLANES,
+                DrmClientCapability.DRM_CLIENT_CAP_ATOMIC
+            };
+            Console.WriteLine("Enabling DRM client capabilities:");
+            foreach (var cap in capsToEnable)
+            {
+                if (!drmDevice.TrySetClientCapability(cap, true, out var code))
+                {
+                    Console.WriteLine($"  {cap}: Failed (error {code})");
+                }
+                else
+                {
+                    Console.WriteLine($"  {cap}: Enabled");
+                }
+            }
+
+            DumpDeviceCaps(drmDevice);
 
             if (!DmaBuffersAllocator.TryCreate(out var allocator) || allocator == null)
             {
@@ -100,7 +120,27 @@ namespace SharpVideo.DrmDmaDemo
             dmaBuf.Dispose();
         }
 
-        [SupportedOSPlatform("linux")]
+        private static void DumpDeviceCaps(DrmDevice drmDevice)
+        {
+            Console.WriteLine("### Device caps ###");
+            var caps = drmDevice.GetDeviceCapabilities();
+            Console.WriteLine($"DRM_CAP_DUMB_BUFFER = {caps.DumbBuffer}");
+            Console.WriteLine($"DRM_CAP_VBLANK_HIGH_CRTC = {caps.VblankHighCrtc}");
+            Console.WriteLine($"DRM_CAP_DUMB_PREFERRED_DEPTH = {caps.DumbPreferredDepth}");
+            Console.WriteLine($"DRM_CAP_DUMB_PREFER_SHADOW = {caps.DumbPreferShadow}");
+            Console.WriteLine($"DRM_CAP_PRIME = {caps.Prime}");
+            Console.WriteLine($"DRM_CAP_TIMESTAMP_MONOTONIC = {caps.TimestampMonotonic}");
+            Console.WriteLine($"DRM_CAP_ASYNC_PAGE_FLIP = {caps.AsyncPageFlip}");
+            Console.WriteLine($"DRM_CAP_CURSOR_WIDTH = {caps.CursorWidth}");
+            Console.WriteLine($"DRM_CAP_CURSOR_HEIGHT = {caps.CursorWidth}");
+            Console.WriteLine($"DRM_CAP_ADDFB2_MODIFIERS = {caps.AddFB2Modifiers}");
+            Console.WriteLine($"DRM_CAP_PAGE_FLIP_TARGET = {caps.PageFlipTarget}");
+            Console.WriteLine($"DRM_CAP_CRTC_IN_VBLANK_EVENT = {caps.CrtcInVblankEvent}");
+            Console.WriteLine($"DRM_CAP_SYNCOBJ = {caps.SyncObj}");
+            Console.WriteLine($"DRM_CAP_SYNCOBJ_TIMELINE = {caps.SyncObjTimeline}");
+            Console.WriteLine($"DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP = {caps.AtomicAsyncPageFlip}");
+        }
+
         private static bool PresentBuffer(DrmDevice drmDevice, DmaBuffers.DmaBuffer nv12Buffer, int width, int height, DmaBuffersAllocator allocator)
         {
             var resources = drmDevice.GetResources();
@@ -119,63 +159,6 @@ namespace SharpVideo.DrmDmaDemo
             }
 
             Console.WriteLine($"Found connected display: {connector.ConnectorType}");
-
-            // Query and display DRM capabilities
-            Console.WriteLine("\n=== DRM Device Capabilities ===");
-            var capabilities = new[]
-            {
-                DrmCapability.DumbBuffer,
-                DrmCapability.VblankHighCrtc,
-                DrmCapability.DumbPreferredDepth,
-                DrmCapability.DumbPreferShadow,
-                DrmCapability.Prime,
-                DrmCapability.TimestampMonotonic,
-                DrmCapability.AsyncPageFlip,
-                DrmCapability.CursorWidth,
-                DrmCapability.CursorHeight,
-                DrmCapability.AddFB2Modifiers,
-                DrmCapability.PageFlipTarget,
-                DrmCapability.CrtcInVblankEvent,
-                DrmCapability.SyncObj,
-                DrmCapability.SyncObjTimeline,
-                DrmCapability.AtomicAsyncPageFlip
-            };
-
-            foreach (var cap in capabilities)
-            {
-                var result = LibDrm.drmGetCap(drmDevice.DeviceFd, cap, out ulong value);
-                if (result == 0)
-                {
-                    string displayValue = cap switch
-                    {
-                        DrmCapability.Prime => value switch
-                        {
-                            0 => "0 (not supported)",
-                            1 => "1 (import only)",
-                            2 => "2 (export only)",
-                            3 => "3 (import & export)",
-                            _ => value.ToString()
-                        },
-                        DrmCapability.DumbBuffer or
-                        DrmCapability.VblankHighCrtc or
-                        DrmCapability.DumbPreferShadow or
-                        DrmCapability.TimestampMonotonic or
-                        DrmCapability.AsyncPageFlip or
-                        DrmCapability.AddFB2Modifiers or
-                        DrmCapability.PageFlipTarget or
-                        DrmCapability.CrtcInVblankEvent or
-                        DrmCapability.SyncObj or
-                        DrmCapability.SyncObjTimeline or
-                        DrmCapability.AtomicAsyncPageFlip => value == 1 ? "Yes" : "No",
-                        _ => value.ToString()
-                    };
-                    Console.WriteLine($"  {cap}: {displayValue}");
-                }
-                else
-                {
-                    Console.WriteLine($"  {cap}: <query failed: {result}>");
-                }
-            }
 
             // Debug: Print all available modes
             Console.WriteLine($"Available modes ({connector.Modes.Count}):");
@@ -233,10 +216,10 @@ namespace SharpVideo.DrmDmaDemo
                 return false;
             }
 
-            Console.WriteLine($"\nUsing CRTC ID: {crtcId}");
+            Console.WriteLine($"Using CRTC ID: {crtcId}");
 
             // Display all planes in the system first
-            Console.WriteLine($"\n=== DEBUG: All planes in system ===");
+            Console.WriteLine($"=== DEBUG: All planes in system ===");
             Console.WriteLine($"Total planes: {resources.Planes.Count}");
             foreach (var pl in resources.Planes)
             {
@@ -249,12 +232,12 @@ namespace SharpVideo.DrmDmaDemo
                 .Where(p => (p.PossibleCrtcs & (1u << crtcIndex)) != 0)
                 .ToList();
 
-            Console.WriteLine($"\n=== DEBUG: Planes compatible with CRTC {crtcId} (index {crtcIndex}) ===");
+            Console.WriteLine($"=== DEBUG: Planes compatible with CRTC {crtcId} (index {crtcIndex}) ===");
             Console.WriteLine($"Total compatible planes: {crtcCompatiblePlanes.Count}");
 
             foreach (var p in crtcCompatiblePlanes)
             {
-                Console.WriteLine($"\n  Plane ID: {p.Id}");
+                Console.WriteLine($"    Plane ID: {p.Id}");
                 Console.WriteLine($"    Possible CRTCs mask: 0b{Convert.ToString(p.PossibleCrtcs, 2).PadLeft(8, '0')}");
                 Console.WriteLine($"    Current CRTC ID: {(p.CrtcId != 0 ? p.CrtcId.ToString() : "none (inactive)")}");
                 Console.WriteLine($"    Current FB ID: {(p.FbId != 0 ? p.FbId.ToString() : "none")}");
@@ -321,7 +304,7 @@ namespace SharpVideo.DrmDmaDemo
             }
 
             // Find primary plane and overlay plane
-            Console.WriteLine($"\n=== Finding planes for mode setting and NV12 display ===");
+            Console.WriteLine($"=== Finding planes for mode setting and NV12 display ===");
 
             // Find primary plane (for mode setting with RGB)
             var primaryPlane = crtcCompatiblePlanes
@@ -366,7 +349,7 @@ namespace SharpVideo.DrmDmaDemo
             unsafe
             {
                 // Step 1: Allocate RGB buffer for primary plane (mode setting)
-                Console.WriteLine("\n=== Step 1: Setting up RGB buffer for mode setting ===");
+                Console.WriteLine("=== Step 1: Setting up RGB buffer for mode setting ===");
                 ulong rgbBufferSize = (ulong)(width * height * 4); // XRGB8888 = 4 bytes per pixel
                 var rgbBuf = allocator.Allocate(rgbBufferSize);
                 if (rgbBuf == null)
@@ -416,7 +399,7 @@ namespace SharpVideo.DrmDmaDemo
                 Console.WriteLine($"Created RGB framebuffer with ID: {rgbFbId}");
 
                 // Set the primary plane with RGB buffer to establish 1080p mode
-                Console.WriteLine($"\n=== Step 2: Setting primary plane to 1080p with RGB buffer ===");
+                Console.WriteLine($"=== Step 2: Setting primary plane to 1080p with RGB buffer ===");
                 var resultPrimary = LibDrm.drmModeSetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, 0,
                                                      0, 0, (uint)width, (uint)height,
                                                      0, 0, (uint)width << 16, (uint)height << 16);
@@ -430,7 +413,7 @@ namespace SharpVideo.DrmDmaDemo
                 Console.WriteLine("Successfully set primary plane with RGB framebuffer at 1080p");
 
                 // Step 3: Now set up NV12 overlay
-                Console.WriteLine($"\n=== Step 3: Setting up NV12 overlay ===");
+                Console.WriteLine($"=== Step 3: Setting up NV12 overlay ===");
                 // Convert NV12 DMA buffer FD to DRM handle
                 var resultNv12 = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, nv12Buffer.Fd, out uint nv12Handle);
                 if (resultNv12 != 0)
@@ -472,7 +455,7 @@ namespace SharpVideo.DrmDmaDemo
                 }
 
                 Console.WriteLine("Successfully set NV12 overlay plane!");
-                Console.WriteLine("\n=== Display Setup Complete ===");
+                Console.WriteLine("=== Display Setup Complete ===");
                 Console.WriteLine($"  Primary plane (ID {primaryPlane.Id}): RGB framebuffer at 1080p");
                 Console.WriteLine($"  Overlay plane (ID {nv12Plane.Id}): NV12 content covering full screen");
 

@@ -27,30 +27,6 @@ public class DrmDevice
             return null;
         }
 
-        // Enable DRM client capabilities
-        Console.WriteLine("Enabling DRM client capabilities:");
-
-        var capabilitiesToEnable = new[]
-        {
-            (DrmClientCapability.UniversalPlanes, "Universal Planes (exposes all planes including primary)"),
-            (DrmClientCapability.Atomic, "Atomic Modesetting"),
-            (DrmClientCapability.AspectRatio, "Aspect Ratio"),
-            (DrmClientCapability.WritebackConnectors, "Writeback Connectors")
-        };
-
-        foreach (var (capability, description) in capabilitiesToEnable)
-        {
-            var result = LibDrm.drmSetClientCap(deviceFd, capability, 1);
-            if (result != 0)
-            {
-                Console.WriteLine($"  {capability}: Failed (error {result}) - {description}");
-            }
-            else
-            {
-                Console.WriteLine($"  {capability}: Enabled - {description}");
-            }
-        }
-
         unsafe
         {
             var resources = LibDrm.drmModeGetResources(deviceFd);
@@ -64,6 +40,67 @@ public class DrmDevice
         }
 
         return new DrmDevice(deviceFd);
+    }
+
+    public bool TrySetClientCapability(DrmClientCapability cap, bool value, out int resultCode)
+    {
+        resultCode = LibDrm.drmSetClientCap(_deviceFd, cap, value ? 1u : 0u);
+        return resultCode == 0;
+    }
+
+    public DrmCapabilitiesState GetDeviceCapabilities()
+    {
+        return new DrmCapabilitiesState()
+        {
+            AddFB2Modifiers = GetOrFailBool(DrmCapability.DRM_CAP_ADDFB2_MODIFIERS),
+            AsyncPageFlip = GetOrFailBool(DrmCapability.DRM_CAP_ASYNC_PAGE_FLIP),
+            AtomicAsyncPageFlip = GetOrFailBool(DrmCapability.DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP),
+            CrtcInVblankEvent = GetOrFailBool(DrmCapability.DRM_CAP_CRTC_IN_VBLANK_EVENT),
+            CursorHeight = GetOrFailUInt64(DrmCapability.DRM_CAP_CURSOR_HEIGHT),
+            CursorWidth = GetOrFailUInt64(DrmCapability.DRM_CAP_CURSOR_WIDTH),
+            DumbBuffer = GetOrFailBool(DrmCapability.DRM_CAP_DUMB_BUFFER),
+            DumbPreferShadow = GetOrFailBool(DrmCapability.DRM_CAP_DUMB_PREFER_SHADOW),
+            DumbPreferredDepth = GetOrFailUInt64(DrmCapability.DRM_CAP_DUMB_PREFERRED_DEPTH),
+            PageFlipTarget = GetOrFailBool(DrmCapability.DRM_CAP_PAGE_FLIP_TARGET),
+            Prime = GetOrFailPrime(DrmCapability.DRM_CAP_PRIME),
+            SyncObj = GetOrFailBool(DrmCapability.DRM_CAP_SYNCOBJ),
+            SyncObjTimeline = GetOrFailBool(DrmCapability.DRM_CAP_SYNCOBJ_TIMELINE),
+            TimestampMonotonic = GetOrFailBool(DrmCapability.DRM_CAP_TIMESTAMP_MONOTONIC),
+            VblankHighCrtc = GetOrFailBool(DrmCapability.DRM_CAP_VBLANK_HIGH_CRTC),
+        };
+
+        bool GetOrFailBool(DrmCapability cap)
+        {
+            var result = LibDrm.drmGetCap(_deviceFd, cap, out var value);
+            if (result != 0)
+            {
+                throw new Exception($"Failed to get capability {cap}");
+            }
+
+            return value == 1;
+        }
+
+        UInt64 GetOrFailUInt64(DrmCapability cap)
+        {
+            var result = LibDrm.drmGetCap(_deviceFd, cap, out var value);
+            if (result != 0)
+            {
+                throw new Exception($"Failed to get capability {cap}");
+            }
+
+            return value;
+        }
+
+        DrmPrimeCap GetOrFailPrime(DrmCapability cap)
+        {
+            var result = LibDrm.drmGetCap(_deviceFd, cap, out var value);
+            if (result != 0)
+            {
+                throw new Exception($"Failed to get capability {cap}");
+            }
+
+            return (DrmPrimeCap)value;
+        }
     }
 
     public DrmDeviceResources? GetResources()
