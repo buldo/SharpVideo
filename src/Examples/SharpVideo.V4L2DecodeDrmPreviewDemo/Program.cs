@@ -58,163 +58,282 @@ internal class Program
         // Create DRM buffer manager for zero-copy
         using var drmBufferManager = new DrmBufferManager(drmDevice, allocator);
 
+        // Frame queue for async display
+        var frameQueue = new System.Collections.Concurrent.ConcurrentQueue<uint>();
+        var displayCts = new CancellationTokenSource();
+
         try
         {
             // Setup decoder
             await using var fileStream = GetFileStream();
             using var v4L2Device = GetVideoDevice(logger);
-            using var mediaDevice = GetMediaDevice();                var decoderLogger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
-                var config = new DecoderConfiguration
+            using var mediaDevice = GetMediaDevice();
+
+            var decoderLogger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
+            var config = new DecoderConfiguration
+            {
+                OutputBufferCount = 16,
+                CaptureBufferCount = 16,
+                RequestPoolSize = 32,
+                UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode
+            };
+
+            // Thread-safe counters for statistics
+            int decodedFrames = 0;
+            int presentedFrames = 0;
+            int droppedFrames = 0;
+            uint? lastDisplayedBufferIndex = null;
+            var lockObject = new object();
+
+            // Reference to decoder for use in callback (set after decoder creation)
+            H264V4L2StatelessDecoder? decoderRef = null;
+
+            // Fast callback - just enqueue the buffer index for async display
+            Action<uint> processBuffer = (uint bufferIndex) =>
+            {
+                Interlocked.Increment(ref decodedFrames);
+
+                try
                 {
-                    OutputBufferCount = 16,
-                    CaptureBufferCount = 16,
-                    RequestPoolSize = 32,
-                    UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode
-                };
-
-                // Thread-safe counters for statistics
-                int decodedFrames = 0;
-                int presentedFrames = 0;
-                uint? lastDisplayedBufferIndex = null;
-                var lockObject = new object();
-
-                // Reference to decoder for use in callback (set after decoder creation)
-                H264V4L2StatelessDecoder? decoderRef = null;
-
-                // Callback to handle decoded frames by buffer index (zero-copy mode)
-                // This callback is synchronous and called from the decoder thread
-                Action<uint> processBuffer = (uint bufferIndex) =>
-                {
-                    lock (lockObject)
+                    // Get DRM buffers from decoder (allocated with correct dimensions)
+                    var drmBuffers = decoderRef?.DrmBuffers;
+                    if (drmBuffers == null)
                     {
-                        decodedFrames++;
+                        logger.LogError("DRM buffers not initialized yet");
+                        return;
                     }
 
-                    try
+                    // Validate buffer index
+                    if (bufferIndex >= drmBuffers.Count)
                     {
-                        // Get DRM buffers from decoder (allocated with correct dimensions)
-                        var drmBuffers = decoderRef?.DrmBuffers;
-                        if (drmBuffers == null)
+                        logger.LogError("Invalid buffer index {BufferIndex}, max is {MaxIndex}",
+                            bufferIndex, drmBuffers.Count - 1);
+                        return;
+                    }
+
+                    // Get the DRM buffer corresponding to this V4L2 buffer
+                    var drmBuffer = drmBuffers[(int)bufferIndex];
+
+                    // Create framebuffer if not already created (first use)
+                    if (drmBuffer.FramebufferId == 0)
+                    {
+                        drmBufferManager.CreateFramebuffer(drmBuffer);
+                        logger.LogDebug("Created framebuffer {FbId} for buffer {BufferIndex}",
+                            drmBuffer.FramebufferId, bufferIndex);
+                    }
+
+                    // Enqueue for display (non-blocking)
+                    frameQueue.Enqueue(bufferIndex);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error in decode callback for buffer {BufferIndex}", bufferIndex);
+                    // Requeue immediately on error to avoid leaking the buffer
+                    if (decoderRef != null)
+                    {
+                        try
                         {
-                            logger.LogError("DRM buffers not initialized yet");
-                            return;
+                            decoderRef.RequeueCaptureBuffer(bufferIndex);
                         }
-
-                        // Validate buffer index
-                        if (bufferIndex >= drmBuffers.Count)
+                        catch (Exception requeueEx)
                         {
-                            logger.LogError("Invalid buffer index {BufferIndex}, max is {MaxIndex}",
-                                bufferIndex, drmBuffers.Count - 1);
-                            return;
-                        }
-
-                        // Get the DRM buffer corresponding to this V4L2 buffer
-                        var drmBuffer = drmBuffers[(int)bufferIndex];
-
-                        // Create framebuffer if not already created (first use)
-                        if (drmBuffer.FramebufferId == 0)
-                        {
-                            drmBufferManager.CreateFramebuffer(drmBuffer);
-                            logger.LogDebug("Created framebuffer {FbId} for buffer {BufferIndex}",
-                                drmBuffer.FramebufferId, bufferIndex);
-                        }
-
-                        uint? previousBufferIndex = null;
-                        lock (lockObject)
-                        {
-                            previousBufferIndex = lastDisplayedBufferIndex;
-                        }
-
-                        // Display the buffer directly (zero-copy)
-                        // Use actual buffer dimensions for source rectangle (may differ from display mode due to padding)
-                        if (SetPlane(drmDevice.DeviceFd, displayContext.Nv12Plane.Id, displayContext.CrtcId,
-                                     drmBuffer.FramebufferId, drmBuffer.Width, drmBuffer.Height, Width, Height, logger))
-                        {
-                            lock (lockObject)
-                            {
-                                presentedFrames++;
-                                lastDisplayedBufferIndex = bufferIndex;
-                            }
-                            logger.LogDebug("Frame {FrameNumber} displayed (buffer {BufferIndex})",
-                                decodedFrames, bufferIndex);
-
-                            // Requeue the previously displayed buffer (now we can release it)
-                            if (previousBufferIndex.HasValue && decoderRef != null)
-                            {
-                                decoderRef.RequeueCaptureBuffer(previousBufferIndex.Value);
-                            }
-                        }
-                        else
-                        {
-                            logger.LogWarning("Failed to display frame {FrameNumber}", decodedFrames);
-                            // Requeue immediately on failure
-                            if (decoderRef != null)
-                            {
-                                decoderRef.RequeueCaptureBuffer(bufferIndex);
-                            }
+                            logger.LogError(requeueEx, "Failed to requeue buffer {BufferIndex} after error", bufferIndex);
                         }
                     }
-                    catch (Exception ex)
+                }
+            };
+
+            // Display thread - handles presentation separately from decoding
+            var displayThread = new Thread(() =>
+            {
+                logger.LogInformation("Display thread started");
+                var displayStopwatch = Stopwatch.StartNew();
+                long frameCount = 0;
+                var token = displayCts.Token;
+
+                try
+                {
+                    while (!token.IsCancellationRequested)
                     {
-                        logger.LogWarning(ex, "Failed to display frame {FrameNumber}", decodedFrames);
-                        // Attempt to requeue the buffer to avoid leaking it
-                        if (decoderRef != null)
+                        // Try to get next frame to display
+                        if (!frameQueue.TryDequeue(out uint bufferIndex))
                         {
+                            // No frames available, wait a bit with cancellation check
                             try
                             {
-                                decoderRef.RequeueCaptureBuffer(bufferIndex);
+                                Task.Delay(1, token).Wait();
                             }
-                            catch (Exception requeueEx)
+                            catch (OperationCanceledException)
                             {
-                                logger.LogError(requeueEx, "Failed to requeue buffer {BufferIndex} after error", bufferIndex);
+                                break;
+                            }
+                            continue;
+                        }
+
+                        try
+                        {
+                            var drmBuffers = decoderRef?.DrmBuffers;
+                            if (drmBuffers == null)
+                            {
+                                logger.LogWarning("DRM buffers not available in display thread");
+                                continue;
+                            }
+
+                            var drmBuffer = drmBuffers[(int)bufferIndex];
+
+                            uint? previousBufferIndex = null;
+                            lock (lockObject)
+                            {
+                                previousBufferIndex = lastDisplayedBufferIndex;
+                            }
+
+                            // Display the buffer
+                            if (SetPlane(drmDevice.DeviceFd, displayContext.Nv12Plane.Id, displayContext.CrtcId,
+                                         drmBuffer.FramebufferId, drmBuffer.Width, drmBuffer.Height, Width, Height, logger))
+                            {
+                                lock (lockObject)
+                                {
+                                    presentedFrames++;
+                                    lastDisplayedBufferIndex = bufferIndex;
+                                }
+
+                                frameCount++;
+                                if (frameCount % 60 == 0)
+                                {
+                                    var elapsed = displayStopwatch.Elapsed.TotalSeconds;
+                                    var displayFps = frameCount / elapsed;
+                                    logger.LogDebug("Display FPS: {Fps:F2} ({FrameCount} frames)", displayFps, frameCount);
+                                }
+
+                                // Requeue the previously displayed buffer
+                                if (previousBufferIndex.HasValue && decoderRef != null)
+                                {
+                                    decoderRef.RequeueCaptureBuffer(previousBufferIndex.Value);
+                                }
+
+                                // No artificial delay - let drmModeSetPlane naturally pace us
+                                // The display system will handle the rate limiting via VSync
+                            }
+                            else
+                            {
+                                logger.LogWarning("Failed to display buffer {BufferIndex}", bufferIndex);
+                                Interlocked.Increment(ref droppedFrames);
+                                // Requeue immediately on failure
+                                if (decoderRef != null)
+                                {
+                                    decoderRef.RequeueCaptureBuffer(bufferIndex);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogError(ex, "Error in display thread for buffer {BufferIndex}", bufferIndex);
+                            Interlocked.Increment(ref droppedFrames);
+                            // Try to requeue the buffer
+                            if (decoderRef != null)
+                            {
+                                try
+                                {
+                                    decoderRef.RequeueCaptureBuffer(bufferIndex);
+                                }
+                                catch (Exception requeueEx)
+                                {
+                                    logger.LogError(requeueEx, "Failed to requeue buffer in display thread");
+                                }
                             }
                         }
                     }
-                };
-
-                await using var decoder = new H264V4L2StatelessDecoder(
-                    v4L2Device,
-                    mediaDevice,
-                    decoderLogger,
-                    config,
-                    processDecodedAction: null, // Not used in DMABUF mode
-                    processDecodedBufferIndex: processBuffer,
-                    drmBufferManager: drmBufferManager);
-
-                // Set decoder reference for use in callback
-                decoderRef = decoder;
-
-                var decodeStopWatch = Stopwatch.StartNew();
-                await decoder.DecodeStreamAsync(fileStream);
-
-                // Requeue the last displayed buffer
-                uint? finalBufferIndex;
-                lock (lockObject)
-                {
-                    finalBufferIndex = lastDisplayedBufferIndex;
                 }
-                if (finalBufferIndex.HasValue)
+                catch (Exception ex)
                 {
-                    decoder.RequeueCaptureBuffer(finalBufferIndex.Value);
+                    logger.LogError(ex, "Fatal error in display thread");
                 }
 
-                decodeStopWatch.Stop();
-                logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!",
-                    decodeStopWatch.Elapsed.TotalSeconds);
-                logger.LogInformation("=== Decoding Statistics (Zero-Copy Mode) ===");
-                logger.LogInformation("Total decoded frames: {DecodedFrames}", decodedFrames);
-                logger.LogInformation("Frames presented on display: {PresentedFrames}", presentedFrames);
-                logger.LogInformation("Frame presentation rate: {Rate:F2}%",
-                    decodedFrames > 0 ? (presentedFrames * 100.0 / decodedFrames) : 0);
-                logger.LogInformation("Average FPS: {Fps:F2}",
-                    decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
-                logger.LogInformation("Zero-copy: No frame data copying between decoder and display!");
-                logger.LogInformation("Press Enter to exit...");
-                Console.ReadLine();
+                logger.LogInformation("Display thread stopped (processed {FrameCount} frames)", frameCount);
+            })
+            {
+                Name = "DisplayThread",
+                IsBackground = false
+            };
+
+            displayThread.Start();
+
+            await using var decoder = new H264V4L2StatelessDecoder(
+                v4L2Device,
+                mediaDevice,
+                decoderLogger,
+                config,
+                processDecodedAction: null, // Not used in DMABUF mode
+                processDecodedBufferIndex: processBuffer,
+                drmBufferManager: drmBufferManager);
+
+            // Set decoder reference for use in callbacks
+            decoderRef = decoder;
+
+            var decodeStopWatch = Stopwatch.StartNew();
+            await decoder.DecodeStreamAsync(fileStream);
+            decodeStopWatch.Stop();
+
+            logger.LogInformation("Decoding stream completed in {ElapsedTime:F2} seconds",
+                decodeStopWatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}",
+                decodedFrames, decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
+
+            // Wait for display thread to finish displaying queued frames
+            var queueSize = frameQueue.Count;
+            if (queueSize > 0)
+            {
+                logger.LogInformation("Waiting for display queue to drain ({Count} frames remaining)...", queueSize);
+                var drainStart = Stopwatch.StartNew();
+                while (!frameQueue.IsEmpty && drainStart.Elapsed.TotalSeconds < 5.0)
+                {
+                    await Task.Delay(100);
+                }
+
+                if (!frameQueue.IsEmpty)
+                {
+                    logger.LogWarning("Display queue drain timed out, {Count} frames remain", frameQueue.Count);
+                }
+            }
+
+            // Stop display thread gracefully
+            logger.LogInformation("Stopping display thread...");
+            displayCts.Cancel();
+
+            if (!displayThread.Join(TimeSpan.FromSeconds(3)))
+            {
+                logger.LogWarning("Display thread did not stop within timeout");
+            }
+
+            // Requeue the last displayed buffer
+            uint? finalBufferIndex;
+            lock (lockObject)
+            {
+                finalBufferIndex = lastDisplayedBufferIndex;
+            }
+            if (finalBufferIndex.HasValue)
+            {
+                decoder.RequeueCaptureBuffer(finalBufferIndex.Value);
+                logger.LogDebug("Requeued final displayed buffer {BufferIndex}", finalBufferIndex.Value);
+            }
+
+            logger.LogInformation("=== Final Statistics (Zero-Copy Mode with Async Display) ===");
+            logger.LogInformation("Total decoded frames: {DecodedFrames}", decodedFrames);
+            logger.LogInformation("Frames presented on display: {PresentedFrames}", presentedFrames);
+            logger.LogInformation("Frames dropped: {DroppedFrames}", droppedFrames);
+            logger.LogInformation("Frame presentation rate: {Rate:F2}%",
+                decodedFrames > 0 ? (presentedFrames * 100.0 / decodedFrames) : 0);
+            logger.LogInformation("Average decode FPS: {Fps:F2}",
+                decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Average display FPS: {Fps:F2}",
+                presentedFrames / decodeStopWatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Processing completed successfully!");
         }
         finally
         {
+            displayCts.Cancel();
             CleanupDisplay(drmDevice, displayContext, logger);
+            displayCts.Dispose();
         }
     }
 
