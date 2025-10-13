@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using SharpVideo.Linux.Native;
 
@@ -104,8 +105,8 @@ public unsafe class AtomicPlaneUpdater : IDisposable
             if (!AddProperty(req, planeId, "SRC_H", srcH))
                 return false;
 
-            // Commit flags
-            var flags = DrmModeAtomicFlags.DRM_MODE_ATOMIC_NONBLOCK;
+            // Commit flags - start without NONBLOCK to see if that's the issue
+            var flags = (DrmModeAtomicFlags)0;
 
             if (async)
             {
@@ -127,10 +128,11 @@ public unsafe class AtomicPlaneUpdater : IDisposable
         if (!_planePropertyIds.TryGetValue(propertyName, out var propId))
         {
             // Property not found - might not be fatal for all properties
-            return true; // Continue anyway
+            return false; // Signal failure
         }
 
-        return LibDrm.drmModeAtomicAddProperty(req, objectId, propId, value) == 0;
+        var result = LibDrm.drmModeAtomicAddProperty(req, objectId, propId, value);
+        return result == 0;
     }
 
     public void Dispose()

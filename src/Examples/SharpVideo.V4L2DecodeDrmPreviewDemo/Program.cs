@@ -782,15 +782,17 @@ internal class Program
         logger.LogInformation("Found NV12 overlay plane: ID {PlaneId}", nv12Plane.Id);
 
         // Initialize atomic plane updater for better performance
+        // Note: Atomic modesetting may not work on all hardware/kernels
+        // Falls back to legacy API if atomic commits fail at runtime
         AtomicPlaneUpdater? atomicUpdater = null;
         try
         {
             atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, nv12Plane.Id, crtcId);
-            logger.LogInformation("✓ Atomic plane updates enabled - reduced syscall overhead");
+            logger.LogInformation("✓ Atomic modesetting infrastructure initialized (will attempt atomic plane updates)");
         }
         catch (Exception ex)
         {
-            logger.LogWarning("Could not initialize atomic updates (will use legacy API): {Error}", ex.Message);
+            logger.LogWarning("Could not initialize atomic modesetting infrastructure: {Error}", ex.Message);
         }
 
         // Setup RGB buffer for mode setting
