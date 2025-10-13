@@ -14,11 +14,17 @@ public class V4L2DmaBufMPlaneBuffer
     public V4L2DmaBufMPlaneBuffer(
         uint index,
         int[] dmaBufferFds,
-        uint[] planeSizes)
+        uint[] planeSizes,
+        uint[] planeOffsets)
     {
         if (dmaBufferFds.Length != planeSizes.Length)
         {
             throw new ArgumentException("Number of FDs must match number of plane sizes");
+        }
+
+        if (planeSizes.Length != planeOffsets.Length)
+        {
+            throw new ArgumentException("Number of plane sizes must match number of plane offsets");
         }
 
         Index = index;
@@ -32,7 +38,7 @@ public class V4L2DmaBufMPlaneBuffer
                 BytesUsed = 0, // For capture buffers, driver fills this on dequeue
                 Length = planeSizes[i],
                 Memory = new V4L2Plane.PlaneMemory { Fd = dmaBufferFds[i] },
-                DataOffset = 0 // Always 0 for separate plane buffers
+                DataOffset = planeOffsets[i] // Use provided offset (0 for separate buffers, stride*height for contiguous UV)
             };
         }
     }

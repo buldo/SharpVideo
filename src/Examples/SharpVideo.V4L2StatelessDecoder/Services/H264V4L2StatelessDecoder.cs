@@ -20,10 +20,16 @@ public class H264V4L2StatelessDecoder
     private readonly Action<ReadOnlySpan<byte>>? _processDecodedAction;
     private readonly Action<uint>? _processDecodedBufferIndex;
     private readonly Drm.DrmBufferManager? _drmBufferManager;
+    private List<ManagedDrmBuffer>? _drmBuffers;
 
     private bool _disposed;
     private int _framesDecoded;
     private readonly Stopwatch _decodingStopwatch = new();
+
+    /// <summary>
+    /// Gets the DRM buffers allocated for zero-copy decode (available after initialization).
+    /// </summary>
+    public IReadOnlyList<ManagedDrmBuffer>? DrmBuffers => _drmBuffers;
 
     private readonly bool _supportsSliceParamsControl;
 
@@ -591,65 +597,101 @@ public class H264V4L2StatelessDecoder
                 i, planeFormats[i].SizeImage, planeFormats[i].BytesPerLine);
         }
 
-        // Extract plane sizes from negotiated format first
-        uint[] planeSizes = new uint[negotiatedFormat.NumPlanes];
-        for (int i = 0; i < negotiatedFormat.NumPlanes; i++)
-        {
-            planeSizes[i] = planeFormats[i].SizeImage;
-        }
-
         // Allocate DRM buffers based on plane count and actual sizes from V4L2
-        List<ManagedDrmBuffer> drmBuffers;
+        uint stride;
+        uint totalBufferSize;
+
         if (numPlanes == 1)
         {
             // Single-plane mode: contiguous buffer with Y and UV at different offsets
-            // Use the actual buffer size reported by V4L2
-            uint totalBufferSize = planeSizes[0];
-            _logger.LogInformation("Using contiguous buffer allocation (single DMA-BUF per buffer), size={Size}", totalBufferSize);
-            drmBuffers = _drmBufferManager!.AllocateNv12ContiguousBuffersWithSize(
+            // Use the actual buffer size and stride reported by V4L2
+            totalBufferSize = planeFormats[0].SizeImage;
+            stride = planeFormats[0].BytesPerLine;
+            _logger.LogInformation("Using contiguous buffer allocation (single DMA-BUF per buffer), size={Size}, stride={Stride}", totalBufferSize, stride);
+            _drmBuffers = _drmBufferManager!.AllocateNv12ContiguousBuffersWithSize(
                 (int)width,
                 (int)height,
                 (int)_configuration.CaptureBufferCount,
-                totalBufferSize);
+                totalBufferSize,
+                stride);
         }
         else
         {
             // Multi-plane mode: separate buffers for Y and UV
             _logger.LogInformation("Using separate buffer allocation (one DMA-BUF per plane)");
-            drmBuffers = _drmBufferManager!.AllocateNv12Buffers(
+            _drmBuffers = _drmBufferManager!.AllocateNv12Buffers(
                 (int)width,
                 (int)height,
                 (int)_configuration.CaptureBufferCount);
+
+            // For multi-plane mode, we don't need stride from V4L2 as it's in separate buffers
+            stride = (uint)width; // Default stride
+            totalBufferSize = 0; // Not used
         }
 
-        if (drmBuffers.Count != _configuration.CaptureBufferCount)
+        if (_drmBuffers.Count != _configuration.CaptureBufferCount)
         {
             throw new Exception($"Failed to allocate {_configuration.CaptureBufferCount} DRM buffers");
         }
 
-        // Extract DMA-BUF file descriptors based on plane count
+        // For V4L2: prepare plane sizes and FD arrays
+        // V4L2 expects the number of planes as reported by the driver (numPlanes)
+        // For contiguous mode (numPlanes=1): V4L2 uses 1 plane, but DRM needs 2 logical planes
+        // For separate mode (numPlanes=2): both V4L2 and DRM use 2 planes
+
+        uint[] v4l2PlaneSizes;
+        uint[] v4l2PlaneOffsets;
         var bufferFds = new List<int[]>();
-        foreach (var drmBuffer in drmBuffers)
+
+        if (numPlanes == 1)
         {
-            if (numPlanes == 1)
+            // Contiguous buffer mode:
+            // - V4L2 sees 1 physical plane with total size
+            // - We pass 1 FD with offset 0 to V4L2
+            v4l2PlaneSizes = new[] { totalBufferSize };
+            v4l2PlaneOffsets = new[] { 0u };
+
+            foreach (var drmBuffer in _drmBuffers)
             {
-                // Single FD for contiguous buffer
-                bufferFds.Add(new[] { drmBuffer.DmaBuffer.Fd });
+                int fd = drmBuffer.DmaBuffer.Fd;
+                bufferFds.Add(new[] { fd });
             }
-            else
+
+            _logger.LogInformation("V4L2 contiguous mode: 1 plane, size={Size}, offset=0", totalBufferSize);
+        }
+        else
+        {
+            // Separate buffer mode:
+            // - V4L2 sees 2 separate planes
+            // - We pass 2 different FDs
+            v4l2PlaneSizes = new uint[numPlanes];
+            for (int i = 0; i < numPlanes; i++)
             {
-                // Separate FDs for Y and UV planes
+                v4l2PlaneSizes[i] = planeFormats[i].SizeImage;
+            }
+
+            v4l2PlaneOffsets = new uint[numPlanes];
+            Array.Fill(v4l2PlaneOffsets, 0u);
+
+            foreach (var drmBuffer in _drmBuffers)
+            {
                 int yFd = drmBuffer.DmaBuffer.Fd;
                 int uvFd = drmBuffer.PlaneBuffers![0].Fd;
                 bufferFds.Add(new[] { yFd, uvFd });
             }
+
+            _logger.LogInformation("V4L2 separate mode: {NumPlanes} planes", numPlanes);
+            for (int i = 0; i < numPlanes; i++)
+            {
+                _logger.LogInformation("  Plane {Index}: size={Size}, offset=0", i, v4l2PlaneSizes[i]);
+            }
         }
 
         // Initialize V4L2 capture queue with DMABUF
-        _device.CaptureMPlaneQueue.InitDmaBuf(bufferFds.ToArray(), planeSizes);
+        _device.CaptureMPlaneQueue.InitDmaBuf(bufferFds.ToArray(), v4l2PlaneSizes, v4l2PlaneOffsets);
 
         _logger.LogInformation("DMABUF capture queue initialized with {Count} buffers ({Mode} mode)",
-            drmBuffers.Count, numPlanes == 1 ? "contiguous" : "separate planes");
+            _drmBuffers.Count, numPlanes == 1 ? "contiguous" : "separate planes");
     }
 
     private void StartStreaming()

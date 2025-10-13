@@ -226,14 +226,14 @@ public class V4L2DeviceQueue
     /// <param name="dmaBufferFds">Array of DMA buffer file descriptors (one per buffer)</param>
     /// <param name="planeSizes">Array of plane sizes (one per plane)</param>
     /// <param name="planeOffsets">Array of plane offsets within each buffer (one per plane)</param>
-    public virtual void InitDmaBuf(int[][] dmaBufferFds, uint[] planeSizes)
+    public virtual void InitDmaBuf(int[][] dmaBufferFds, uint[] planeSizes, uint[] planeOffsets)
     {
         if (_isInitialized)
         {
             throw new Exception("Already initialised");
         }
 
-        _dmaBufBuffersPool = V4L2DmaBufBufferPool.CreatePool(_deviceFd, _type, dmaBufferFds, planeSizes);
+        _dmaBufBuffersPool = V4L2DmaBufBufferPool.CreatePool(_deviceFd, _type, dmaBufferFds, planeSizes, planeOffsets);
         _memoryType = V4L2Memory.DMABUF;
         _isInitialized = true;
     }

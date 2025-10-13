@@ -138,7 +138,7 @@ public class DrmBufferManager : IDisposable
     /// Allocates a pool of contiguous DMA buffers for NV12 format with explicit buffer size.
     /// For V4L2 drivers that report NumPlanes=1 with specific size requirements (including padding).
     /// </summary>
-    public List<ManagedDrmBuffer> AllocateNv12ContiguousBuffersWithSize(int width, int height, int count, uint bufferSize)
+    public List<ManagedDrmBuffer> AllocateNv12ContiguousBuffersWithSize(int width, int height, int count, uint bufferSize, uint stride)
     {
         var buffers = new List<ManagedDrmBuffer>();
 
@@ -166,6 +166,7 @@ public class DrmBufferManager : IDisposable
                 PlaneBuffers = null, // No separate plane buffers
                 Width = width,
                 Height = height,
+                Stride = stride, // Actual stride from V4L2
                 Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc,
                 Index = i
             };
@@ -192,8 +193,8 @@ public class DrmBufferManager : IDisposable
         buffer.DrmHandle = yHandle;
 
         // Create framebuffer for NV12 format
-        uint yPitch = (uint)buffer.Width;
-        uint uvPitch = (uint)buffer.Width;
+        uint yPitch = buffer.Stride > 0 ? buffer.Stride : (uint)buffer.Width;
+        uint uvPitch = yPitch; // UV plane has same stride as Y
         uint yOffset = 0;
         uint uvOffset;
         uint uvHandle;
@@ -210,9 +211,13 @@ public class DrmBufferManager : IDisposable
         }
         else
         {
-            // Contiguous buffer - UV plane is at offset width*height
+            // Contiguous buffer - UV plane starts after Y plane data
             uvHandle = yHandle; // Same handle
-            uvOffset = (uint)(buffer.Width * buffer.Height); // UV starts after Y plane
+            // Use stride * height for correct offset (accounts for padding)
+            uvOffset = yPitch * (uint)buffer.Height;
+            Console.Error.WriteLine($"[DRM] Creating NV12 framebuffer: Width={buffer.Width}, Height={buffer.Height}, Stride={yPitch}");
+            Console.Error.WriteLine($"[DRM]   Y: handle={yHandle}, pitch={yPitch}, offset={yOffset}");
+            Console.Error.WriteLine($"[DRM]   UV: handle={uvHandle}, pitch={uvPitch}, offset={uvOffset}");
         }
 
         uint* handles = stackalloc uint[4] { yHandle, uvHandle, 0, 0 };
@@ -287,6 +292,7 @@ public class ManagedDrmBuffer : IDisposable
     public int Height { get; init; }
     public uint Format { get; init; }
     public int Index { get; init; }
+    public uint Stride { get; init; } // BytesPerLine - actual stride including padding
     public uint DrmHandle { get; set; }
     public uint FramebufferId { get; set; }
 

@@ -33,18 +33,27 @@ public class V4L2DmaBufBufferPool
         int deviceFd,
         V4L2BufferType bufferType,
         int[][] dmaBufferFds, // Array of FD arrays (one FD array per buffer)
-        uint[] planeSizes)
+        uint[] planeSizes,
+        uint[] planeOffsets)
     {
         uint bufferCount = (uint)dmaBufferFds.Length;
         uint planeCount = (uint)planeSizes.Length;
 
         // Validate that each buffer has the correct number of plane FDs
+        // Note: For contiguous buffers (e.g., NV12 with numPlanes=1), the same FD
+        // may be used for multiple logical planes with different offsets
         foreach (var bufferFds in dmaBufferFds)
         {
             if (bufferFds.Length != planeCount)
             {
-                throw new ArgumentException($"Each buffer must have {planeCount} FDs (one per plane)");
+                throw new ArgumentException($"Each buffer must have {planeCount} FD entries (one per logical plane). " +
+                    $"For contiguous buffers, the same FD can be repeated with different offsets.");
             }
+        }
+
+        if (planeSizes.Length != planeOffsets.Length)
+        {
+            throw new ArgumentException($"Number of plane sizes ({planeSizes.Length}) must match number of plane offsets ({planeOffsets.Length})");
         }
 
         // Request buffers with DMABUF memory type
@@ -66,7 +75,7 @@ public class V4L2DmaBufBufferPool
 
         for (uint i = 0; i < bufferCount; i++)
         {
-            buffers[i] = new V4L2DmaBufMPlaneBuffer(i, dmaBufferFds[i], planeSizes);
+            buffers[i] = new V4L2DmaBufMPlaneBuffer(i, dmaBufferFds[i], planeSizes, planeOffsets);
         }
 
         return new V4L2DmaBufBufferPool(buffers, planeCount);
