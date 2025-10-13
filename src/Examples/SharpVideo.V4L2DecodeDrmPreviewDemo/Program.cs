@@ -170,6 +170,7 @@ internal class Program
 
             // Display thread - handles presentation separately from decoding
             var displayStopwatch = new Stopwatch();
+            var setPlaneTimings = new List<double>();
             var displayThread = new Thread(() =>
             {
                 logger.LogInformation("Display thread started");
@@ -185,6 +186,7 @@ internal class Program
 
                 try
                 {
+                    var loopIterationTimer = Stopwatch.StartNew();
                     while (!token.IsCancellationRequested)
                     {
                         // Get latest frame to display
@@ -207,15 +209,13 @@ internal class Program
 
                         if (!frameAvailable)
                         {
-                            // No new frames available, wait a bit with cancellation check
-                            try
-                            {
-                                Task.Delay(1, token).Wait();
-                            }
-                            catch (OperationCanceledException)
+                            // No new frames available, use adaptive spinning for efficiency
+                            // SpinWait provides hybrid spinning with automatic backoff
+                            if (token.IsCancellationRequested)
                             {
                                 break;
                             }
+                            Thread.SpinWait(100); // Brief spin (microseconds range)
                             continue;
                         }
 
@@ -236,10 +236,14 @@ internal class Program
                                 previousBufferIndex = lastDisplayedBufferIndex;
                             }
 
-                            // Display the buffer
-                            if (SetPlane(drmDevice.DeviceFd, displayContext.Nv12Plane.Id, displayContext.CrtcId,
+                            // Display the buffer - measure actual display latency
+                            var setPlaneStart = Stopwatch.GetTimestamp();
+                            var setPlaneSuccess = SetPlane(drmDevice.DeviceFd, displayContext.Nv12Plane.Id, displayContext.CrtcId,
                                          drmBuffer.FramebufferId, drmBuffer.Width, drmBuffer.Height, Width, Height,
-                                         displayContext.AtomicUpdater, displayContext.SupportsAsyncFlip, logger))
+                                         displayContext.AtomicUpdater, displayContext.SupportsAsyncFlip, logger);
+                            var setPlaneElapsed = (Stopwatch.GetTimestamp() - setPlaneStart) * 1000.0 / Stopwatch.Frequency;
+                            
+                            if (setPlaneSuccess)
                             {
                                 lock (lockObject)
                                 {
@@ -248,6 +252,15 @@ internal class Program
                                 }
 
                                 frameCount++;
+                                
+                                // Log timing for performance analysis
+                                if (frameCount <= 10 || frameCount % 10 == 0)
+                                {
+                                    var totalLoopTime = loopIterationTimer.Elapsed.TotalMilliseconds;
+                                    logger.LogInformation("Frame {Count}: SetPlane={SetPlaneMs:F2}ms, TotalLoop={TotalMs:F2}ms, Overhead={OverheadMs:F2}ms", 
+                                        frameCount, setPlaneElapsed, totalLoopTime, totalLoopTime - setPlaneElapsed);
+                                    loopIterationTimer.Restart();
+                                }
 
                                 // Track frame timing for detailed statistics
                                 if (useMonotonicTiming && frameCount > 1)
@@ -355,9 +368,9 @@ internal class Program
             logger.LogInformation("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}",
                 decodedFrames, decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
 
-            // Give display thread a moment to show the last frame
+            // Give display thread a moment to show the last frame (2 frames at 60 FPS)
             logger.LogInformation("Waiting for final frame display...");
-            await Task.Delay(100);
+            await Task.Delay(33);
 
             // Check if there's still an undisplayed frame
             lock (frameLock)
