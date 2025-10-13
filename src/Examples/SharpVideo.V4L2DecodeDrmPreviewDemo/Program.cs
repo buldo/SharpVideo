@@ -207,7 +207,8 @@ internal class Program
 
                             // Display the buffer
                             if (SetPlane(drmDevice.DeviceFd, displayContext.Nv12Plane.Id, displayContext.CrtcId,
-                                         drmBuffer.FramebufferId, drmBuffer.Width, drmBuffer.Height, Width, Height, logger))
+                                         drmBuffer.FramebufferId, drmBuffer.Width, drmBuffer.Height, Width, Height,
+                                         displayContext.AtomicUpdater, displayContext.SupportsAsyncFlip, logger))
                             {
                                 lock (lockObject)
                                 {
@@ -683,6 +684,8 @@ internal class Program
         public DmaBuffers.DmaBuffer? RgbBuffer { get; set; }
         public uint RgbFbId { get; set; }
         public uint Nv12FbId { get; set; }
+        public AtomicPlaneUpdater? AtomicUpdater { get; set; }
+        public bool SupportsAsyncFlip { get; set; }
     }
 
     private static DisplayContext? SetupDisplay(
@@ -778,6 +781,18 @@ internal class Program
         }
         logger.LogInformation("Found NV12 overlay plane: ID {PlaneId}", nv12Plane.Id);
 
+        // Initialize atomic plane updater for better performance
+        AtomicPlaneUpdater? atomicUpdater = null;
+        try
+        {
+            atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, nv12Plane.Id, crtcId);
+            logger.LogInformation("✓ Atomic plane updates enabled - reduced syscall overhead");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Could not initialize atomic updates (will use legacy API): {Error}", ex.Message);
+        }
+
         // Setup RGB buffer for mode setting
         ulong rgbBufferSize = (ulong)(width * height * 4);
         var rgbBuf = allocator.Allocate(rgbBufferSize);
@@ -813,7 +828,7 @@ internal class Program
             return null;
         }
 
-        if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, width, height, width, height, logger))
+        if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, width, height, width, height, null, false, logger))
         {
             LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
             rgbBuf.Dispose();
@@ -840,7 +855,9 @@ internal class Program
             Nv12Plane = nv12Plane,
             RgbBuffer = rgbBuf,
             RgbFbId = rgbFbId,
-            Nv12FbId = 0
+            Nv12FbId = 0,
+            AtomicUpdater = atomicUpdater,
+            SupportsAsyncFlip = capabilities.AsyncPageFlip
         };
     }
 
@@ -930,10 +947,34 @@ internal class Program
         int srcHeight,
         int dstWidth,
         int dstHeight,
+        AtomicPlaneUpdater? atomicUpdater,
+        bool tryAsync,
         ILogger logger)
     {
         // srcWidth/srcHeight: dimensions of the framebuffer (may be padded, e.g., 1920x1088)
         // dstWidth/dstHeight: dimensions to display on screen (e.g., 1920x1080)
+
+        // Try atomic API first if available
+        if (atomicUpdater != null)
+        {
+            var success = atomicUpdater.UpdatePlane(
+                planeId,
+                crtcId,
+                fbId,
+                0, 0,  // crtcX, crtcY
+                (uint)dstWidth, (uint)dstHeight,
+                0, 0,  // srcX, srcY (16.16 fixed point, but we pass 0)
+                (uint)srcWidth << 16, (uint)srcHeight << 16,  // srcW, srcH in 16.16 fixed point
+                tryAsync);
+
+            if (success)
+                return true;
+
+            // Fall through to legacy API if atomic fails
+            logger.LogWarning("Atomic plane update failed, falling back to legacy API");
+        }
+
+        // Legacy API fallback
         var result = LibDrm.drmModeSetPlane(drmFd, planeId, crtcId, fbId, 0,
                                            0, 0, (uint)dstWidth, (uint)dstHeight,
                                            0, 0, (uint)srcWidth << 16, (uint)srcHeight << 16);
@@ -984,6 +1025,11 @@ internal class Program
             {
                 context.RgbBuffer.UnmapBuffer();
                 context.RgbBuffer.Dispose();
+            }
+
+            if (context.AtomicUpdater != null)
+            {
+                context.AtomicUpdater.Dispose();
             }
         }
         catch (Exception ex)
