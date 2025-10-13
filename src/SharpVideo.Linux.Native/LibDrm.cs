@@ -358,4 +358,51 @@ public static unsafe partial class LibDrm
         uint object_type,
         uint property_id,
         ulong property_value);
+
+    // -------------------- Atomic Modesetting API ------------------------------
+
+    /// <summary>
+    /// Allocate a new atomic request object.
+    /// Must be freed with drmModeAtomicFree.
+    /// </summary>
+    /// <returns>Pointer to atomic request, or null on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeAtomicAlloc")]
+    public static partial DrmModeAtomicReq* drmModeAtomicAlloc();
+
+    /// <summary>
+    /// Free an atomic request object.
+    /// </summary>
+    /// <param name="req">Atomic request to free</param>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeAtomicFree")]
+    public static partial void drmModeAtomicFree(DrmModeAtomicReq* req);
+
+    /// <summary>
+    /// Add a property to an atomic request.
+    /// </summary>
+    /// <param name="req">Atomic request</param>
+    /// <param name="object_id">Object ID (CRTC, plane, connector, etc.)</param>
+    /// <param name="property_id">Property ID</param>
+    /// <param name="value">Property value</param>
+    /// <returns>0 on success, negative on error</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeAtomicAddProperty")]
+    public static partial int drmModeAtomicAddProperty(
+        DrmModeAtomicReq* req,
+        uint object_id,
+        uint property_id,
+        ulong value);
+
+    /// <summary>
+    /// Commit an atomic request.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="req">Atomic request to commit</param>
+    /// <param name="flags">Commit flags</param>
+    /// <param name="user_data">User data for page flip event</param>
+    /// <returns>0 on success, negative on error</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeAtomicCommit")]
+    public static partial int drmModeAtomicCommit(
+        int fd,
+        DrmModeAtomicReq* req,
+        DrmModeAtomicFlags flags,
+        nint user_data);
 }

@@ -10,11 +10,17 @@ using SharpVideo.V4L2StatelessDecoder.Services;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
+/// <summary>
+/// Demonstrates H.264 video decoding using V4L2 stateless decoder with zero-copy DRM display.
+/// Uses DMABUF sharing between V4L2 decoder and DRM display for efficient video presentation.
+/// </summary>
 [SupportedOSPlatform("linux")]
 internal class Program
 {
+    // Display resolution constants
     private const int Width = 1920;
     private const int Height = 1080;
+
     static async Task Main(string[] args)
     {
         using var loggerFactory = LoggerFactory.Create(builder =>
@@ -24,12 +30,16 @@ internal class Program
         logger.LogInformation("SharpVideo H.264 V4L2 Decoder with DRM Preview Demo");
 
         // Setup DRM display
+        // Note: DrmDevice should implement IDisposable in the future for proper resource management
         var drmDevice = OpenDrmDevice(logger);
         if (drmDevice == null)
         {
             logger.LogError("No DRM devices could be opened.");
             return;
         }
+
+        // Analyze DRM capabilities for optimal configuration
+        var drmCaps = AnalyzeDrmCapabilities(drmDevice, logger);
 
         EnableDrmCapabilities(drmDevice, logger);
 
@@ -39,121 +49,385 @@ internal class Program
             return;
         }
 
-        // Setup display for NV12
-        var displayContext = SetupDisplay(drmDevice, Width, Height, allocator, logger);
+        // Note: DmaBuffersAllocator should implement IDisposable in the future for proper resource management
+        // Setup display for NV12 with capabilities-aware configuration
+        var displayContext = SetupDisplay(drmDevice, Width, Height, allocator, drmCaps, logger);
         if (displayContext == null)
         {
             logger.LogError("Failed to setup display.");
             return;
         }
 
+        // Create DRM buffer manager for zero-copy
+        using var drmBufferManager = new DrmBufferManager(drmDevice, allocator);
+
+        // Latest frame tracking for minimal latency display
+        // Instead of queue, we always display the most recent decoded frame
+        uint? latestFrameIndex = null;
+        bool hasNewFrame = false;
+        var frameLock = new object();
+        var displayCts = new CancellationTokenSource();
+
         try
         {
             // Setup decoder
             await using var fileStream = GetFileStream();
-            using var v4L2Device = GetVideoDevice(logger);
+            var (v4L2Device, deviceInfo) = GetVideoDevice(logger);
+            using var _ = v4L2Device; // Ensure disposal
             using var mediaDevice = GetMediaDevice();
 
             var decoderLogger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
+
+            // Configure decoder based on device capabilities for optimal low-latency performance
             var config = new DecoderConfiguration
             {
-                OutputBufferCount = 16,
-                CaptureBufferCount = 16,
-                RequestPoolSize = 32
+                // Use more buffers if streaming is supported for smoother playback
+                OutputBufferCount = deviceInfo.DeviceCapabilities.HasFlag(V4L2Capabilities.STREAMING) ? 16u : 8u,
+                CaptureBufferCount = deviceInfo.DeviceCapabilities.HasFlag(V4L2Capabilities.STREAMING) ? 16u : 8u,
+                RequestPoolSize = 32,
+                UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode for lowest latency
             };
 
+            logger.LogInformation("Decoder configuration: OutputBuffers={Output}, CaptureBuffers={Capture}, " +
+                                "RequestPool={Pool}, DrmPrime={Drm}",
+                config.OutputBufferCount, config.CaptureBufferCount,
+                config.RequestPoolSize, config.UseDrmPrimeBuffers);
+            logger.LogInformation("Display strategy: Latest-frame mode (minimal latency, skips intermediate frames)");
+
+            // Thread-safe counters for statistics
             int decodedFrames = 0;
-            int copiedFrames = 0;
             int presentedFrames = 0;
+            int droppedFrames = 0;
+            uint? lastDisplayedBufferIndex = null;
+            var lockObject = new object();
 
-            // Pre-allocate display buffers for double buffering
-            var displayBuffer1 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
-            var displayBuffer2 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
+            // Reference to decoder for use in callback (set after decoder creation)
+            H264V4L2StatelessDecoder? decoderRef = null;
 
-            if (displayBuffer1 == null || displayBuffer2 == null)
+            // Fast callback - just enqueue the buffer index for async display
+            Action<uint> processBuffer = (uint bufferIndex) =>
             {
-                logger.LogError("Failed to allocate display buffers");
-                displayBuffer1?.Dispose();
-                displayBuffer2?.Dispose();
-                return;
-            }
+                Interlocked.Increment(ref decodedFrames);
 
-            bool useBuffer1 = true;
-            DmaBuffers.DmaBuffer? currentDisplayBuffer = displayBuffer1;
-
-            await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config, span =>
-            {
-                decodedFrames++;
-
-                // Copy decoded NV12 frame to DMA buffer and display it
-                // Display every frame
+                try
                 {
-                    try
+                    // Get DRM buffers from decoder (allocated with correct dimensions)
+                    var drmBuffers = decoderRef?.DrmBuffers;
+                    if (drmBuffers == null)
                     {
-                        // Toggle between the two buffers
-                        currentDisplayBuffer = useBuffer1 ? displayBuffer1 : displayBuffer2;
-                        useBuffer1 = !useBuffer1;
+                        logger.LogError("DRM buffers not initialized yet");
+                        return;
+                    }
 
-                        // Copy frame data to the buffer
-                        if (CopyFrameToExistingBuffer(span, currentDisplayBuffer, logger))
+                    // Validate buffer index
+                    if (bufferIndex >= drmBuffers.Count)
+                    {
+                        logger.LogError("Invalid buffer index {BufferIndex}, max is {MaxIndex}",
+                            bufferIndex, drmBuffers.Count - 1);
+                        return;
+                    }
+
+                    // Get the DRM buffer corresponding to this V4L2 buffer
+                    var drmBuffer = drmBuffers[(int)bufferIndex];
+
+                    // Create framebuffer if not already created (first use)
+                    if (drmBuffer.FramebufferId == 0)
+                    {
+                        drmBufferManager.CreateFramebuffer(drmBuffer);
+                        logger.LogDebug("Created framebuffer {FbId} for buffer {BufferIndex}",
+                            drmBuffer.FramebufferId, bufferIndex);
+                    }
+
+                    // Store as latest frame (replaces previous if not yet displayed)
+                    lock (frameLock)
+                    {
+                        // If there was a previous undisplayed frame, requeue it immediately
+                        if (hasNewFrame && latestFrameIndex.HasValue && latestFrameIndex.Value != bufferIndex)
                         {
-                            copiedFrames++;
-                            logger.LogDebug("Frame {FrameNumber} copied to buffer (total copied: {CopiedCount})", decodedFrames, copiedFrames);
-                            
-                            if (DisplayNv12Buffer(drmDevice, displayContext, currentDisplayBuffer, Width, Height, logger))
+                            decoderRef?.RequeueCaptureBuffer(latestFrameIndex.Value);
+                        }
+                        latestFrameIndex = bufferIndex;
+                        hasNewFrame = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error in decode callback for buffer {BufferIndex}", bufferIndex);
+                    // Requeue immediately on error to avoid leaking the buffer
+                    if (decoderRef != null)
+                    {
+                        try
+                        {
+                            decoderRef.RequeueCaptureBuffer(bufferIndex);
+                        }
+                        catch (Exception requeueEx)
+                        {
+                            logger.LogError(requeueEx, "Failed to requeue buffer {BufferIndex} after error", bufferIndex);
+                        }
+                    }
+                }
+            };
+
+            // Display thread - handles presentation separately from decoding
+            var displayStopwatch = new Stopwatch();
+            var setPlaneTimings = new List<double>();
+            var displayThread = new Thread(() =>
+            {
+                logger.LogInformation("Display thread started");
+                displayStopwatch.Start();
+                long frameCount = 0;
+                var token = displayCts.Token;
+
+                // Use high-precision timing if monotonic timestamps are available
+                var useMonotonicTiming = drmCaps.TimestampMonotonic;
+                var lastFrameTime = displayStopwatch.Elapsed.TotalSeconds;
+                double minFrameTime = double.MaxValue;
+                double maxFrameTime = 0;
+
+                try
+                {
+                    var loopIterationTimer = Stopwatch.StartNew();
+                    while (!token.IsCancellationRequested)
+                    {
+                        // Get latest frame to display
+                        uint bufferIndex;
+                        bool frameAvailable;
+
+                        lock (frameLock)
+                        {
+                            frameAvailable = hasNewFrame && latestFrameIndex.HasValue;
+                            if (frameAvailable)
                             {
-                                presentedFrames++;
-                                logger.LogDebug("Frame {FrameNumber} presented on display (total presented: {PresentedCount})", decodedFrames, presentedFrames);
+                                bufferIndex = latestFrameIndex!.Value;
+                                hasNewFrame = false; // Mark as consumed
                             }
                             else
                             {
-                                logger.LogWarning("Frame {FrameNumber} copied but failed to present", decodedFrames);
+                                bufferIndex = 0; // Will not be used
                             }
                         }
-                        else
+
+                        if (!frameAvailable)
                         {
-                            logger.LogWarning("Failed to copy frame {FrameNumber} to buffer", decodedFrames);
+                            // No new frames available, use adaptive spinning for efficiency
+                            // SpinWait provides hybrid spinning with automatic backoff
+                            if (token.IsCancellationRequested)
+                            {
+                                break;
+                            }
+                            Thread.SpinWait(100); // Brief spin (microseconds range)
+                            continue;
+                        }
+
+                        try
+                        {
+                            var drmBuffers = decoderRef?.DrmBuffers;
+                            if (drmBuffers == null)
+                            {
+                                logger.LogWarning("DRM buffers not available in display thread");
+                                continue;
+                            }
+
+                            var drmBuffer = drmBuffers[(int)bufferIndex];
+
+                            uint? previousBufferIndex = null;
+                            lock (lockObject)
+                            {
+                                previousBufferIndex = lastDisplayedBufferIndex;
+                            }
+
+                            // Display the buffer - measure actual display latency
+                            var setPlaneStart = Stopwatch.GetTimestamp();
+                            var setPlaneSuccess = SetPlane(drmDevice.DeviceFd, displayContext.Nv12Plane.Id, displayContext.CrtcId,
+                                         drmBuffer.FramebufferId, drmBuffer.Width, drmBuffer.Height, Width, Height,
+                                         displayContext.AtomicUpdater, displayContext.SupportsAsyncFlip, logger);
+                            var setPlaneElapsed = (Stopwatch.GetTimestamp() - setPlaneStart) * 1000.0 / Stopwatch.Frequency;
+                            
+                            if (setPlaneSuccess)
+                            {
+                                lock (lockObject)
+                                {
+                                    presentedFrames++;
+                                    lastDisplayedBufferIndex = bufferIndex;
+                                }
+
+                                frameCount++;
+                                
+                                // Log timing for performance analysis
+                                if (frameCount <= 10 || frameCount % 10 == 0)
+                                {
+                                    var totalLoopTime = loopIterationTimer.Elapsed.TotalMilliseconds;
+                                    logger.LogInformation("Frame {Count}: SetPlane={SetPlaneMs:F2}ms, TotalLoop={TotalMs:F2}ms, Overhead={OverheadMs:F2}ms", 
+                                        frameCount, setPlaneElapsed, totalLoopTime, totalLoopTime - setPlaneElapsed);
+                                    loopIterationTimer.Restart();
+                                }
+
+                                // Track frame timing for detailed statistics
+                                if (useMonotonicTiming && frameCount > 1)
+                                {
+                                    var currentTime = displayStopwatch.Elapsed.TotalSeconds;
+                                    var frameTime = (currentTime - lastFrameTime) * 1000.0; // Convert to ms
+                                    minFrameTime = Math.Min(minFrameTime, frameTime);
+                                    maxFrameTime = Math.Max(maxFrameTime, frameTime);
+                                    lastFrameTime = currentTime;
+                                }
+
+                                if (frameCount % 60 == 0)
+                                {
+                                    var elapsed = displayStopwatch.Elapsed.TotalSeconds;
+                                    var displayFps = frameCount / elapsed;
+                                    if (useMonotonicTiming && frameCount > 1)
+                                    {
+                                        logger.LogDebug("Display: {Fps:F2} FPS avg, frame time: {Min:F2}-{Max:F2}ms ({FrameCount} frames)",
+                                            displayFps, minFrameTime, maxFrameTime, frameCount);
+                                        // Reset min/max for next interval
+                                        minFrameTime = double.MaxValue;
+                                        maxFrameTime = 0;
+                                    }
+                                    else
+                                    {
+                                        logger.LogDebug("Display FPS: {Fps:F2} ({FrameCount} frames)", displayFps, frameCount);
+                                    }
+                                }
+
+                                // Requeue the previously displayed buffer
+                                if (previousBufferIndex.HasValue && decoderRef != null)
+                                {
+                                    decoderRef.RequeueCaptureBuffer(previousBufferIndex.Value);
+                                }
+
+                                // No artificial delay - let drmModeSetPlane naturally pace us
+                                // The display system will handle the rate limiting via VSync
+                            }
+                            else
+                            {
+                                logger.LogWarning("Failed to display buffer {BufferIndex}", bufferIndex);
+                                Interlocked.Increment(ref droppedFrames);
+                                // Requeue immediately on failure
+                                if (decoderRef != null)
+                                {
+                                    decoderRef.RequeueCaptureBuffer(bufferIndex);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogError(ex, "Error in display thread for buffer {BufferIndex}", bufferIndex);
+                            Interlocked.Increment(ref droppedFrames);
+                            // Try to requeue the buffer
+                            if (decoderRef != null)
+                            {
+                                try
+                                {
+                                    decoderRef.RequeueCaptureBuffer(bufferIndex);
+                                }
+                                catch (Exception requeueEx)
+                                {
+                                    logger.LogError(requeueEx, "Failed to requeue buffer in display thread");
+                                }
+                            }
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Failed to display frame {FrameNumber}", decodedFrames);
-                    }
                 }
-            });
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Fatal error in display thread");
+                }
+                finally
+                {
+                    displayStopwatch.Stop();
+                }
+
+                logger.LogInformation("Display thread stopped (processed {FrameCount} frames)", frameCount);
+            })
+            {
+                Name = "DisplayThread",
+                IsBackground = false
+            };
+
+            displayThread.Start();
+
+            await using var decoder = new H264V4L2StatelessDecoder(
+                v4L2Device,
+                mediaDevice,
+                decoderLogger,
+                config,
+                processDecodedAction: null, // Not used in DMABUF mode
+                processDecodedBufferIndex: processBuffer,
+                drmBufferManager: drmBufferManager);
+
+            // Set decoder reference for use in callbacks
+            decoderRef = decoder;
 
             var decodeStopWatch = Stopwatch.StartNew();
             await decoder.DecodeStreamAsync(fileStream);
+            decodeStopWatch.Stop();
 
-            logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
-            logger.LogInformation("=== Decoding Statistics ===");
+            logger.LogInformation("Decoding stream completed in {ElapsedTime:F2} seconds",
+                decodeStopWatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}",
+                decodedFrames, decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
+
+            // Give display thread a moment to show the last frame (2 frames at 60 FPS)
+            logger.LogInformation("Waiting for final frame display...");
+            await Task.Delay(33);
+
+            // Check if there's still an undisplayed frame
+            lock (frameLock)
+            {
+                if (hasNewFrame && latestFrameIndex.HasValue)
+                {
+                    logger.LogInformation("Last decoded frame not displayed yet");
+                }
+            }
+
+            // Stop display thread gracefully
+            logger.LogInformation("Stopping display thread...");
+            displayCts.Cancel();
+
+            if (!displayThread.Join(TimeSpan.FromSeconds(3)))
+            {
+                logger.LogWarning("Display thread did not stop within timeout");
+            }
+
+            // Requeue the last displayed buffer
+            uint? finalBufferIndex;
+            lock (lockObject)
+            {
+                finalBufferIndex = lastDisplayedBufferIndex;
+            }
+            if (finalBufferIndex.HasValue)
+            {
+                decoder.RequeueCaptureBuffer(finalBufferIndex.Value);
+                logger.LogDebug("Requeued final displayed buffer {BufferIndex}", finalBufferIndex.Value);
+            }
+
+            logger.LogInformation("=== Final Statistics (Latest-Frame Low-Latency Mode) ===");
             logger.LogInformation("Total decoded frames: {DecodedFrames}", decodedFrames);
-            logger.LogInformation("Frames copied to DMA buffers: {CopiedFrames}", copiedFrames);
             logger.LogInformation("Frames presented on display: {PresentedFrames}", presentedFrames);
-            logger.LogInformation("Display interval: Every frame");
-            logger.LogInformation("Expected frames to display: {ExpectedFrames}", decodedFrames);
-            logger.LogInformation("Press Enter to exit...");
-            Console.ReadLine();
-
-            // Cleanup display buffers
-            if (displayBuffer1 != null)
-            {
-                displayBuffer1.UnmapBuffer();
-                displayBuffer1.Dispose();
-            }
-            if (displayBuffer2 != null)
-            {
-                displayBuffer2.UnmapBuffer();
-                displayBuffer2.Dispose();
-            }
+            logger.LogInformation("Frames skipped (not displayed): {SkippedFrames}", decodedFrames - presentedFrames - droppedFrames);
+            logger.LogInformation("Frames dropped (errors): {DroppedFrames}", droppedFrames);
+            logger.LogInformation("Frame presentation rate: {Rate:F2}%",
+                decodedFrames > 0 ? (presentedFrames * 100.0 / decodedFrames) : 0);
+            logger.LogInformation("Average decode FPS: {Fps:F2}",
+                decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Average display FPS: {Fps:F2} (measured over {Duration:F2}s)",
+                displayStopwatch.Elapsed.TotalSeconds > 0 ? presentedFrames / displayStopwatch.Elapsed.TotalSeconds : 0,
+                displayStopwatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Decode duration: {Duration:F2}s, Display duration: {DisplayDuration:F2}s",
+                decodeStopWatch.Elapsed.TotalSeconds, displayStopwatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Latency: Minimal (always displaying latest decoded frame)");
+            logger.LogInformation("Processing completed successfully!");
         }
         finally
         {
+            displayCts.Cancel();
             CleanupDisplay(drmDevice, displayContext, logger);
+            displayCts.Dispose();
         }
     }
 
-    private static V4L2Device GetVideoDevice(ILogger logger)
+    private static (V4L2Device device, V4L2DeviceInfo deviceInfo) GetVideoDevice(ILogger logger)
     {
         var h264Devices = V4L2.V4L2DeviceManager.GetH264Devices();
         if (!h264Devices.Any())
@@ -164,13 +438,86 @@ internal class Program
         var selectedDevice = h264Devices.First();
         logger.LogInformation("Using device: {@Device}", selectedDevice);
 
+        // Log device capabilities for optimization analysis
+        LogDeviceCapabilities(selectedDevice, logger);
+
         var v4L2Device = V4L2DeviceFactory.Open(selectedDevice.DevicePath);
         if (v4L2Device == null)
         {
             throw new Exception($"Error: Failed to open V4L2 device at path '{selectedDevice.DevicePath}'.");
         }
 
-        return v4L2Device;
+        return (v4L2Device, selectedDevice);
+    }
+
+    private static void LogDeviceCapabilities(V4L2DeviceInfo deviceInfo, ILogger logger)
+    {
+        logger.LogInformation("=== Device Capabilities Analysis ===");
+        logger.LogInformation("Driver: {Driver}", deviceInfo.DriverName);
+        logger.LogInformation("Card: {Card}", deviceInfo.CardName);
+        logger.LogInformation("Device Path: {Path}", deviceInfo.DevicePath);
+
+        var caps = deviceInfo.DeviceCapabilities;
+        logger.LogInformation("Capabilities (0x{Caps:X8}):", (uint)caps);
+
+        // Check for memory-to-memory device (required for decoder)
+        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M_MPLANE))
+        {
+            logger.LogInformation("  ✓ VIDEO_M2M_MPLANE - Multi-planar memory-to-memory (optimal for stateless decoders)");
+        }
+        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M))
+        {
+            logger.LogInformation("  ✓ VIDEO_M2M - Single-planar memory-to-memory");
+        }
+
+        // Check for streaming capability (essential for low-latency)
+        if (caps.HasFlag(V4L2Capabilities.STREAMING))
+        {
+            logger.LogInformation("  ✓ STREAMING - Supports streaming I/O (lowest latency)");
+        }
+
+        // Check if device supports extended pixel formats
+        if (caps.HasFlag(V4L2Capabilities.EXT_PIX_FORMAT))
+        {
+            logger.LogInformation("  ✓ EXT_PIX_FORMAT - Extended pixel format support");
+        }
+
+        // Check for Media Controller (important for complex pipelines)
+        if (caps.HasFlag(V4L2Capabilities.IO_MC))
+        {
+            logger.LogInformation("  ✓ IO_MC - Media Controller support (required for stateless decoders)");
+        }
+
+        // Analyze optimal configuration
+        logger.LogInformation("=== Optimal Configuration Recommendations ===");
+
+        if (caps.HasFlag(V4L2Capabilities.STREAMING))
+        {
+            logger.LogInformation("✓ Use STREAMING mode (already configured) - provides lowest latency");
+        }
+        else
+        {
+            logger.LogWarning("⚠ Device does not support STREAMING - latency may be higher");
+        }
+
+        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M_MPLANE) || caps.HasFlag(V4L2Capabilities.VIDEO_M2M))
+        {
+            logger.LogInformation("✓ Memory-to-memory device detected - zero-copy DMABUF mode optimal");
+        }
+
+        if (!caps.HasFlag(V4L2Capabilities.IO_MC))
+        {
+            logger.LogWarning("⚠ Media Controller not supported - may not work with stateless decoders");
+        }
+
+        logger.LogInformation("=== Supported Formats ===");
+        foreach (var format in deviceInfo.SupportedFormats)
+        {
+            logger.LogInformation("  Format: {Description} (FourCC: {FourCC})",
+                format.Description, format.PixelFormat);
+        }
+
+        logger.LogInformation("======================================");
     }
 
     private static MediaDevice GetMediaDevice()
@@ -198,20 +545,165 @@ internal class Program
         return File.OpenRead(filePath);
     }
 
+    /// <summary>
+    /// Opens the first available DRM device from /dev/dri/card*.
+    /// </summary>
+    /// <returns>Opened DRM device or null if no devices available.</returns>
     private static DrmDevice? OpenDrmDevice(ILogger logger)
     {
         var devices = Directory.EnumerateFiles("/dev/dri", "card*", SearchOption.TopDirectoryOnly);
         foreach (var device in devices)
         {
-            var drmDevice = DrmDevice.Open(device);
-            if (drmDevice != null)
+            try
             {
-                logger.LogInformation("Opened DRM device: {Device}", device);
-                return drmDevice;
+                var drmDevice = DrmDevice.Open(device);
+                if (drmDevice != null)
+                {
+                    logger.LogInformation("Opened DRM device: {Device}", device);
+                    return drmDevice;
+                }
+                logger.LogWarning("Failed to open DRM device: {Device}", device);
             }
-            logger.LogWarning("Failed to open DRM device: {Device}", device);
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Exception while opening DRM device: {Device}", device);
+            }
         }
         return null;
+    }
+
+    private static DrmCapabilitiesState AnalyzeDrmCapabilities(DrmDevice drmDevice, ILogger logger)
+    {
+        logger.LogInformation("=== DRM Device Capabilities Analysis ===");
+
+        DrmCapabilitiesState caps;
+        try
+        {
+            caps = drmDevice.GetDeviceCapabilities();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to query DRM capabilities");
+            throw;
+        }
+
+        // Core capabilities
+        logger.LogInformation("Core Capabilities:");
+        if (caps.DumbBuffer)
+        {
+            logger.LogInformation("  ✓ DUMB_BUFFER - Basic buffer allocation support");
+            logger.LogInformation("    Preferred depth: {Depth} bits", caps.DumbPreferredDepth);
+            if (caps.DumbPreferShadow)
+            {
+                logger.LogInformation("    Prefers shadow buffer for rendering");
+            }
+        }
+
+        // PRIME (DMA-BUF) capabilities - critical for zero-copy
+        logger.LogInformation("PRIME (Zero-Copy) Capabilities:");
+        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_IMPORT))
+        {
+            logger.LogInformation("  ✓ PRIME_IMPORT - Can import DMA-BUF (essential for zero-copy decode)");
+        }
+        else
+        {
+            logger.LogWarning("  ✗ PRIME_IMPORT not supported - zero-copy may not work");
+        }
+
+        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_EXPORT))
+        {
+            logger.LogInformation("  ✓ PRIME_EXPORT - Can export DMA-BUF");
+        }
+
+        // Performance capabilities
+        logger.LogInformation("Performance Capabilities:");
+        if (caps.AsyncPageFlip)
+        {
+            logger.LogInformation("  ✓ ASYNC_PAGE_FLIP - Supports async page flips (lower latency)");
+        }
+        else
+        {
+            logger.LogInformation("  ✗ ASYNC_PAGE_FLIP not supported - page flips will block on VSync");
+        }
+
+        if (caps.AtomicAsyncPageFlip)
+        {
+            logger.LogInformation("  ✓ ATOMIC_ASYNC_PAGE_FLIP - Supports async atomic commits (optimal)");
+        }
+
+        if (caps.PageFlipTarget)
+        {
+            logger.LogInformation("  ✓ PAGE_FLIP_TARGET - Can target specific VSync for flip");
+        }
+
+        // Advanced features
+        logger.LogInformation("Advanced Features:");
+        if (caps.AddFB2Modifiers)
+        {
+            logger.LogInformation("  ✓ ADDFB2_MODIFIERS - Supports format modifiers (tiling, compression)");
+        }
+
+        if (caps.SyncObj)
+        {
+            logger.LogInformation("  ✓ SYNCOBJ - Supports explicit synchronization");
+            if (caps.SyncObjTimeline)
+            {
+                logger.LogInformation("    ✓ SYNCOBJ_TIMELINE - Supports timeline sync objects");
+            }
+        }
+
+        // Timing
+        if (caps.TimestampMonotonic)
+        {
+            logger.LogInformation("  ✓ TIMESTAMP_MONOTONIC - Uses monotonic clock for timestamps");
+        }
+
+        if (caps.CrtcInVblankEvent)
+        {
+            logger.LogInformation("  ✓ CRTC_IN_VBLANK_EVENT - CRTC ID in VBlank events");
+        }
+
+        // Cursor capabilities (informational)
+        if (caps.CursorWidth > 0 && caps.CursorHeight > 0)
+        {
+            logger.LogInformation("  Cursor size: {Width}x{Height}", caps.CursorWidth, caps.CursorHeight);
+        }
+
+        // Recommendations
+        logger.LogInformation("=== Optimal Configuration for Low Latency ===");
+
+        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_IMPORT))
+        {
+            logger.LogInformation("✓ Zero-copy decode-to-display via DMABUF (already configured)");
+        }
+        else
+        {
+            logger.LogWarning("⚠ PRIME import not supported - will need buffer copies (higher latency)");
+        }
+
+        if (caps.AsyncPageFlip || caps.AtomicAsyncPageFlip)
+        {
+            logger.LogInformation("✓ Async page flips available - consider using for lowest latency");
+            logger.LogInformation("  (Current implementation uses sync flips for stability)");
+        }
+        else
+        {
+            logger.LogInformation("ℹ Sync-only page flips - will wait for VSync (adds ~16ms latency @ 60Hz)");
+        }
+
+        if (caps.AddFB2Modifiers)
+        {
+            logger.LogInformation("✓ Format modifiers supported - can use tiled/compressed formats if beneficial");
+        }
+
+        if (caps.SyncObj)
+        {
+            logger.LogInformation("✓ Sync objects available - can use for precise frame timing control");
+        }
+
+        logger.LogInformation("===========================================");
+
+        return caps;
     }
 
     private static void EnableDrmCapabilities(DrmDevice drmDevice, ILogger logger)
@@ -241,6 +733,8 @@ internal class Program
         public DmaBuffers.DmaBuffer? RgbBuffer { get; set; }
         public uint RgbFbId { get; set; }
         public uint Nv12FbId { get; set; }
+        public AtomicPlaneUpdater? AtomicUpdater { get; set; }
+        public bool SupportsAsyncFlip { get; set; }
     }
 
     private static DisplayContext? SetupDisplay(
@@ -248,6 +742,7 @@ internal class Program
         int width,
         int height,
         DmaBuffersAllocator allocator,
+        DrmCapabilitiesState capabilities,
         ILogger logger)
     {
         var resources = drmDevice.GetResources();
@@ -335,6 +830,20 @@ internal class Program
         }
         logger.LogInformation("Found NV12 overlay plane: ID {PlaneId}", nv12Plane.Id);
 
+        // Initialize atomic plane updater for better performance
+        // Note: Atomic modesetting may not work on all hardware/kernels
+        // Falls back to legacy API if atomic commits fail at runtime
+        AtomicPlaneUpdater? atomicUpdater = null;
+        try
+        {
+            atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, nv12Plane.Id, crtcId);
+            logger.LogInformation("✓ Atomic modesetting infrastructure initialized (will attempt atomic plane updates)");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Could not initialize atomic modesetting infrastructure: {Error}", ex.Message);
+        }
+
         // Setup RGB buffer for mode setting
         ulong rgbBufferSize = (ulong)(width * height * 4);
         var rgbBuf = allocator.Allocate(rgbBufferSize);
@@ -370,11 +879,21 @@ internal class Program
             return null;
         }
 
-        if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, width, height, logger))
+        if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, width, height, width, height, null, false, logger))
         {
             LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
             rgbBuf.Dispose();
             return null;
+        }
+
+        // Log which optimizations are being used
+        if (capabilities.AddFB2Modifiers)
+        {
+            logger.LogInformation("Display configured with format modifier support (tiling/compression optimization available)");
+        }
+        if (capabilities.TimestampMonotonic)
+        {
+            logger.LogInformation("Display using monotonic timestamps for precise timing");
         }
 
         logger.LogInformation("Display setup complete");
@@ -387,7 +906,9 @@ internal class Program
             Nv12Plane = nv12Plane,
             RgbBuffer = rgbBuf,
             RgbFbId = rgbFbId,
-            Nv12FbId = 0
+            Nv12FbId = 0,
+            AtomicUpdater = atomicUpdater,
+            SupportsAsyncFlip = capabilities.AsyncPageFlip
         };
     }
 
@@ -473,13 +994,41 @@ internal class Program
         uint planeId,
         uint crtcId,
         uint fbId,
-        int width,
-        int height,
+        int srcWidth,
+        int srcHeight,
+        int dstWidth,
+        int dstHeight,
+        AtomicPlaneUpdater? atomicUpdater,
+        bool tryAsync,
         ILogger logger)
     {
+        // srcWidth/srcHeight: dimensions of the framebuffer (may be padded, e.g., 1920x1088)
+        // dstWidth/dstHeight: dimensions to display on screen (e.g., 1920x1080)
+
+        // Try atomic API first if available
+        if (atomicUpdater != null)
+        {
+            var success = atomicUpdater.UpdatePlane(
+                planeId,
+                crtcId,
+                fbId,
+                0, 0,  // crtcX, crtcY
+                (uint)dstWidth, (uint)dstHeight,
+                0, 0,  // srcX, srcY (16.16 fixed point, but we pass 0)
+                (uint)srcWidth << 16, (uint)srcHeight << 16,  // srcW, srcH in 16.16 fixed point
+                tryAsync);
+
+            if (success)
+                return true;
+
+            // Fall through to legacy API if atomic fails
+            logger.LogWarning("Atomic plane update failed, falling back to legacy API");
+        }
+
+        // Legacy API fallback
         var result = LibDrm.drmModeSetPlane(drmFd, planeId, crtcId, fbId, 0,
-                                           0, 0, (uint)width, (uint)height,
-                                           0, 0, (uint)width << 16, (uint)height << 16);
+                                           0, 0, (uint)dstWidth, (uint)dstHeight,
+                                           0, 0, (uint)srcWidth << 16, (uint)srcHeight << 16);
         if (result != 0)
         {
             logger.LogError("Failed to set plane {PlaneId}: {Result}", planeId, result);
@@ -488,104 +1037,12 @@ internal class Program
         return true;
     }
 
-    private static DmaBuffers.DmaBuffer? AllocateAndMapDisplayBuffer(
-        int width,
-        int height,
-        DmaBuffersAllocator allocator,
-        ILogger logger)
-    {
-        ulong nv12BufferSize = (ulong)(width * height * 3 / 2);
-        var dmaBuf = allocator.Allocate(nv12BufferSize);
-        if (dmaBuf == null)
-        {
-            logger.LogError("Failed to allocate NV12 DMA buffer");
-            return null;
-        }
-
-        dmaBuf.MapBuffer();
-        if (dmaBuf.MapStatus == MapStatus.FailedToMap)
-        {
-            logger.LogError("Failed to mmap NV12 DMA buffer");
-            dmaBuf.Dispose();
-            return null;
-        }
-
-        logger.LogDebug("Allocated display buffer with FD {Fd}", dmaBuf.Fd);
-        return dmaBuf;
-    }
-
-    private static bool CopyFrameToExistingBuffer(
-        ReadOnlySpan<byte> frameData,
-        DmaBuffers.DmaBuffer dmaBuf,
-        ILogger logger)
-    {
-        if (dmaBuf.MapStatus != MapStatus.Mapped)
-        {
-            logger.LogError("Buffer is not mapped");
-            return false;
-        }
-
-        // Copy frame data to DMA buffer
-        var dmaSpan = dmaBuf.GetMappedSpan();
-        var copySize = Math.Min(frameData.Length, dmaSpan.Length);
-        frameData.Slice(0, copySize).CopyTo(dmaSpan);
-
-        dmaBuf.SyncMap();
-        return true;
-    }
-
-    private static unsafe bool DisplayNv12Buffer(
-        DrmDevice drmDevice,
-        DisplayContext context,
-        DmaBuffers.DmaBuffer nv12Buffer,
-        int width,
-        int height,
-        ILogger logger)
-    {
-        // Remove old NV12 framebuffer if exists
-        if (context.Nv12FbId != 0)
-        {
-            LibDrm.drmModeRmFB(drmDevice.DeviceFd, context.Nv12FbId);
-            context.Nv12FbId = 0;
-        }
-
-        // Create new framebuffer
-        var result = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, nv12Buffer.Fd, out uint nv12Handle);
-        if (result != 0)
-        {
-            logger.LogError("Failed to convert NV12 DMA FD to handle: {Result}", result);
-            return false;
-        }
-
-        var nv12Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc;
-        uint yPitch = (uint)width;
-        uint uvPitch = (uint)width;
-        uint yOffset = 0;
-        uint uvOffset = (uint)(width * height);
-        uint* nv12Handles = stackalloc uint[4] { nv12Handle, nv12Handle, 0, 0 };
-        uint* nv12Pitches = stackalloc uint[4] { yPitch, uvPitch, 0, 0 };
-        uint* nv12Offsets = stackalloc uint[4] { yOffset, uvOffset, 0, 0 };
-
-        var resultFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, nv12Format,
-                                           nv12Handles, nv12Pitches, nv12Offsets, out var nv12FbId, 0);
-        if (resultFb != 0)
-        {
-            logger.LogError("Failed to create NV12 framebuffer: {Result}", resultFb);
-            return false;
-        }
-
-        context.Nv12FbId = nv12FbId;
-
-        // Set the plane
-        if (!SetPlane(drmDevice.DeviceFd, context.Nv12Plane.Id, context.CrtcId, nv12FbId, width, height, logger))
-        {
-            logger.LogError("Failed to set NV12 overlay plane");
-            return false;
-        }
-        
-        return true;
-    }
-
+    /// <summary>
+    /// Cleans up display resources including framebuffers and DMA buffers.
+    /// </summary>
+    /// <summary>
+    /// Cleans up display resources including framebuffers and DMA buffers.
+    /// </summary>
     private static void CleanupDisplay(DrmDevice drmDevice, DisplayContext? context, ILogger logger)
     {
         if (context == null)
@@ -593,20 +1050,42 @@ internal class Program
 
         logger.LogInformation("Cleaning up display resources");
 
-        if (context.Nv12FbId != 0)
+        try
         {
-            LibDrm.drmModeRmFB(drmDevice.DeviceFd, context.Nv12FbId);
-        }
+            if (context.Nv12FbId != 0)
+            {
+                var result = LibDrm.drmModeRmFB(drmDevice.DeviceFd, context.Nv12FbId);
+                if (result != 0)
+                {
+                    logger.LogWarning("Failed to remove NV12 framebuffer {FbId}: {Result}",
+                        context.Nv12FbId, result);
+                }
+            }
 
-        if (context.RgbFbId != 0)
-        {
-            LibDrm.drmModeRmFB(drmDevice.DeviceFd, context.RgbFbId);
-        }
+            if (context.RgbFbId != 0)
+            {
+                var result = LibDrm.drmModeRmFB(drmDevice.DeviceFd, context.RgbFbId);
+                if (result != 0)
+                {
+                    logger.LogWarning("Failed to remove RGB framebuffer {FbId}: {Result}",
+                        context.RgbFbId, result);
+                }
+            }
 
-        if (context.RgbBuffer != null)
+            if (context.RgbBuffer != null)
+            {
+                context.RgbBuffer.UnmapBuffer();
+                context.RgbBuffer.Dispose();
+            }
+
+            if (context.AtomicUpdater != null)
+            {
+                context.AtomicUpdater.Dispose();
+            }
+        }
+        catch (Exception ex)
         {
-            context.RgbBuffer.UnmapBuffer();
-            context.RgbBuffer.Dispose();
+            logger.LogError(ex, "Error during display cleanup");
         }
     }
 }

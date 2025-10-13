@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
+using SharpVideo.Drm;
 using SharpVideo.H264;
 using SharpVideo.Linux.Native;
 using SharpVideo.V4L2;
@@ -16,11 +17,19 @@ public class H264V4L2StatelessDecoder
     private readonly ILogger<H264V4L2StatelessDecoder> _logger;
 
     private readonly DecoderConfiguration _configuration;
-    private readonly Action<ReadOnlySpan<byte>> _processDecodedAction;
+    private readonly Action<ReadOnlySpan<byte>>? _processDecodedAction;
+    private readonly Action<uint>? _processDecodedBufferIndex;
+    private readonly Drm.DrmBufferManager? _drmBufferManager;
+    private List<ManagedDrmBuffer>? _drmBuffers;
 
     private bool _disposed;
     private int _framesDecoded;
     private readonly Stopwatch _decodingStopwatch = new();
+
+    /// <summary>
+    /// Gets the DRM buffers allocated for zero-copy decode (available after initialization).
+    /// </summary>
+    public IReadOnlyList<ManagedDrmBuffer>? DrmBuffers => _drmBuffers;
 
     private readonly bool _supportsSliceParamsControl;
 
@@ -44,15 +53,29 @@ public class H264V4L2StatelessDecoder
         MediaDevice? mediaDevice,
         ILogger<H264V4L2StatelessDecoder> logger,
         DecoderConfiguration configuration,
-        Action<ReadOnlySpan<byte>> processDecodedAction)
+        Action<ReadOnlySpan<byte>>? processDecodedAction = null,
+        Action<uint>? processDecodedBufferIndex = null,
+        Drm.DrmBufferManager? drmBufferManager = null)
     {
         _device = device;
         _mediaDevice = mediaDevice;
         _logger = logger;
         _configuration = configuration;
         _processDecodedAction = processDecodedAction;
+        _processDecodedBufferIndex = processDecodedBufferIndex;
+        _drmBufferManager = drmBufferManager;
         _supportsSliceParamsControl =
             device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
+
+        if (_configuration.UseDrmPrimeBuffers && _drmBufferManager == null)
+        {
+            throw new ArgumentException("DrmBufferManager is required when UseDrmPrimeBuffers is true");
+        }
+
+        if (_configuration.UseDrmPrimeBuffers && _processDecodedBufferIndex == null)
+        {
+            throw new ArgumentException("processDecodedBufferIndex callback is required when UseDrmPrimeBuffers is true");
+        }
     }
 
     /// <summary>
@@ -413,10 +436,19 @@ public class H264V4L2StatelessDecoder
 
             _framesDecoded++;
 
-            var buffer = _device.CaptureMPlaneQueue.BuffersPool.Buffers[(int)dequeuedBuffer.Index];
-            _processDecodedAction(buffer.MappedPlanes[0].AsSpan());
-
-            _device.CaptureMPlaneQueue.ReuseBuffer(dequeuedBuffer.Index);
+            if (_configuration.UseDrmPrimeBuffers)
+            {
+                // For DMABUF mode, pass buffer index to caller
+                _processDecodedBufferIndex!(dequeuedBuffer.Index);
+                // Don't requeue - let the display system handle it
+            }
+            else
+            {
+                // For MMAP mode, copy data and requeue immediately
+                var buffer = _device.CaptureMPlaneQueue.BuffersPool.Buffers[(int)dequeuedBuffer.Index];
+                _processDecodedAction!(buffer.MappedPlanes[0].AsSpan());
+                _device.CaptureMPlaneQueue.ReuseBuffer(dequeuedBuffer.Index);
+            }
         }
 
         _logger.LogInformation("Capture buffer processing thread stopped");
@@ -521,8 +553,15 @@ public class H264V4L2StatelessDecoder
             _device.OutputMPlaneQueue.AssociateMediaRequests(_mediaDevice.OpenedRequests);
         }
 
-        // Setup CAPTURE buffers for decoded frames with proper V4L2 mmap
-        SetupBufferQueue(_device.CaptureMPlaneQueue, _configuration.CaptureBufferCount);
+        // Setup CAPTURE buffers for decoded frames
+        if (_configuration.UseDrmPrimeBuffers)
+        {
+            SetupDmaBufCaptureQueue();
+        }
+        else
+        {
+            SetupBufferQueue(_device.CaptureMPlaneQueue, _configuration.CaptureBufferCount);
+        }
     }
 
     private void SetupBufferQueue(V4L2DeviceQueue queue, uint bufferCount)
@@ -534,11 +573,140 @@ public class H264V4L2StatelessDecoder
         }
     }
 
+    private void SetupDmaBufCaptureQueue()
+    {
+        _logger.LogInformation("Setting up DMABUF capture queue with DRM PRIME buffers");
+
+        // Query the actual negotiated capture format to get correct plane sizes
+        var negotiatedFormat = _device.GetCaptureFormatMPlane();
+        _logger.LogInformation("Negotiated capture format: {Width}x{Height}, NumPlanes={NumPlanes}, PixelFormat=0x{PixelFormat:X}",
+            negotiatedFormat.Width, negotiatedFormat.Height, negotiatedFormat.NumPlanes, negotiatedFormat.PixelFormat);
+
+        // Use the negotiated dimensions and plane sizes
+        uint width = negotiatedFormat.Width;
+        uint height = negotiatedFormat.Height;
+        uint numPlanes = negotiatedFormat.NumPlanes;
+
+        // Get plane format information
+        var planeFormats = negotiatedFormat.PlaneFormats;
+
+        // Log plane sizes from negotiated format
+        for (int i = 0; i < negotiatedFormat.NumPlanes; i++)
+        {
+            _logger.LogInformation("  Plane {Index}: SizeImage={SizeImage}, BytesPerLine={BytesPerLine}",
+                i, planeFormats[i].SizeImage, planeFormats[i].BytesPerLine);
+        }
+
+        // Allocate DRM buffers based on plane count and actual sizes from V4L2
+        uint stride;
+        uint totalBufferSize;
+
+        if (numPlanes == 1)
+        {
+            // Single-plane mode: contiguous buffer with Y and UV at different offsets
+            // Use the actual buffer size and stride reported by V4L2
+            totalBufferSize = planeFormats[0].SizeImage;
+            stride = planeFormats[0].BytesPerLine;
+            _logger.LogInformation("Using contiguous buffer allocation (single DMA-BUF per buffer), size={Size}, stride={Stride}", totalBufferSize, stride);
+            _drmBuffers = _drmBufferManager!.AllocateNv12ContiguousBuffersWithSize(
+                (int)width,
+                (int)height,
+                (int)_configuration.CaptureBufferCount,
+                totalBufferSize,
+                stride);
+        }
+        else
+        {
+            // Multi-plane mode: separate buffers for Y and UV
+            _logger.LogInformation("Using separate buffer allocation (one DMA-BUF per plane)");
+            _drmBuffers = _drmBufferManager!.AllocateNv12Buffers(
+                (int)width,
+                (int)height,
+                (int)_configuration.CaptureBufferCount);
+
+            // For multi-plane mode, we don't need stride from V4L2 as it's in separate buffers
+            stride = (uint)width; // Default stride
+            totalBufferSize = 0; // Not used
+        }
+
+        if (_drmBuffers.Count != _configuration.CaptureBufferCount)
+        {
+            throw new Exception($"Failed to allocate {_configuration.CaptureBufferCount} DRM buffers");
+        }
+
+        // For V4L2: prepare plane sizes and FD arrays
+        // V4L2 expects the number of planes as reported by the driver (numPlanes)
+        // For contiguous mode (numPlanes=1): V4L2 uses 1 plane, but DRM needs 2 logical planes
+        // For separate mode (numPlanes=2): both V4L2 and DRM use 2 planes
+
+        uint[] v4l2PlaneSizes;
+        uint[] v4l2PlaneOffsets;
+        var bufferFds = new List<int[]>();
+
+        if (numPlanes == 1)
+        {
+            // Contiguous buffer mode:
+            // - V4L2 sees 1 physical plane with total size
+            // - We pass 1 FD with offset 0 to V4L2
+            v4l2PlaneSizes = new[] { totalBufferSize };
+            v4l2PlaneOffsets = new[] { 0u };
+
+            foreach (var drmBuffer in _drmBuffers)
+            {
+                int fd = drmBuffer.DmaBuffer.Fd;
+                bufferFds.Add(new[] { fd });
+            }
+
+            _logger.LogInformation("V4L2 contiguous mode: 1 plane, size={Size}, offset=0", totalBufferSize);
+        }
+        else
+        {
+            // Separate buffer mode:
+            // - V4L2 sees 2 separate planes
+            // - We pass 2 different FDs
+            v4l2PlaneSizes = new uint[numPlanes];
+            for (int i = 0; i < numPlanes; i++)
+            {
+                v4l2PlaneSizes[i] = planeFormats[i].SizeImage;
+            }
+
+            v4l2PlaneOffsets = new uint[numPlanes];
+            Array.Fill(v4l2PlaneOffsets, 0u);
+
+            foreach (var drmBuffer in _drmBuffers)
+            {
+                int yFd = drmBuffer.DmaBuffer.Fd;
+                int uvFd = drmBuffer.PlaneBuffers![0].Fd;
+                bufferFds.Add(new[] { yFd, uvFd });
+            }
+
+            _logger.LogInformation("V4L2 separate mode: {NumPlanes} planes", numPlanes);
+            for (int i = 0; i < numPlanes; i++)
+            {
+                _logger.LogInformation("  Plane {Index}: size={Size}, offset=0", i, v4l2PlaneSizes[i]);
+            }
+        }
+
+        // Initialize V4L2 capture queue with DMABUF
+        _device.CaptureMPlaneQueue.InitDmaBuf(bufferFds.ToArray(), v4l2PlaneSizes, v4l2PlaneOffsets);
+
+        _logger.LogInformation("DMABUF capture queue initialized with {Count} buffers ({Mode} mode)",
+            _drmBuffers.Count, numPlanes == 1 ? "contiguous" : "separate planes");
+    }
+
     private void StartStreaming()
     {
         _logger.LogInformation("Starting V4L2 streaming...");
 
-        _device.CaptureMPlaneQueue.EnqueueAllBuffers();
+        if (_configuration.UseDrmPrimeBuffers)
+        {
+            _device.CaptureMPlaneQueue.EnqueueAllDmaBufBuffers();
+        }
+        else
+        {
+            _device.CaptureMPlaneQueue.EnqueueAllBuffers();
+        }
+
         _device.OutputMPlaneQueue.StreamOn();
         _device.CaptureMPlaneQueue.StreamOn();
 
@@ -577,7 +745,11 @@ public class H264V4L2StatelessDecoder
         _device.CaptureMPlaneQueue.StreamOff();
 
         UnmapBuffers(_device.OutputMPlaneQueue);
-        UnmapBuffers(_device.CaptureMPlaneQueue);
+
+        if (!_configuration.UseDrmPrimeBuffers)
+        {
+            UnmapBuffers(_device.CaptureMPlaneQueue);
+        }
 
         _logger.LogInformation("Decoder cleanup completed");
     }
@@ -588,6 +760,19 @@ public class H264V4L2StatelessDecoder
         {
             buffer.Unmap();
         }
+    }
+
+    /// <summary>
+    /// Requeues a DMABUF capture buffer after display is done with it.
+    /// </summary>
+    public void RequeueCaptureBuffer(uint bufferIndex)
+    {
+        if (!_configuration.UseDrmPrimeBuffers)
+        {
+            throw new InvalidOperationException("RequeueCaptureBuffer can only be used with DRM PRIME buffers");
+        }
+
+        _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(bufferIndex);
     }
 
     public async ValueTask DisposeAsync()

@@ -34,4 +34,9 @@ public class DecoderConfiguration
     /// Number of media requests to keep allocated for reuse.
     /// </summary>
     public int RequestPoolSize { get; init; } = 32;
+
+    /// <summary>
+    /// Use DRM PRIME buffers for zero-copy decoding
+    /// </summary>
+    public bool UseDrmPrimeBuffers { get; init; } = false;
 }
