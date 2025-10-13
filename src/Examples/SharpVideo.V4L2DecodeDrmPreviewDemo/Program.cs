@@ -61,8 +61,11 @@ internal class Program
         // Create DRM buffer manager for zero-copy
         using var drmBufferManager = new DrmBufferManager(drmDevice, allocator);
 
-        // Frame queue for async display
-        var frameQueue = new System.Collections.Concurrent.ConcurrentQueue<uint>();
+        // Latest frame tracking for minimal latency display
+        // Instead of queue, we always display the most recent decoded frame
+        uint? latestFrameIndex = null;
+        bool hasNewFrame = false;
+        var frameLock = new object();
         var displayCts = new CancellationTokenSource();
 
         try
@@ -89,6 +92,7 @@ internal class Program
                                 "RequestPool={Pool}, DrmPrime={Drm}",
                 config.OutputBufferCount, config.CaptureBufferCount,
                 config.RequestPoolSize, config.UseDrmPrimeBuffers);
+            logger.LogInformation("Display strategy: Latest-frame mode (minimal latency, skips intermediate frames)");
 
             // Thread-safe counters for statistics
             int decodedFrames = 0;
@@ -134,8 +138,17 @@ internal class Program
                             drmBuffer.FramebufferId, bufferIndex);
                     }
 
-                    // Enqueue for display (non-blocking)
-                    frameQueue.Enqueue(bufferIndex);
+                    // Store as latest frame (replaces previous if not yet displayed)
+                    lock (frameLock)
+                    {
+                        // If there was a previous undisplayed frame, requeue it immediately
+                        if (hasNewFrame && latestFrameIndex.HasValue && latestFrameIndex.Value != bufferIndex)
+                        {
+                            decoderRef?.RequeueCaptureBuffer(latestFrameIndex.Value);
+                        }
+                        latestFrameIndex = bufferIndex;
+                        hasNewFrame = true;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -173,10 +186,27 @@ internal class Program
                 {
                     while (!token.IsCancellationRequested)
                     {
-                        // Try to get next frame to display
-                        if (!frameQueue.TryDequeue(out uint bufferIndex))
+                        // Get latest frame to display
+                        uint bufferIndex;
+                        bool frameAvailable;
+                        
+                        lock (frameLock)
                         {
-                            // No frames available, wait a bit with cancellation check
+                            frameAvailable = hasNewFrame && latestFrameIndex.HasValue;
+                            if (frameAvailable)
+                            {
+                                bufferIndex = latestFrameIndex!.Value;
+                                hasNewFrame = false; // Mark as consumed
+                            }
+                            else
+                            {
+                                bufferIndex = 0; // Will not be used
+                            }
+                        }
+                        
+                        if (!frameAvailable)
+                        {
+                            // No new frames available, wait a bit with cancellation check
                             try
                             {
                                 Task.Delay(1, token).Wait();
@@ -320,20 +350,16 @@ internal class Program
             logger.LogInformation("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}",
                 decodedFrames, decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
 
-            // Wait for display thread to finish displaying queued frames
-            var queueSize = frameQueue.Count;
-            if (queueSize > 0)
+            // Give display thread a moment to show the last frame
+            logger.LogInformation("Waiting for final frame display...");
+            await Task.Delay(100);
+            
+            // Check if there's still an undisplayed frame
+            lock (frameLock)
             {
-                logger.LogInformation("Waiting for display queue to drain ({Count} frames remaining)...", queueSize);
-                var drainStart = Stopwatch.StartNew();
-                while (!frameQueue.IsEmpty && drainStart.Elapsed.TotalSeconds < 5.0)
+                if (hasNewFrame && latestFrameIndex.HasValue)
                 {
-                    await Task.Delay(100);
-                }
-
-                if (!frameQueue.IsEmpty)
-                {
-                    logger.LogWarning("Display queue drain timed out, {Count} frames remain", frameQueue.Count);
+                    logger.LogInformation("Last decoded frame not displayed yet");
                 }
             }
 
@@ -358,16 +384,18 @@ internal class Program
                 logger.LogDebug("Requeued final displayed buffer {BufferIndex}", finalBufferIndex.Value);
             }
 
-            logger.LogInformation("=== Final Statistics (Zero-Copy Mode with Async Display) ===");
+            logger.LogInformation("=== Final Statistics (Latest-Frame Low-Latency Mode) ===");
             logger.LogInformation("Total decoded frames: {DecodedFrames}", decodedFrames);
             logger.LogInformation("Frames presented on display: {PresentedFrames}", presentedFrames);
-            logger.LogInformation("Frames dropped: {DroppedFrames}", droppedFrames);
+            logger.LogInformation("Frames skipped (not displayed): {SkippedFrames}", decodedFrames - presentedFrames - droppedFrames);
+            logger.LogInformation("Frames dropped (errors): {DroppedFrames}", droppedFrames);
             logger.LogInformation("Frame presentation rate: {Rate:F2}%",
                 decodedFrames > 0 ? (presentedFrames * 100.0 / decodedFrames) : 0);
             logger.LogInformation("Average decode FPS: {Fps:F2}",
                 decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
             logger.LogInformation("Average display FPS: {Fps:F2}",
                 presentedFrames / decodeStopWatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Latency: Minimal (always displaying latest decoded frame)");
             logger.LogInformation("Processing completed successfully!");
         }
         finally
