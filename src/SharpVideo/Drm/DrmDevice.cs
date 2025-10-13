@@ -5,9 +5,10 @@ namespace SharpVideo.Drm;
 
 // TODO: Add dispose
 [SupportedOSPlatform("linux")]
-public class DrmDevice
+public class DrmDevice : IDisposable
 {
     private int _deviceFd;
+    private bool _disposed;
 
     /// <summary>
     /// Gets the device file descriptor.
@@ -44,12 +45,16 @@ public class DrmDevice
 
     public bool TrySetClientCapability(DrmClientCapability cap, bool value, out int resultCode)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        
         resultCode = LibDrm.drmSetClientCap(_deviceFd, cap, value ? 1u : 0u);
         return resultCode == 0;
     }
 
     public DrmCapabilitiesState GetDeviceCapabilities()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        
         return new DrmCapabilitiesState()
         {
             AddFB2Modifiers = GetOrFailBool(DrmCapability.DRM_CAP_ADDFB2_MODIFIERS),
@@ -102,9 +107,10 @@ public class DrmDevice
             return (DrmPrimeCap)value;
         }
     }
-
     public DrmDeviceResources? GetResources()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        
         unsafe
         {
             var resources = LibDrm.drmModeGetResources(_deviceFd);
@@ -269,5 +275,36 @@ public class DrmDevice
                 LibDrm.drmModeFreeResources(resources);
             }
         }
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!_disposed)
+        {
+            if (disposing)
+            {
+                // Dispose managed resources if any
+            }
+
+            // Dispose unmanaged resources
+            if (_deviceFd >= 0)
+            {
+                Libc.close(_deviceFd);
+                _deviceFd = -1;
+            }
+
+            _disposed = true;
+        }
+    }
+
+    ~DrmDevice()
+    {
+        Dispose(disposing: false);
+    }
+
+    public void Dispose()
+    {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
     }
 }
