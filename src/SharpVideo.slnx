@@ -18,5 +18,6 @@
   <Project Path="Examples/SharpVideo.V4L2DecodeDemo/SharpVideo.V4L2DecodeDemo.csproj" />
   <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
   <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
+  <Project Path="SharpVideo.Utils/SharpVideo.Utils.csproj" Id="6e04e87c-aa49-4d50-bb15-dd6a884fe1fc" />
   <Project Path="SharpVideo/SharpVideo.csproj" />
 </Solution>

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
+using SharpVideo.Utils;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2StatelessDecoder.Models;
 using SharpVideo.V4L2StatelessDecoder.Services;
@@ -31,7 +32,7 @@ internal class Program
 
         // Setup DRM display
         // Note: DrmDevice should implement IDisposable in the future for proper resource management
-        var drmDevice = OpenDrmDevice(logger);
+        var drmDevice = DrmUtils.OpenDrmDevice(logger);
         if (drmDevice == null)
         {
             logger.LogError("No DRM devices could be opened.");
@@ -242,7 +243,7 @@ internal class Program
                                          drmBuffer.FramebufferId, drmBuffer.Width, drmBuffer.Height, Width, Height,
                                          displayContext.AtomicUpdater, displayContext.SupportsAsyncFlip, logger);
                             var setPlaneElapsed = (Stopwatch.GetTimestamp() - setPlaneStart) * 1000.0 / Stopwatch.Frequency;
-                            
+
                             if (setPlaneSuccess)
                             {
                                 lock (lockObject)
@@ -252,12 +253,12 @@ internal class Program
                                 }
 
                                 frameCount++;
-                                
+
                                 // Log timing for performance analysis
                                 if (frameCount <= 10 || frameCount % 10 == 0)
                                 {
                                     var totalLoopTime = loopIterationTimer.Elapsed.TotalMilliseconds;
-                                    logger.LogInformation("Frame {Count}: SetPlane={SetPlaneMs:F2}ms, TotalLoop={TotalMs:F2}ms, Overhead={OverheadMs:F2}ms", 
+                                    logger.LogInformation("Frame {Count}: SetPlane={SetPlaneMs:F2}ms, TotalLoop={TotalMs:F2}ms, Overhead={OverheadMs:F2}ms",
                                         frameCount, setPlaneElapsed, totalLoopTime, totalLoopTime - setPlaneElapsed);
                                     loopIterationTimer.Restart();
                                 }
@@ -545,164 +546,10 @@ internal class Program
         return File.OpenRead(filePath);
     }
 
-    /// <summary>
-    /// Opens the first available DRM device from /dev/dri/card*.
-    /// </summary>
-    /// <returns>Opened DRM device or null if no devices available.</returns>
-    private static DrmDevice? OpenDrmDevice(ILogger logger)
-    {
-        var devices = Directory.EnumerateFiles("/dev/dri", "card*", SearchOption.TopDirectoryOnly);
-        foreach (var device in devices)
-        {
-            try
-            {
-                var drmDevice = DrmDevice.Open(device);
-                if (drmDevice != null)
-                {
-                    logger.LogInformation("Opened DRM device: {Device}", device);
-                    return drmDevice;
-                }
-                logger.LogWarning("Failed to open DRM device: {Device}", device);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Exception while opening DRM device: {Device}", device);
-            }
-        }
-        return null;
-    }
-
     private static DrmCapabilitiesState AnalyzeDrmCapabilities(DrmDevice drmDevice, ILogger logger)
     {
-        logger.LogInformation("=== DRM Device Capabilities Analysis ===");
-
-        DrmCapabilitiesState caps;
-        try
-        {
-            caps = drmDevice.GetDeviceCapabilities();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to query DRM capabilities");
-            throw;
-        }
-
-        // Core capabilities
-        logger.LogInformation("Core Capabilities:");
-        if (caps.DumbBuffer)
-        {
-            logger.LogInformation("  ✓ DUMB_BUFFER - Basic buffer allocation support");
-            logger.LogInformation("    Preferred depth: {Depth} bits", caps.DumbPreferredDepth);
-            if (caps.DumbPreferShadow)
-            {
-                logger.LogInformation("    Prefers shadow buffer for rendering");
-            }
-        }
-
-        // PRIME (DMA-BUF) capabilities - critical for zero-copy
-        logger.LogInformation("PRIME (Zero-Copy) Capabilities:");
-        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_IMPORT))
-        {
-            logger.LogInformation("  ✓ PRIME_IMPORT - Can import DMA-BUF (essential for zero-copy decode)");
-        }
-        else
-        {
-            logger.LogWarning("  ✗ PRIME_IMPORT not supported - zero-copy may not work");
-        }
-
-        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_EXPORT))
-        {
-            logger.LogInformation("  ✓ PRIME_EXPORT - Can export DMA-BUF");
-        }
-
-        // Performance capabilities
-        logger.LogInformation("Performance Capabilities:");
-        if (caps.AsyncPageFlip)
-        {
-            logger.LogInformation("  ✓ ASYNC_PAGE_FLIP - Supports async page flips (lower latency)");
-        }
-        else
-        {
-            logger.LogInformation("  ✗ ASYNC_PAGE_FLIP not supported - page flips will block on VSync");
-        }
-
-        if (caps.AtomicAsyncPageFlip)
-        {
-            logger.LogInformation("  ✓ ATOMIC_ASYNC_PAGE_FLIP - Supports async atomic commits (optimal)");
-        }
-
-        if (caps.PageFlipTarget)
-        {
-            logger.LogInformation("  ✓ PAGE_FLIP_TARGET - Can target specific VSync for flip");
-        }
-
-        // Advanced features
-        logger.LogInformation("Advanced Features:");
-        if (caps.AddFB2Modifiers)
-        {
-            logger.LogInformation("  ✓ ADDFB2_MODIFIERS - Supports format modifiers (tiling, compression)");
-        }
-
-        if (caps.SyncObj)
-        {
-            logger.LogInformation("  ✓ SYNCOBJ - Supports explicit synchronization");
-            if (caps.SyncObjTimeline)
-            {
-                logger.LogInformation("    ✓ SYNCOBJ_TIMELINE - Supports timeline sync objects");
-            }
-        }
-
-        // Timing
-        if (caps.TimestampMonotonic)
-        {
-            logger.LogInformation("  ✓ TIMESTAMP_MONOTONIC - Uses monotonic clock for timestamps");
-        }
-
-        if (caps.CrtcInVblankEvent)
-        {
-            logger.LogInformation("  ✓ CRTC_IN_VBLANK_EVENT - CRTC ID in VBlank events");
-        }
-
-        // Cursor capabilities (informational)
-        if (caps.CursorWidth > 0 && caps.CursorHeight > 0)
-        {
-            logger.LogInformation("  Cursor size: {Width}x{Height}", caps.CursorWidth, caps.CursorHeight);
-        }
-
-        // Recommendations
-        logger.LogInformation("=== Optimal Configuration for Low Latency ===");
-
-        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_IMPORT))
-        {
-            logger.LogInformation("✓ Zero-copy decode-to-display via DMABUF (already configured)");
-        }
-        else
-        {
-            logger.LogWarning("⚠ PRIME import not supported - will need buffer copies (higher latency)");
-        }
-
-        if (caps.AsyncPageFlip || caps.AtomicAsyncPageFlip)
-        {
-            logger.LogInformation("✓ Async page flips available - consider using for lowest latency");
-            logger.LogInformation("  (Current implementation uses sync flips for stability)");
-        }
-        else
-        {
-            logger.LogInformation("ℹ Sync-only page flips - will wait for VSync (adds ~16ms latency @ 60Hz)");
-        }
-
-        if (caps.AddFB2Modifiers)
-        {
-            logger.LogInformation("✓ Format modifiers supported - can use tiled/compressed formats if beneficial");
-        }
-
-        if (caps.SyncObj)
-        {
-            logger.LogInformation("✓ Sync objects available - can use for precise frame timing control");
-        }
-
-        logger.LogInformation("===========================================");
-
+        var caps = drmDevice.GetDeviceCapabilities();
+        logger.LogInformation("DRM device capabilities: {@Caps}", caps);
         return caps;
     }
 
