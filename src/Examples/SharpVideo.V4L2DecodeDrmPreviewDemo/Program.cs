@@ -47,6 +47,9 @@ internal class Program
             return;
         }
 
+        // Create DRM buffer manager for zero-copy
+        using var drmBufferManager = new DrmBufferManager(drmDevice, allocator);
+
         try
         {
             // Setup decoder
@@ -59,93 +62,96 @@ internal class Program
             {
                 OutputBufferCount = 16,
                 CaptureBufferCount = 16,
-                RequestPoolSize = 32
+                RequestPoolSize = 32,
+                UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode
             };
 
             int decodedFrames = 0;
-            int copiedFrames = 0;
             int presentedFrames = 0;
+            uint? lastDisplayedBufferIndex = null;
+            List<ManagedDrmBuffer>? drmBuffers = null;
+            H264V4L2StatelessDecoder? decoderRef = null;
 
-            // Pre-allocate display buffers for double buffering
-            var displayBuffer1 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
-            var displayBuffer2 = AllocateAndMapDisplayBuffer(Width, Height, allocator, logger);
-
-            if (displayBuffer1 == null || displayBuffer2 == null)
-            {
-                logger.LogError("Failed to allocate display buffers");
-                displayBuffer1?.Dispose();
-                displayBuffer2?.Dispose();
-                return;
-            }
-
-            bool useBuffer1 = true;
-            DmaBuffers.DmaBuffer? currentDisplayBuffer = displayBuffer1;
-
-            await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config, span =>
+            // Callback to handle decoded frames by buffer index (zero-copy mode)
+            var processBuffer = (uint bufferIndex) =>
             {
                 decodedFrames++;
 
-                // Copy decoded NV12 frame to DMA buffer and display it
-                // Display every frame
+                try
                 {
-                    try
-                    {
-                        // Toggle between the two buffers
-                        currentDisplayBuffer = useBuffer1 ? displayBuffer1 : displayBuffer2;
-                        useBuffer1 = !useBuffer1;
+                    // Get the DRM buffer corresponding to this V4L2 buffer
+                    var drmBuffer = drmBuffers![(int)bufferIndex];
 
-                        // Copy frame data to the buffer
-                        if (CopyFrameToExistingBuffer(span, currentDisplayBuffer, logger))
-                        {
-                            copiedFrames++;
-                            logger.LogDebug("Frame {FrameNumber} copied to buffer (total copied: {CopiedCount})", decodedFrames, copiedFrames);
-                            
-                            if (DisplayNv12Buffer(drmDevice, displayContext, currentDisplayBuffer, Width, Height, logger))
-                            {
-                                presentedFrames++;
-                                logger.LogDebug("Frame {FrameNumber} presented on display (total presented: {PresentedCount})", decodedFrames, presentedFrames);
-                            }
-                            else
-                            {
-                                logger.LogWarning("Frame {FrameNumber} copied but failed to present", decodedFrames);
-                            }
-                        }
-                        else
-                        {
-                            logger.LogWarning("Failed to copy frame {FrameNumber} to buffer", decodedFrames);
-                        }
-                    }
-                    catch (Exception ex)
+                    // Create framebuffer if not already created
+                    if (drmBuffer.FramebufferId == 0)
                     {
-                        logger.LogWarning(ex, "Failed to display frame {FrameNumber}", decodedFrames);
+                        drmBufferManager.CreateFramebuffer(drmBuffer);
+                    }
+
+                    // Display the buffer directly (zero-copy)
+                    if (SetPlane(drmDevice.DeviceFd, displayContext.Nv12Plane.Id, displayContext.CrtcId,
+                                 drmBuffer.FramebufferId, Width, Height, logger))
+                    {
+                        presentedFrames++;
+                        logger.LogDebug("Frame {FrameNumber} displayed (buffer {BufferIndex})", decodedFrames, bufferIndex);
+
+                        // Requeue the previously displayed buffer
+                        if (lastDisplayedBufferIndex.HasValue)
+                        {
+                            decoderRef!.RequeueCaptureBuffer(lastDisplayedBufferIndex.Value);
+                        }
+
+                        lastDisplayedBufferIndex = bufferIndex;
+                    }
+                    else
+                    {
+                        logger.LogWarning("Failed to display frame {FrameNumber}", decodedFrames);
+                        // Requeue immediately on failure
+                        decoderRef!.RequeueCaptureBuffer(bufferIndex);
                     }
                 }
-            });
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to display frame {FrameNumber}", decodedFrames);
+                    decoderRef!.RequeueCaptureBuffer(bufferIndex);
+                }
+            };
+
+            await using var decoder = new H264V4L2StatelessDecoder(
+                v4L2Device,
+                mediaDevice,
+                decoderLogger,
+                config,
+                processDecodedAction: null, // Not used in DMABUF mode
+                processDecodedBufferIndex: processBuffer,
+                drmBufferManager: drmBufferManager);
+
+            decoderRef = decoder;
+
+            // Pre-allocate all DRM buffers (these will be used by V4L2 via DMABUF)
+            drmBuffers = drmBufferManager.AllocateNv12Buffers(Width, Height, (int)config.CaptureBufferCount);
+            if (drmBuffers.Count != config.CaptureBufferCount)
+            {
+                logger.LogError("Failed to allocate DRM buffers");
+                return;
+            }
 
             var decodeStopWatch = Stopwatch.StartNew();
             await decoder.DecodeStreamAsync(fileStream);
 
+            // Requeue the last displayed buffer
+            if (lastDisplayedBufferIndex.HasValue)
+            {
+                decoder.RequeueCaptureBuffer(lastDisplayedBufferIndex.Value);
+            }
+
             logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
-            logger.LogInformation("=== Decoding Statistics ===");
+            logger.LogInformation("=== Decoding Statistics (Zero-Copy Mode) ===");
             logger.LogInformation("Total decoded frames: {DecodedFrames}", decodedFrames);
-            logger.LogInformation("Frames copied to DMA buffers: {CopiedFrames}", copiedFrames);
             logger.LogInformation("Frames presented on display: {PresentedFrames}", presentedFrames);
-            logger.LogInformation("Display interval: Every frame");
-            logger.LogInformation("Expected frames to display: {ExpectedFrames}", decodedFrames);
+            logger.LogInformation("Zero-copy: No frame data copying!");
             logger.LogInformation("Press Enter to exit...");
             Console.ReadLine();
-
-            // Cleanup display buffers
-            if (displayBuffer1 != null)
-            {
-                displayBuffer1.UnmapBuffer();
-                displayBuffer1.Dispose();
-            }
-            if (displayBuffer2 != null)
-            {
-                displayBuffer2.UnmapBuffer();
-                displayBuffer2.Dispose();
-            }
         }
         finally
         {
@@ -494,7 +500,7 @@ internal class Program
         DmaBuffersAllocator allocator,
         ILogger logger)
     {
-        ulong nv12BufferSize = (ulong)(width * height * 3 / 2);
+        ulong nv12BufferSize = (ulong)(width * height * 3.0 / 2.0);
         var dmaBuf = allocator.Allocate(nv12BufferSize);
         if (dmaBuf == null)
         {
@@ -582,7 +588,7 @@ internal class Program
             logger.LogError("Failed to set NV12 overlay plane");
             return false;
         }
-        
+
         return true;
     }
 

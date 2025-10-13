@@ -20,9 +20,10 @@ public class DmaBuffersAllocator
     public static bool TryCreate(out DmaBuffersAllocator? buffer)
     {
         string[] paths = {
+            "/dev/dma_heap/reserved",     // Reserved memory heap (often used for video HW)
             "/dev/dma_heap/vidbuf_cached",
             "/dev/dma_heap/linux,cma",
-            "/dev/dma_heap/system" // Добавляем системный heap на случай, если другие недоступны
+            "/dev/dma_heap/system" // System heap as fallback
         };
 
         foreach (var path in paths)
@@ -31,6 +32,7 @@ public class DmaBuffersAllocator
 
             if (heapFd >= 0)
             {
+                Console.WriteLine($"Successfully opened DMA heap: {path}");
                 buffer = new DmaBuffersAllocator(heapFd);
                 return true;
             }

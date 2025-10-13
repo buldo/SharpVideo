@@ -46,12 +46,26 @@ public class V4L2DeviceCaptureQueue : V4L2DeviceQueue
         Enqueue(mappedBuffer);
     }
 
+    public void ReuseDmaBufBuffer(uint index)
+    {
+        var dmaBufBuffer = DmaBufBuffersPool.Buffers[(int)index];
+        EnqueueDmaBuf(dmaBufBuffer);
+    }
+
     public void EnqueueAllBuffers()
     {
         foreach (var _ in BuffersPool.Buffers)
         {
             var buffer = BuffersPool.AcquireBuffer();
             ReuseBuffer(buffer.Index);
+        }
+    }
+
+    public void EnqueueAllDmaBufBuffers()
+    {
+        foreach (var buffer in DmaBufBuffersPool.Buffers)
+        {
+            EnqueueDmaBuf(buffer);
         }
     }
 }
