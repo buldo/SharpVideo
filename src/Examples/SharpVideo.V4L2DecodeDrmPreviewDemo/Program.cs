@@ -169,10 +169,11 @@ internal class Program
             };
 
             // Display thread - handles presentation separately from decoding
+            var displayStopwatch = new Stopwatch();
             var displayThread = new Thread(() =>
             {
                 logger.LogInformation("Display thread started");
-                var displayStopwatch = Stopwatch.StartNew();
+                displayStopwatch.Start();
                 long frameCount = 0;
                 var token = displayCts.Token;
 
@@ -189,7 +190,7 @@ internal class Program
                         // Get latest frame to display
                         uint bufferIndex;
                         bool frameAvailable;
-                        
+
                         lock (frameLock)
                         {
                             frameAvailable = hasNewFrame && latestFrameIndex.HasValue;
@@ -203,7 +204,7 @@ internal class Program
                                 bufferIndex = 0; // Will not be used
                             }
                         }
-                        
+
                         if (!frameAvailable)
                         {
                             // No new frames available, wait a bit with cancellation check
@@ -319,6 +320,10 @@ internal class Program
                 {
                     logger.LogError(ex, "Fatal error in display thread");
                 }
+                finally
+                {
+                    displayStopwatch.Stop();
+                }
 
                 logger.LogInformation("Display thread stopped (processed {FrameCount} frames)", frameCount);
             })
@@ -353,7 +358,7 @@ internal class Program
             // Give display thread a moment to show the last frame
             logger.LogInformation("Waiting for final frame display...");
             await Task.Delay(100);
-            
+
             // Check if there's still an undisplayed frame
             lock (frameLock)
             {
@@ -393,8 +398,11 @@ internal class Program
                 decodedFrames > 0 ? (presentedFrames * 100.0 / decodedFrames) : 0);
             logger.LogInformation("Average decode FPS: {Fps:F2}",
                 decodedFrames / decodeStopWatch.Elapsed.TotalSeconds);
-            logger.LogInformation("Average display FPS: {Fps:F2}",
-                presentedFrames / decodeStopWatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Average display FPS: {Fps:F2} (measured over {Duration:F2}s)",
+                displayStopwatch.Elapsed.TotalSeconds > 0 ? presentedFrames / displayStopwatch.Elapsed.TotalSeconds : 0,
+                displayStopwatch.Elapsed.TotalSeconds);
+            logger.LogInformation("Decode duration: {Duration:F2}s, Display duration: {DisplayDuration:F2}s",
+                decodeStopWatch.Elapsed.TotalSeconds, displayStopwatch.Elapsed.TotalSeconds);
             logger.LogInformation("Latency: Minimal (always displaying latest decoded frame)");
             logger.LogInformation("Processing completed successfully!");
         }
