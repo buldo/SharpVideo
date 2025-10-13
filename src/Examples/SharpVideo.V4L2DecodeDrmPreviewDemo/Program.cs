@@ -38,6 +38,9 @@ internal class Program
             return;
         }
 
+        // Analyze DRM capabilities for optimal configuration
+        var drmCaps = AnalyzeDrmCapabilities(drmDevice, logger);
+
         EnableDrmCapabilities(drmDevice, logger);
 
         if (!DmaBuffersAllocator.TryCreate(out var allocator) || allocator == null)
@@ -47,8 +50,8 @@ internal class Program
         }
 
         // Note: DmaBuffersAllocator should implement IDisposable in the future for proper resource management
-        // Setup display for NV12
-        var displayContext = SetupDisplay(drmDevice, Width, Height, allocator, logger);
+        // Setup display for NV12 with capabilities-aware configuration
+        var displayContext = SetupDisplay(drmDevice, Width, Height, allocator, drmCaps, logger);
         if (displayContext == null)
         {
             logger.LogError("Failed to setup display.");
@@ -66,17 +69,26 @@ internal class Program
         {
             // Setup decoder
             await using var fileStream = GetFileStream();
-            using var v4L2Device = GetVideoDevice(logger);
+            var (v4L2Device, deviceInfo) = GetVideoDevice(logger);
+            using var _ = v4L2Device; // Ensure disposal
             using var mediaDevice = GetMediaDevice();
 
             var decoderLogger = loggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
+
+            // Configure decoder based on device capabilities for optimal low-latency performance
             var config = new DecoderConfiguration
             {
-                OutputBufferCount = 16,
-                CaptureBufferCount = 16,
+                // Use more buffers if streaming is supported for smoother playback
+                OutputBufferCount = deviceInfo.DeviceCapabilities.HasFlag(V4L2Capabilities.STREAMING) ? 16u : 8u,
+                CaptureBufferCount = deviceInfo.DeviceCapabilities.HasFlag(V4L2Capabilities.STREAMING) ? 16u : 8u,
                 RequestPoolSize = 32,
-                UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode
+                UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode for lowest latency
             };
+
+            logger.LogInformation("Decoder configuration: OutputBuffers={Output}, CaptureBuffers={Capture}, " +
+                                "RequestPool={Pool}, DrmPrime={Drm}",
+                config.OutputBufferCount, config.CaptureBufferCount,
+                config.RequestPoolSize, config.UseDrmPrimeBuffers);
 
             // Thread-safe counters for statistics
             int decodedFrames = 0;
@@ -151,6 +163,12 @@ internal class Program
                 long frameCount = 0;
                 var token = displayCts.Token;
 
+                // Use high-precision timing if monotonic timestamps are available
+                var useMonotonicTiming = drmCaps.TimestampMonotonic;
+                var lastFrameTime = displayStopwatch.Elapsed.TotalSeconds;
+                double minFrameTime = double.MaxValue;
+                double maxFrameTime = 0;
+
                 try
                 {
                     while (!token.IsCancellationRequested)
@@ -198,11 +216,33 @@ internal class Program
                                 }
 
                                 frameCount++;
+
+                                // Track frame timing for detailed statistics
+                                if (useMonotonicTiming && frameCount > 1)
+                                {
+                                    var currentTime = displayStopwatch.Elapsed.TotalSeconds;
+                                    var frameTime = (currentTime - lastFrameTime) * 1000.0; // Convert to ms
+                                    minFrameTime = Math.Min(minFrameTime, frameTime);
+                                    maxFrameTime = Math.Max(maxFrameTime, frameTime);
+                                    lastFrameTime = currentTime;
+                                }
+
                                 if (frameCount % 60 == 0)
                                 {
                                     var elapsed = displayStopwatch.Elapsed.TotalSeconds;
                                     var displayFps = frameCount / elapsed;
-                                    logger.LogDebug("Display FPS: {Fps:F2} ({FrameCount} frames)", displayFps, frameCount);
+                                    if (useMonotonicTiming && frameCount > 1)
+                                    {
+                                        logger.LogDebug("Display: {Fps:F2} FPS avg, frame time: {Min:F2}-{Max:F2}ms ({FrameCount} frames)",
+                                            displayFps, minFrameTime, maxFrameTime, frameCount);
+                                        // Reset min/max for next interval
+                                        minFrameTime = double.MaxValue;
+                                        maxFrameTime = 0;
+                                    }
+                                    else
+                                    {
+                                        logger.LogDebug("Display FPS: {Fps:F2} ({FrameCount} frames)", displayFps, frameCount);
+                                    }
                                 }
 
                                 // Requeue the previously displayed buffer
@@ -337,7 +377,7 @@ internal class Program
         }
     }
 
-    private static V4L2Device GetVideoDevice(ILogger logger)
+    private static (V4L2Device device, V4L2DeviceInfo deviceInfo) GetVideoDevice(ILogger logger)
     {
         var h264Devices = V4L2.V4L2DeviceManager.GetH264Devices();
         if (!h264Devices.Any())
@@ -348,13 +388,86 @@ internal class Program
         var selectedDevice = h264Devices.First();
         logger.LogInformation("Using device: {@Device}", selectedDevice);
 
+        // Log device capabilities for optimization analysis
+        LogDeviceCapabilities(selectedDevice, logger);
+
         var v4L2Device = V4L2DeviceFactory.Open(selectedDevice.DevicePath);
         if (v4L2Device == null)
         {
             throw new Exception($"Error: Failed to open V4L2 device at path '{selectedDevice.DevicePath}'.");
         }
 
-        return v4L2Device;
+        return (v4L2Device, selectedDevice);
+    }
+
+    private static void LogDeviceCapabilities(V4L2DeviceInfo deviceInfo, ILogger logger)
+    {
+        logger.LogInformation("=== Device Capabilities Analysis ===");
+        logger.LogInformation("Driver: {Driver}", deviceInfo.DriverName);
+        logger.LogInformation("Card: {Card}", deviceInfo.CardName);
+        logger.LogInformation("Device Path: {Path}", deviceInfo.DevicePath);
+
+        var caps = deviceInfo.DeviceCapabilities;
+        logger.LogInformation("Capabilities (0x{Caps:X8}):", (uint)caps);
+
+        // Check for memory-to-memory device (required for decoder)
+        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M_MPLANE))
+        {
+            logger.LogInformation("  ✓ VIDEO_M2M_MPLANE - Multi-planar memory-to-memory (optimal for stateless decoders)");
+        }
+        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M))
+        {
+            logger.LogInformation("  ✓ VIDEO_M2M - Single-planar memory-to-memory");
+        }
+
+        // Check for streaming capability (essential for low-latency)
+        if (caps.HasFlag(V4L2Capabilities.STREAMING))
+        {
+            logger.LogInformation("  ✓ STREAMING - Supports streaming I/O (lowest latency)");
+        }
+
+        // Check if device supports extended pixel formats
+        if (caps.HasFlag(V4L2Capabilities.EXT_PIX_FORMAT))
+        {
+            logger.LogInformation("  ✓ EXT_PIX_FORMAT - Extended pixel format support");
+        }
+
+        // Check for Media Controller (important for complex pipelines)
+        if (caps.HasFlag(V4L2Capabilities.IO_MC))
+        {
+            logger.LogInformation("  ✓ IO_MC - Media Controller support (required for stateless decoders)");
+        }
+
+        // Analyze optimal configuration
+        logger.LogInformation("=== Optimal Configuration Recommendations ===");
+
+        if (caps.HasFlag(V4L2Capabilities.STREAMING))
+        {
+            logger.LogInformation("✓ Use STREAMING mode (already configured) - provides lowest latency");
+        }
+        else
+        {
+            logger.LogWarning("⚠ Device does not support STREAMING - latency may be higher");
+        }
+
+        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M_MPLANE) || caps.HasFlag(V4L2Capabilities.VIDEO_M2M))
+        {
+            logger.LogInformation("✓ Memory-to-memory device detected - zero-copy DMABUF mode optimal");
+        }
+
+        if (!caps.HasFlag(V4L2Capabilities.IO_MC))
+        {
+            logger.LogWarning("⚠ Media Controller not supported - may not work with stateless decoders");
+        }
+
+        logger.LogInformation("=== Supported Formats ===");
+        foreach (var format in deviceInfo.SupportedFormats)
+        {
+            logger.LogInformation("  Format: {Description} (FourCC: {FourCC})",
+                format.Description, format.PixelFormat);
+        }
+
+        logger.LogInformation("======================================");
     }
 
     private static MediaDevice GetMediaDevice()
@@ -409,6 +522,140 @@ internal class Program
         return null;
     }
 
+    private static DrmCapabilitiesState AnalyzeDrmCapabilities(DrmDevice drmDevice, ILogger logger)
+    {
+        logger.LogInformation("=== DRM Device Capabilities Analysis ===");
+
+        DrmCapabilitiesState caps;
+        try
+        {
+            caps = drmDevice.GetDeviceCapabilities();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to query DRM capabilities");
+            throw;
+        }
+
+        // Core capabilities
+        logger.LogInformation("Core Capabilities:");
+        if (caps.DumbBuffer)
+        {
+            logger.LogInformation("  ✓ DUMB_BUFFER - Basic buffer allocation support");
+            logger.LogInformation("    Preferred depth: {Depth} bits", caps.DumbPreferredDepth);
+            if (caps.DumbPreferShadow)
+            {
+                logger.LogInformation("    Prefers shadow buffer for rendering");
+            }
+        }
+
+        // PRIME (DMA-BUF) capabilities - critical for zero-copy
+        logger.LogInformation("PRIME (Zero-Copy) Capabilities:");
+        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_IMPORT))
+        {
+            logger.LogInformation("  ✓ PRIME_IMPORT - Can import DMA-BUF (essential for zero-copy decode)");
+        }
+        else
+        {
+            logger.LogWarning("  ✗ PRIME_IMPORT not supported - zero-copy may not work");
+        }
+
+        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_EXPORT))
+        {
+            logger.LogInformation("  ✓ PRIME_EXPORT - Can export DMA-BUF");
+        }
+
+        // Performance capabilities
+        logger.LogInformation("Performance Capabilities:");
+        if (caps.AsyncPageFlip)
+        {
+            logger.LogInformation("  ✓ ASYNC_PAGE_FLIP - Supports async page flips (lower latency)");
+        }
+        else
+        {
+            logger.LogInformation("  ✗ ASYNC_PAGE_FLIP not supported - page flips will block on VSync");
+        }
+
+        if (caps.AtomicAsyncPageFlip)
+        {
+            logger.LogInformation("  ✓ ATOMIC_ASYNC_PAGE_FLIP - Supports async atomic commits (optimal)");
+        }
+
+        if (caps.PageFlipTarget)
+        {
+            logger.LogInformation("  ✓ PAGE_FLIP_TARGET - Can target specific VSync for flip");
+        }
+
+        // Advanced features
+        logger.LogInformation("Advanced Features:");
+        if (caps.AddFB2Modifiers)
+        {
+            logger.LogInformation("  ✓ ADDFB2_MODIFIERS - Supports format modifiers (tiling, compression)");
+        }
+
+        if (caps.SyncObj)
+        {
+            logger.LogInformation("  ✓ SYNCOBJ - Supports explicit synchronization");
+            if (caps.SyncObjTimeline)
+            {
+                logger.LogInformation("    ✓ SYNCOBJ_TIMELINE - Supports timeline sync objects");
+            }
+        }
+
+        // Timing
+        if (caps.TimestampMonotonic)
+        {
+            logger.LogInformation("  ✓ TIMESTAMP_MONOTONIC - Uses monotonic clock for timestamps");
+        }
+
+        if (caps.CrtcInVblankEvent)
+        {
+            logger.LogInformation("  ✓ CRTC_IN_VBLANK_EVENT - CRTC ID in VBlank events");
+        }
+
+        // Cursor capabilities (informational)
+        if (caps.CursorWidth > 0 && caps.CursorHeight > 0)
+        {
+            logger.LogInformation("  Cursor size: {Width}x{Height}", caps.CursorWidth, caps.CursorHeight);
+        }
+
+        // Recommendations
+        logger.LogInformation("=== Optimal Configuration for Low Latency ===");
+
+        if (caps.Prime.HasFlag(DrmPrimeCap.DRM_PRIME_CAP_IMPORT))
+        {
+            logger.LogInformation("✓ Zero-copy decode-to-display via DMABUF (already configured)");
+        }
+        else
+        {
+            logger.LogWarning("⚠ PRIME import not supported - will need buffer copies (higher latency)");
+        }
+
+        if (caps.AsyncPageFlip || caps.AtomicAsyncPageFlip)
+        {
+            logger.LogInformation("✓ Async page flips available - consider using for lowest latency");
+            logger.LogInformation("  (Current implementation uses sync flips for stability)");
+        }
+        else
+        {
+            logger.LogInformation("ℹ Sync-only page flips - will wait for VSync (adds ~16ms latency @ 60Hz)");
+        }
+
+        if (caps.AddFB2Modifiers)
+        {
+            logger.LogInformation("✓ Format modifiers supported - can use tiled/compressed formats if beneficial");
+        }
+
+        if (caps.SyncObj)
+        {
+            logger.LogInformation("✓ Sync objects available - can use for precise frame timing control");
+        }
+
+        logger.LogInformation("===========================================");
+
+        return caps;
+    }
+
     private static void EnableDrmCapabilities(DrmDevice drmDevice, ILogger logger)
     {
         var capsToEnable = new[]
@@ -443,6 +690,7 @@ internal class Program
         int width,
         int height,
         DmaBuffersAllocator allocator,
+        DrmCapabilitiesState capabilities,
         ILogger logger)
     {
         var resources = drmDevice.GetResources();
@@ -570,6 +818,16 @@ internal class Program
             LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
             rgbBuf.Dispose();
             return null;
+        }
+
+        // Log which optimizations are being used
+        if (capabilities.AddFB2Modifiers)
+        {
+            logger.LogInformation("Display configured with format modifier support (tiling/compression optimization available)");
+        }
+        if (capabilities.TimestampMonotonic)
+        {
+            logger.LogInformation("Display using monotonic timestamps for precise timing");
         }
 
         logger.LogInformation("Display setup complete");
