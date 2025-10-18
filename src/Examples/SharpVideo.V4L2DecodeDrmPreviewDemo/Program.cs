@@ -40,9 +40,6 @@ internal class Program
             return;
         }
 
-        // Analyze DRM capabilities for optimal configuration
-        var drmCaps = AnalyzeDrmCapabilities(drmDevice, logger);
-
         EnableDrmCapabilities(drmDevice, logger);
 
         if (!DmaBuffersAllocator.TryCreate(out var allocator) || allocator == null)
@@ -53,12 +50,7 @@ internal class Program
 
         // Note: DmaBuffersAllocator should implement IDisposable in the future for proper resource management
         // Setup display for NV12 with capabilities-aware configuration
-        var displayContext = DrmPresenter.Create(drmDevice, Width, Height, allocator, drmCaps, logger);
-        if (displayContext == null)
-        {
-            logger.LogError("Failed to setup display.");
-            return;
-        }
+        var presenter = DrmPresenter.Create(drmDevice, Width, Height, allocator, logger);
 
         // Create DRM buffer manager for zero-copy
         using var drmBufferManager = new DrmBufferManager(drmDevice, allocator);
@@ -181,7 +173,7 @@ internal class Program
                 var token = displayCts.Token;
 
                 // Use high-precision timing if monotonic timestamps are available
-                var useMonotonicTiming = drmCaps.TimestampMonotonic;
+                var useMonotonicTiming = presenter.TimestampMonotonic;
                 var lastFrameTime = displayStopwatch.Elapsed.TotalSeconds;
                 double minFrameTime = double.MaxValue;
                 double maxFrameTime = 0;
@@ -240,7 +232,7 @@ internal class Program
 
                             // Display the buffer - measure actual display latency
                             var setPlaneStart = Stopwatch.GetTimestamp();
-                            var setPlaneSuccess = displayContext.SetOverlayPlane(drmBuffer, Width, Height);
+                            var setPlaneSuccess = presenter.SetOverlayPlane(drmBuffer, Width, Height);
                             var setPlaneElapsed = (Stopwatch.GetTimestamp() - setPlaneStart) * 1000.0 / Stopwatch.Frequency;
 
                             if (setPlaneSuccess)
@@ -422,7 +414,7 @@ internal class Program
         finally
         {
             displayCts.Cancel();
-            displayContext.CleanupDisplay();
+            presenter.CleanupDisplay();
             displayCts.Dispose();
         }
     }
@@ -543,13 +535,6 @@ internal class Program
         }
 
         return File.OpenRead(filePath);
-    }
-
-    private static DrmCapabilitiesState AnalyzeDrmCapabilities(DrmDevice drmDevice, ILogger logger)
-    {
-        var caps = drmDevice.GetDeviceCapabilities();
-        logger.LogInformation("DRM device capabilities: {@Caps}", caps);
-        return caps;
     }
 
     private static void EnableDrmCapabilities(DrmDevice drmDevice, ILogger logger)

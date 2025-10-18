@@ -13,24 +13,28 @@ public class DrmPresenter
 {
     private readonly DrmDevice _device;
     private readonly DisplayContext _context;
+    private readonly DrmCapabilitiesState _capabilities;
     private readonly ILogger _logger;
 
     private DrmPresenter(
         DrmDevice device,
         DisplayContext context,
+        DrmCapabilitiesState capabilities,
         ILogger logger)
     {
         _device = device;
         _context = context;
+        _capabilities = capabilities;
         _logger = logger;
     }
+
+    public bool TimestampMonotonic => _capabilities.TimestampMonotonic;
 
     public static DrmPresenter Create(
         DrmDevice drmDevice,
         int width,
         int height,
         DmaBuffersAllocator allocator,
-        DrmCapabilitiesState capabilities,
         ILogger logger)
     {
         var resources = drmDevice.GetResources();
@@ -175,19 +179,10 @@ public class DrmPresenter
             return null;
         }
 
-        // Log which optimizations are being used
-        if (capabilities.AddFB2Modifiers)
-        {
-            logger.LogInformation(
-                "Display configured with format modifier support (tiling/compression optimization available)");
-        }
-
-        if (capabilities.TimestampMonotonic)
-        {
-            logger.LogInformation("Display using monotonic timestamps for precise timing");
-        }
-
-        logger.LogInformation("Display setup complete");
+        var capabilities = drmDevice.GetDeviceCapabilities();
+#if DEBUG
+        DumpCapabilities(capabilities, logger);
+#endif
 
         var context = new DisplayContext
         {
@@ -199,10 +194,10 @@ public class DrmPresenter
             RgbFbId = rgbFbId,
             Nv12FbId = 0,
             AtomicUpdater = atomicUpdater,
-            SupportsAsyncFlip = capabilities.AsyncPageFlip
         };
 
-        return new(drmDevice, context, logger);
+        logger.LogInformation("Display setup complete");
+        return new(drmDevice, context, capabilities, logger);
     }
 
     public bool SetOverlayPlane(
@@ -221,11 +216,48 @@ public class DrmPresenter
             dstWidth,
             dstHeight,
             _context.AtomicUpdater,
-            _context.SupportsAsyncFlip,
+            _capabilities.AsyncPageFlip,
             _logger);
     }
 
-    private static unsafe bool SetPlane(
+
+    private static void DumpCapabilities(DrmCapabilitiesState caps, ILogger logger)
+    {
+        logger.LogInformation(
+            "DRM device capabilities: " +
+            "DumbBuffer: {DumbBuffer}; " +
+            "VblankHighCrtc: {VblankHighCrtc}; " +
+            "DumbPreferredDepth: {DumbPreferredDepth}; " +
+            "DumbPreferShadow: {DumbPreferShadow}; " +
+            "Prime: {Prime}; " +
+            "TimestampMonotonic: {TimestampMonotonic}; " +
+            "AsyncPageFlip: {AsyncPageFlip}; " +
+            "CursorWidth: {CursorWidth}; " +
+            "CursorHeight: {CursorHeight}; " +
+            "AddFB2Modifiers: {AddFB2Modifiers}; " +
+            "PageFlipTarget: {PageFlipTarget}; " +
+            "CrtcInVblankEvent: {CrtcInVblankEvent}; " +
+            "SyncObj: {SyncObj}; " +
+            "SyncObjTimeline: {SyncObjTimeline}; " +
+            "AtomicAsyncPageFlip: {AtomicAsyncPageFlip}",
+            caps.DumbBuffer,
+            caps.VblankHighCrtc,
+            caps.DumbPreferredDepth,
+            caps.DumbPreferShadow,
+            caps.Prime,
+            caps.TimestampMonotonic,
+            caps.AsyncPageFlip,
+            caps.CursorWidth,
+            caps.CursorHeight,
+            caps.AddFB2Modifiers,
+            caps.PageFlipTarget,
+            caps.CrtcInVblankEvent,
+            caps.SyncObj,
+            caps.SyncObjTimeline,
+            caps.AtomicAsyncPageFlip);
+    }
+
+    private static bool SetPlane(
         int drmFd,
         uint planeId,
         uint crtcId,
@@ -411,6 +443,5 @@ public class DrmPresenter
         public uint RgbFbId { get; set; }
         public uint Nv12FbId { get; set; }
         public AtomicPlaneUpdater? AtomicUpdater { get; set; }
-        public bool SupportsAsyncFlip { get; set; }
     }
 }
