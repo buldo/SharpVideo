@@ -23,9 +23,9 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
         return _requestsPool.Acquire();
     }
 
-    public override void Init(V4L2Memory memory, uint buffersCount)
+    public override void InitMMap(uint buffersCount)
     {
-        base.Init(memory, buffersCount);
+        base.InitMMap(buffersCount);
         _associatedMediaRequests = new MediaRequest[BuffersPool.Buffers.Count];
     }
 

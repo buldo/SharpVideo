@@ -1,6 +1,11 @@
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Runtime.Versioning;
+
 using SharpVideo.DmaBuffers;
 using SharpVideo.Linux.Native;
+using SharpVideo.Utils;
 
 namespace SharpVideo.Drm;
 
@@ -12,58 +17,63 @@ public class DrmBufferManager : IDisposable
 {
     private readonly DrmDevice _drmDevice;
     private readonly DmaBuffersAllocator _allocator;
-    private readonly List<ManagedDrmBuffer> _buffers = new();
+    private readonly FrozenDictionary<PixelFormat, List<ManagedDrmBuffer>> _managedDrmBuffers;
     private bool _disposed;
 
     public DrmBufferManager(
         DrmDevice drmDevice,
-        DmaBuffersAllocator allocator)
+        DmaBuffersAllocator allocator,
+        PixelFormat[] supportedPixelFormats)
     {
         _drmDevice = drmDevice;
         _allocator = allocator;
+        _managedDrmBuffers =
+            supportedPixelFormats.ToFrozenDictionary(format => format, format => new List<ManagedDrmBuffer>());
     }
 
     /// <summary>
     /// Allocates a pool of contiguous DMA buffers for NV12 format with explicit buffer size.
     /// For V4L2 drivers that report NumPlanes=1 with specific size requirements (including padding).
     /// </summary>
-    public List<ManagedDrmBuffer> AllocateNv12ContiguousBuffersWithSize(int width, int height, int count, uint bufferSize, uint stride)
+    public List<ManagedDrmBuffer> AllocateNv12ContiguousBuffersWithSize(int width, int height, int count)
     {
         var buffers = new List<ManagedDrmBuffer>();
 
         for (int i = 0; i < count; i++)
         {
-            // Allocate single contiguous buffer using the exact size from V4L2
-            var buffer = _allocator.Allocate(bufferSize);
-            if (buffer == null)
-            {
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
+            var buffer = AllocateBuffer(width, height, KnownPixelFormats.DRM_FORMAT_NV12);
             buffer.MapBuffer();
-            if (buffer.MapStatus != MapStatus.Mapped)
-            {
-                buffer.Dispose();
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
-            var managedBuffer = new ManagedDrmBuffer
-            {
-                DmaBuffer = buffer, // Single buffer containing both Y and UV
-                Width = width,
-                Height = height,
-                Stride = stride, // Actual stride from V4L2
-                Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc,
-                Index = i
-            };
-
-            buffers.Add(managedBuffer);
-            _buffers.Add(managedBuffer);
+            buffers.Add(buffer);
         }
 
         return buffers;
+    }
+
+    public ManagedDrmBuffer AllocateBuffer(
+        int width,
+        int height,
+        PixelFormat pixelFormat)
+    {
+        var bufInfo = BuffersInfoProvider.GetBufferParams(width, height, pixelFormat);
+
+        var buffer = _allocator.Allocate(bufInfo.FullSize);
+        if (buffer == null)
+        {
+            throw new Exception("Failed to allocate buffer");
+        }
+
+        var managedBuffer = new ManagedDrmBuffer
+        {
+            DmaBuffer = buffer,
+            Width = width,
+            Height = height,
+            Format = pixelFormat,
+            Stride = bufInfo.Stride
+        };
+
+        _managedDrmBuffers[pixelFormat].Add(managedBuffer);
+
+        return managedBuffer;
     }
 
     /// <summary>
@@ -78,19 +88,17 @@ public class DrmBufferManager : IDisposable
             return 0;
         }
 
-        buffer.DrmHandle = yHandle;
+        //buffer.DrmHandle = yHandle;
 
         // Create framebuffer for NV12 format
         uint yPitch = buffer.Stride > 0 ? buffer.Stride : (uint)buffer.Width;
         uint uvPitch = yPitch; // UV plane has same stride as Y
         uint yOffset = 0;
-        uint uvOffset;
-        uint uvHandle;
 
         // Contiguous buffer - UV plane starts after Y plane data
-        uvHandle = yHandle; // Same handle
+        uint uvHandle = yHandle; // Same handle
         // Use stride * height for correct offset (accounts for padding)
-        uvOffset = yPitch * (uint)buffer.Height;
+        uint uvOffset = yPitch * (uint)buffer.Height;
         Console.Error.WriteLine($"[DRM] Creating NV12 framebuffer: Width={buffer.Width}, Height={buffer.Height}, Stride={yPitch}");
         Console.Error.WriteLine($"[DRM]   Y: handle={yHandle}, pitch={yPitch}, offset={yOffset}");
         Console.Error.WriteLine($"[DRM]   UV: handle={uvHandle}, pitch={uvPitch}, offset={uvOffset}");
@@ -103,7 +111,7 @@ public class DrmBufferManager : IDisposable
             _drmDevice.DeviceFd,
             (uint)buffer.Width,
             (uint)buffer.Height,
-            buffer.Format,
+            buffer.Format.Fourcc,
             handles,
             pitches,
             offsets,
@@ -123,18 +131,24 @@ public class DrmBufferManager : IDisposable
     public void Dispose()
     {
         if (_disposed)
-            return;
-
-        foreach (var buffer in _buffers)
         {
-            if (buffer.FramebufferId != 0)
-            {
-                LibDrm.drmModeRmFB(_drmDevice.DeviceFd, buffer.FramebufferId);
-            }
-            buffer.Dispose();
+            return;
         }
 
-        _buffers.Clear();
+        foreach (var pair in _managedDrmBuffers)
+        {
+            foreach (var buffer in pair.Value)
+            {
+                if (buffer.FramebufferId != 0)
+                {
+                    LibDrm.drmModeRmFB(_drmDevice.DeviceFd, buffer.FramebufferId);
+                }
+                buffer.Dispose();
+            }
+
+            pair.Value.Clear();
+        }
+
         _disposed = true;
     }
 }

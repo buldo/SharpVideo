@@ -15,16 +15,19 @@ public class DrmPresenter
     private readonly DisplayContext _context;
     private readonly DrmCapabilitiesState _capabilities;
     private readonly ILogger _logger;
+    private readonly PixelFormat _primaryPlanePixelFormat;
 
     private DrmPresenter(
         DrmDevice device,
         DisplayContext context,
         DrmCapabilitiesState capabilities,
+        PixelFormat primaryPlanePixelFormat,
         ILogger logger)
     {
         _device = device;
         _context = context;
         _capabilities = capabilities;
+        _primaryPlanePixelFormat = primaryPlanePixelFormat;
         _logger = logger;
     }
 
@@ -34,7 +37,7 @@ public class DrmPresenter
         DrmDevice drmDevice,
         int width,
         int height,
-        DmaBuffersAllocator allocator,
+        DrmBufferManager bufferManager,
         ILogger logger)
     {
         var resources = drmDevice.GetResources();
@@ -136,15 +139,8 @@ public class DrmPresenter
             logger.LogWarning("Could not initialize atomic modesetting infrastructure: {Error}", ex.Message);
         }
 
-        // Setup RGB buffer for mode setting
-        ulong rgbBufferSize = (ulong)(width * height * 4);
-        var rgbBuf = allocator.Allocate(rgbBufferSize);
-        if (rgbBuf == null)
-        {
-            logger.LogError("Failed to allocate RGB buffer");
-            return null;
-        }
-
+        var primaryPlaneFormat = KnownPixelFormats.DRM_FORMAT_XRGB8888;
+        var rgbBuf = bufferManager.AllocateBuffer(width, height, primaryPlaneFormat);
         rgbBuf.MapBuffer();
         if (rgbBuf.MapStatus == MapStatus.FailedToMap)
         {
@@ -153,11 +149,12 @@ public class DrmPresenter
             return null;
         }
 
-        rgbBuf.GetMappedSpan().Fill(0);
-        rgbBuf.SyncMap();
+        rgbBuf.DmaBuffer.GetMappedSpan().Fill(0);
+        rgbBuf.DmaBuffer.SyncMap();
         logger.LogInformation("Created and filled RGB buffer");
 
-        var (rgbFbId, _) = CreateRgbFramebuffer(drmDevice, rgbBuf, width, height, logger);
+
+        var (rgbFbId, _) = CreateRgbFramebuffer(drmDevice, rgbBuf, width, height, primaryPlaneFormat, logger);
         if (rgbFbId == 0)
         {
             rgbBuf.Dispose();
@@ -197,7 +194,7 @@ public class DrmPresenter
         };
 
         logger.LogInformation("Display setup complete");
-        return new(drmDevice, context, capabilities, logger);
+        return new(drmDevice, context, capabilities, primaryPlaneFormat, logger);
     }
 
     public bool SetOverlayPlane(
@@ -341,7 +338,7 @@ public class DrmPresenter
 
             if (_context.RgbBuffer != null)
             {
-                _context.RgbBuffer.UnmapBuffer();
+                _context.RgbBuffer.DmaBuffer.UnmapBuffer();
                 _context.RgbBuffer.Dispose();
             }
 
@@ -403,26 +400,35 @@ public class DrmPresenter
 
     private static unsafe (uint fbId, uint handle) CreateRgbFramebuffer(
         DrmDevice drmDevice,
-        DmaBuffers.DmaBuffer rgbBuf,
+        ManagedDrmBuffer rgbBuf,
         int width,
         int height,
+        PixelFormat rgbFormat,
         ILogger logger)
     {
-        var result = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, rgbBuf.Fd, out uint rgbHandle);
+        var result = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, rgbBuf.DmaBuffer.Fd, out uint rgbHandle);
         if (result != 0)
         {
             logger.LogError("Failed to convert RGB DMA FD to handle: {Result}", result);
             return (0, 0);
         }
 
-        var rgbFormat = KnownPixelFormats.DRM_FORMAT_XRGB8888.Fourcc;
+
         uint rgbPitch = (uint)(width * 4);
         uint* rgbHandles = stackalloc uint[4] { rgbHandle, 0, 0, 0 };
         uint* rgbPitches = stackalloc uint[4] { rgbPitch, 0, 0, 0 };
         uint* rgbOffsets = stackalloc uint[4] { 0, 0, 0, 0 };
 
-        var resultFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, rgbFormat,
-            rgbHandles, rgbPitches, rgbOffsets, out var rgbFbId, 0);
+        var resultFb = LibDrm.drmModeAddFB2(
+            drmDevice.DeviceFd,
+            (uint)width,
+            (uint)height,
+            rgbFormat.Fourcc,
+            rgbHandles,
+            rgbPitches,
+            rgbOffsets,
+            out var rgbFbId,
+            0);
         if (resultFb != 0)
         {
             logger.LogError("Failed to create RGB framebuffer: {Result}", resultFb);
@@ -439,7 +445,7 @@ public class DrmPresenter
         public required uint ConnectorId { get; init; }
         public required DrmPlane PrimaryPlane { get; init; }
         public required DrmPlane Nv12Plane { get; init; }
-        public DmaBuffers.DmaBuffer? RgbBuffer { get; set; }
+        public ManagedDrmBuffer RgbBuffer { get; set; }
         public uint RgbFbId { get; set; }
         public uint Nv12FbId { get; set; }
         public AtomicPlaneUpdater? AtomicUpdater { get; set; }

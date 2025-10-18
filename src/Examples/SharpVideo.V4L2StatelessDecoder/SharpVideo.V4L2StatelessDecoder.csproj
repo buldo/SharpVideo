@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
     <ProjectReference Include="..\..\SharpVideo\SharpVideo.csproj" />
   </ItemGroup>
 

@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using SharpVideo.DmaBuffers;
 
 namespace SharpVideo.Drm;
 
@@ -9,13 +10,16 @@ namespace SharpVideo.Drm;
 public class ManagedDrmBuffer : IDisposable
 {
     public required DmaBuffers.DmaBuffer DmaBuffer { get; init; }
-    public int Width { get; init; }
-    public int Height { get; init; }
-    public uint Format { get; init; }
-    public int Index { get; init; }
-    public uint Stride { get; init; } // BytesPerLine - actual stride including padding
-    public uint DrmHandle { get; set; }
+    public required int Width { get; init; }
+    public required int Height { get; init; }
+
+    public required uint Stride { get; init; }
+
+    public required PixelFormat Format { get; init; }
     public uint FramebufferId { get; set; }
+
+    public void MapBuffer() => DmaBuffer.MapBuffer();
+    public MapStatus MapStatus => DmaBuffer.MapStatus;
 
     public void Dispose()
     {

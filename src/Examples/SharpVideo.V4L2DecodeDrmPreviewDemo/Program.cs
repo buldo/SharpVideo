@@ -48,12 +48,8 @@ internal class Program
             return;
         }
 
-        // Note: DmaBuffersAllocator should implement IDisposable in the future for proper resource management
-        // Setup display for NV12 with capabilities-aware configuration
-        var presenter = DrmPresenter.Create(drmDevice, Width, Height, allocator, logger);
-
-        // Create DRM buffer manager for zero-copy
-        using var drmBufferManager = new DrmBufferManager(drmDevice, allocator);
+        using var drmBufferManager = new DrmBufferManager(drmDevice, allocator, [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_XRGB8888]);
+        var presenter = DrmPresenter.Create(drmDevice, Width, Height, drmBufferManager, logger);
 
         // Latest frame tracking for minimal latency display
         // Instead of queue, we always display the most recent decoded frame

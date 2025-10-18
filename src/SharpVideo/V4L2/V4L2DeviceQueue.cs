@@ -206,15 +206,15 @@ public class V4L2DeviceQueue
     /// Initialising queue.
     /// This method requesting buffer with specified type
     /// </summary>
-    /// <param name="memory">Memory type</param>
     /// <param name="buffersCount">Buffers count</param>
-    public virtual void Init(V4L2Memory memory, uint buffersCount)
+    public virtual void InitMMap(uint buffersCount)
     {
         if (_isInitialized)
         {
             throw new Exception("Already initialised");
         }
 
+        var memory = V4L2Memory.MMAP;
         _buffersPool = V4L2QueueBufferPool.CreatePool(_deviceFd, buffersCount, _type, memory, _planesCountAccessor());
         _memoryType = memory;
         _isInitialized = true;

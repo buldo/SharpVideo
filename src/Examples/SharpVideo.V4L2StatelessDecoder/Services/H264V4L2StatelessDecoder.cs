@@ -546,7 +546,7 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Setting up and mapping buffers...");
 
         // Setup OUTPUT buffers for slice data with proper V4L2 mmap
-        SetupBufferQueue(_device.OutputMPlaneQueue, _configuration.OutputBufferCount);
+        SetupMMapBufferQueue(_device.OutputMPlaneQueue, _configuration.OutputBufferCount);
         if (_mediaDevice != null)
         {
             _mediaDevice.AllocateMediaRequests(_configuration.RequestPoolSize);
@@ -560,13 +560,13 @@ public class H264V4L2StatelessDecoder
         }
         else
         {
-            SetupBufferQueue(_device.CaptureMPlaneQueue, _configuration.CaptureBufferCount);
+            SetupMMapBufferQueue(_device.CaptureMPlaneQueue, _configuration.CaptureBufferCount);
         }
     }
 
-    private void SetupBufferQueue(V4L2DeviceQueue queue, uint bufferCount)
+    private void SetupMMapBufferQueue(V4L2DeviceQueue queue, uint bufferCount)
     {
-        queue.Init(V4L2Memory.MMAP, bufferCount);
+        queue.InitMMap(bufferCount);
         foreach (var buffer in queue.BuffersPool.Buffers)
         {
             buffer.MapToMemory();
@@ -609,9 +609,7 @@ public class H264V4L2StatelessDecoder
         _drmBuffers = _drmBufferManager!.AllocateNv12ContiguousBuffersWithSize(
             (int)width,
             (int)height,
-            (int)_configuration.CaptureBufferCount,
-            totalBufferSize,
-            stride);
+            (int)_configuration.CaptureBufferCount);
 
         if (_drmBuffers.Count != _configuration.CaptureBufferCount)
         {
