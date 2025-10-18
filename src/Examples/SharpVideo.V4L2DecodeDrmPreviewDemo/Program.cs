@@ -440,63 +440,7 @@ internal class Program
 
     private static void LogDeviceCapabilities(V4L2DeviceInfo deviceInfo, ILogger logger)
     {
-        logger.LogInformation("=== Device Capabilities Analysis ===");
-        logger.LogInformation("Driver: {Driver}", deviceInfo.DriverName);
-        logger.LogInformation("Card: {Card}", deviceInfo.CardName);
-        logger.LogInformation("Device Path: {Path}", deviceInfo.DevicePath);
-
-        var caps = deviceInfo.DeviceCapabilities;
-        logger.LogInformation("Capabilities (0x{Caps:X8}):", (uint)caps);
-
-        // Check for memory-to-memory device (required for decoder)
-        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M_MPLANE))
-        {
-            logger.LogInformation("  ✓ VIDEO_M2M_MPLANE - Multi-planar memory-to-memory (optimal for stateless decoders)");
-        }
-        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M))
-        {
-            logger.LogInformation("  ✓ VIDEO_M2M - Single-planar memory-to-memory");
-        }
-
-        // Check for streaming capability (essential for low-latency)
-        if (caps.HasFlag(V4L2Capabilities.STREAMING))
-        {
-            logger.LogInformation("  ✓ STREAMING - Supports streaming I/O (lowest latency)");
-        }
-
-        // Check if device supports extended pixel formats
-        if (caps.HasFlag(V4L2Capabilities.EXT_PIX_FORMAT))
-        {
-            logger.LogInformation("  ✓ EXT_PIX_FORMAT - Extended pixel format support");
-        }
-
-        // Check for Media Controller (important for complex pipelines)
-        if (caps.HasFlag(V4L2Capabilities.IO_MC))
-        {
-            logger.LogInformation("  ✓ IO_MC - Media Controller support (required for stateless decoders)");
-        }
-
-        // Analyze optimal configuration
-        logger.LogInformation("=== Optimal Configuration Recommendations ===");
-
-        if (caps.HasFlag(V4L2Capabilities.STREAMING))
-        {
-            logger.LogInformation("✓ Use STREAMING mode (already configured) - provides lowest latency");
-        }
-        else
-        {
-            logger.LogWarning("⚠ Device does not support STREAMING - latency may be higher");
-        }
-
-        if (caps.HasFlag(V4L2Capabilities.VIDEO_M2M_MPLANE) || caps.HasFlag(V4L2Capabilities.VIDEO_M2M))
-        {
-            logger.LogInformation("✓ Memory-to-memory device detected - zero-copy DMABUF mode optimal");
-        }
-
-        if (!caps.HasFlag(V4L2Capabilities.IO_MC))
-        {
-            logger.LogWarning("⚠ Media Controller not supported - may not work with stateless decoders");
-        }
+        logger.LogInformation("Driver: {Driver}; Card: {Card}; Device Path: {Path}; DeviceCapabilities: {DeviceCapabilities}", deviceInfo.DriverName, deviceInfo.CardName, deviceInfo.DevicePath, deviceInfo.DeviceCapabilities);
 
         logger.LogInformation("=== Supported Formats ===");
         foreach (var format in deviceInfo.SupportedFormats)
@@ -504,8 +448,6 @@ internal class Program
             logger.LogInformation("  Format: {Description} (FourCC: {FourCC})",
                 format.Description, format.PixelFormat);
         }
-
-        logger.LogInformation("======================================");
     }
 
     private static MediaDevice GetMediaDevice()
