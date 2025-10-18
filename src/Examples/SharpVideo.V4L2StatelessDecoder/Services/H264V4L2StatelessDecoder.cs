@@ -19,7 +19,7 @@ public class H264V4L2StatelessDecoder
     private readonly DecoderConfiguration _configuration;
     private readonly Action<ReadOnlySpan<byte>>? _processDecodedAction;
     private readonly Action<uint>? _processDecodedBufferIndex;
-    private readonly Drm.DrmBufferManager? _drmBufferManager;
+    private readonly DrmBufferManager _drmBufferManager;
     private List<ManagedDrmBuffer>? _drmBuffers;
 
     private bool _disposed;
@@ -53,9 +53,9 @@ public class H264V4L2StatelessDecoder
         MediaDevice? mediaDevice,
         ILogger<H264V4L2StatelessDecoder> logger,
         DecoderConfiguration configuration,
-        Action<ReadOnlySpan<byte>>? processDecodedAction = null,
-        Action<uint>? processDecodedBufferIndex = null,
-        Drm.DrmBufferManager? drmBufferManager = null)
+        Action<ReadOnlySpan<byte>>? processDecodedAction,
+        Action<uint>? processDecodedBufferIndex,
+        DrmBufferManager drmBufferManager)
     {
         _device = device;
         _mediaDevice = mediaDevice;
@@ -582,9 +582,6 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Negotiated capture format: {Width}x{Height}, NumPlanes={NumPlanes}, PixelFormat=0x{PixelFormat:X}",
             negotiatedFormat.Width, negotiatedFormat.Height, negotiatedFormat.NumPlanes, negotiatedFormat.PixelFormat);
 
-        // Use the negotiated dimensions and plane sizes
-        uint width = negotiatedFormat.Width;
-        uint height = negotiatedFormat.Height;
         uint numPlanes = negotiatedFormat.NumPlanes;
         if (numPlanes != 1)
         {
@@ -606,10 +603,16 @@ public class H264V4L2StatelessDecoder
         var totalBufferSize = planeFormats[0].SizeImage;
         var stride = planeFormats[0].BytesPerLine;
         _logger.LogInformation("Using contiguous buffer allocation (single DMA-BUF per buffer), size={Size}, stride={Stride}", totalBufferSize, stride);
-        _drmBuffers = _drmBufferManager!.AllocateNv12ContiguousBuffersWithSize(
-            (int)width,
-            (int)height,
-            (int)_configuration.CaptureBufferCount);
+        //_drmBuffers = _drmBufferManager.AllocateNv12ContiguousBuffersWithSize(
+        //    (int)width,
+        //    (int)height,
+        //    (int)_configuration.CaptureBufferCount);
+
+        _drmBuffers = _drmBufferManager.AllocateFromFormat(
+            negotiatedFormat.Width,
+            negotiatedFormat.Height,
+            planeFormats[0],
+            _configuration.CaptureBufferCount, new PixelFormat(negotiatedFormat.PixelFormat));
 
         if (_drmBuffers.Count != _configuration.CaptureBufferCount)
         {

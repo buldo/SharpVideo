@@ -35,8 +35,8 @@ public class DrmPresenter
 
     public static DrmPresenter Create(
         DrmDevice drmDevice,
-        int width,
-        int height,
+        uint width,
+        uint height,
         DrmBufferManager bufferManager,
         ILogger logger)
     {
@@ -199,8 +199,8 @@ public class DrmPresenter
 
     public bool SetOverlayPlane(
         ManagedDrmBuffer drmBuffer,
-        int dstWidth,
-        int dstHeight
+        uint dstWidth,
+        uint dstHeight
     )
     {
         return SetPlane(
@@ -259,10 +259,10 @@ public class DrmPresenter
         uint planeId,
         uint crtcId,
         uint fbId,
-        int srcWidth,
-        int srcHeight,
-        int dstWidth,
-        int dstHeight,
+        uint srcWidth,
+        uint srcHeight,
+        uint dstWidth,
+        uint dstHeight,
         AtomicPlaneUpdater? atomicUpdater,
         bool tryAsync,
         ILogger logger)
@@ -359,8 +359,8 @@ public class DrmPresenter
         uint connectorId,
         uint fbId,
         DrmModeInfo mode,
-        int width,
-        int height,
+        uint width,
+        uint height,
         ILogger logger)
     {
         var nativeMode = new DrmModeModeInfo
@@ -401,8 +401,8 @@ public class DrmPresenter
     private static unsafe (uint fbId, uint handle) CreateRgbFramebuffer(
         DrmDevice drmDevice,
         ManagedDrmBuffer rgbBuf,
-        int width,
-        int height,
+        uint width,
+        uint height,
         PixelFormat rgbFormat,
         ILogger logger)
     {

@@ -14,7 +14,7 @@ public class V4L2DmaBufBufferPool
     private readonly ConcurrentQueue<V4L2DmaBufMPlaneBuffer> _freeBuffers = new();
     private readonly AutoResetEvent _waitHandle = new(false);
 
-    public V4L2DmaBufBufferPool(V4L2DmaBufMPlaneBuffer[] buffers, uint bufferPlaneCount)
+    private V4L2DmaBufBufferPool(V4L2DmaBufMPlaneBuffer[] buffers, uint bufferPlaneCount)
     {
         _buffers = buffers;
         BufferPlaneCount = bufferPlaneCount;

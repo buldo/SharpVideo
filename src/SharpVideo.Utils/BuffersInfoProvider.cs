@@ -26,7 +26,7 @@ public static class BuffersInfoProvider
         }
         .ToFrozenDictionary();
 
-    public static BufferParams GetBufferParams(int width, int height, PixelFormat format)
+    public static BufferParams GetBufferParams(uint width, uint height, PixelFormat format)
     {
         var info = _db[format];
         ulong fullSize = 0;
@@ -45,7 +45,7 @@ public static class BuffersInfoProvider
             FullSize = fullSize,
             PlanesCount = info.PlanesCount,
             PlaneOffsets = offsets,
-            Stride = (uint)(width * height * (info.BitsPerPixel[0] / (float)8))
+            Stride = (uint)(width * info.BitsPerPixel[0] / 8)
         };
     }
 
@@ -59,8 +59,8 @@ public static class BuffersInfoProvider
 
 public class BufferParams
 {
-    public required int Width { get; init; }
-    public required int Height { get; init; }
+    public required uint Width { get; init; }
+    public required uint Height { get; init; }
     public required ulong FullSize { get; init; }
 
     public required int PlanesCount { get; init; }

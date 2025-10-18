@@ -31,17 +31,18 @@ public class DrmBufferManager : IDisposable
             supportedPixelFormats.ToFrozenDictionary(format => format, format => new List<ManagedDrmBuffer>());
     }
 
-    /// <summary>
-    /// Allocates a pool of contiguous DMA buffers for NV12 format with explicit buffer size.
-    /// For V4L2 drivers that report NumPlanes=1 with specific size requirements (including padding).
-    /// </summary>
-    public List<ManagedDrmBuffer> AllocateNv12ContiguousBuffersWithSize(int width, int height, int count)
+    public List<ManagedDrmBuffer> AllocateFromFormat(
+        uint width,
+        uint height,
+        V4L2PlanePix planeFormat,
+        uint buffersCount,
+        PixelFormat pixelFormat)
     {
         var buffers = new List<ManagedDrmBuffer>();
 
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < buffersCount; i++)
         {
-            var buffer = AllocateBuffer(width, height, KnownPixelFormats.DRM_FORMAT_NV12);
+            var buffer = AllocateBuffer(width, height, planeFormat.SizeImage, planeFormat.BytesPerLine, pixelFormat);
             buffer.MapBuffer();
             buffers.Add(buffer);
         }
@@ -49,9 +50,37 @@ public class DrmBufferManager : IDisposable
         return buffers;
     }
 
+    private ManagedDrmBuffer AllocateBuffer(
+        uint width,
+        uint height,
+        uint fullSize,
+        uint stride,
+        PixelFormat pixelFormat)
+    {
+        var buffer = _allocator.Allocate(fullSize);
+        if (buffer == null)
+        {
+            throw new Exception("Failed to allocate buffer");
+        }
+
+        var managedBuffer = new ManagedDrmBuffer
+        {
+            DmaBuffer = buffer,
+            Width = width,
+            Height = height,
+            Format = pixelFormat,
+            Stride = stride
+        };
+
+        _managedDrmBuffers[pixelFormat].Add(managedBuffer);
+
+        return managedBuffer;
+    }
+
+
     public ManagedDrmBuffer AllocateBuffer(
-        int width,
-        int height,
+        uint width,
+        uint height,
         PixelFormat pixelFormat)
     {
         var bufInfo = BuffersInfoProvider.GetBufferParams(width, height, pixelFormat);

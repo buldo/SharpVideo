@@ -10,8 +10,8 @@ namespace SharpVideo.Drm;
 public class ManagedDrmBuffer : IDisposable
 {
     public required DmaBuffers.DmaBuffer DmaBuffer { get; init; }
-    public required int Width { get; init; }
-    public required int Height { get; init; }
+    public required uint Width { get; init; }
+    public required uint Height { get; init; }
 
     public required uint Stride { get; init; }
 

@@ -60,11 +60,16 @@ internal class Program
         var saver = new FrameSaver("frames", loggerFactory.CreateLogger<FrameSaver>());
 
         int decodedFrames = 0;
-        await using var decoder = new H264V4L2StatelessDecoder(v4L2Device, mediaDevice, decoderLogger, config, span =>
+        await using var decoder = new H264V4L2StatelessDecoder(
+            v4L2Device,
+            mediaDevice,
+            decoderLogger,
+            config,
+            span =>
         {
             decodedFrames++;
             //saver.TryEnqueueFrame(span, 1920, 1080);
-        });
+        }, null, null);
 
         await using var fileStream = File.OpenRead(filePath);
         var decodeStopWatch = Stopwatch.StartNew();
