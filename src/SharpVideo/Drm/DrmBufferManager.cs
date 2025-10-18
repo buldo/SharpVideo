@@ -24,117 +24,6 @@ public class DrmBufferManager : IDisposable
     }
 
     /// <summary>
-    /// Allocates a pool of DMA buffers for NV12 format with separate planes.
-    /// For V4L2 DMABUF compatibility, allocates separate buffers for Y and UV planes.
-    /// </summary>
-    public List<ManagedDrmBuffer> AllocateNv12Buffers(int width, int height, int count)
-    {
-        var buffers = new List<ManagedDrmBuffer>();
-
-        for (int i = 0; i < count; i++)
-        {
-            // Allocate Y plane buffer
-            ulong yPlaneSize = (ulong)(width * height);
-            var yBuffer = _allocator.Allocate(yPlaneSize);
-            if (yBuffer == null)
-            {
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
-            yBuffer.MapBuffer();
-            if (yBuffer.MapStatus != MapStatus.Mapped)
-            {
-                yBuffer.Dispose();
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
-            // Allocate UV plane buffer (half size of Y)
-            ulong uvPlaneSize = (ulong)(width * height / 2);
-            var uvBuffer = _allocator.Allocate(uvPlaneSize);
-            if (uvBuffer == null)
-            {
-                yBuffer.UnmapBuffer();
-                yBuffer.Dispose();
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
-            uvBuffer.MapBuffer();
-            if (uvBuffer.MapStatus != MapStatus.Mapped)
-            {
-                yBuffer.UnmapBuffer();
-                yBuffer.Dispose();
-                uvBuffer.Dispose();
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
-            var managedBuffer = new ManagedDrmBuffer
-            {
-                DmaBuffer = yBuffer, // Y plane
-                PlaneBuffers = new List<DmaBuffers.DmaBuffer> { uvBuffer }, // UV plane
-                Width = width,
-                Height = height,
-                Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc,
-                Index = i
-            };
-
-            buffers.Add(managedBuffer);
-            _buffers.Add(managedBuffer);
-        }
-
-        return buffers;
-    }
-
-    /// <summary>
-    /// Allocates a pool of contiguous DMA buffers for NV12 format (single buffer with Y and UV planes).
-    /// For V4L2 drivers that report NumPlanes=1 and expect a single DMA-BUF with plane offsets.
-    /// </summary>
-    public List<ManagedDrmBuffer> AllocateNv12ContiguousBuffers(int width, int height, int count)
-    {
-        var buffers = new List<ManagedDrmBuffer>();
-
-        for (int i = 0; i < count; i++)
-        {
-            // Allocate single contiguous buffer for both Y and UV planes
-            // Y plane: width * height
-            // UV plane: width * height / 2
-            ulong totalSize = (ulong)(width * height * 3.0 / 2.0);
-            var buffer = _allocator.Allocate(totalSize);
-            if (buffer == null)
-            {
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
-            buffer.MapBuffer();
-            if (buffer.MapStatus != MapStatus.Mapped)
-            {
-                buffer.Dispose();
-                foreach (var buf in buffers) buf.Dispose();
-                return new List<ManagedDrmBuffer>();
-            }
-
-            var managedBuffer = new ManagedDrmBuffer
-            {
-                DmaBuffer = buffer, // Single buffer containing both Y and UV
-                PlaneBuffers = null, // No separate plane buffers
-                Width = width,
-                Height = height,
-                Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc,
-                Index = i
-            };
-
-            buffers.Add(managedBuffer);
-            _buffers.Add(managedBuffer);
-        }
-
-        return buffers;
-    }
-
-    /// <summary>
     /// Allocates a pool of contiguous DMA buffers for NV12 format with explicit buffer size.
     /// For V4L2 drivers that report NumPlanes=1 with specific size requirements (including padding).
     /// </summary>
@@ -163,7 +52,6 @@ public class DrmBufferManager : IDisposable
             var managedBuffer = new ManagedDrmBuffer
             {
                 DmaBuffer = buffer, // Single buffer containing both Y and UV
-                PlaneBuffers = null, // No separate plane buffers
                 Width = width,
                 Height = height,
                 Stride = stride, // Actual stride from V4L2
@@ -199,26 +87,13 @@ public class DrmBufferManager : IDisposable
         uint uvOffset;
         uint uvHandle;
 
-        if (buffer.PlaneBuffers != null && buffer.PlaneBuffers.Count > 0)
-        {
-            // Separate plane buffers
-            result = LibDrm.drmPrimeFDToHandle(_drmDevice.DeviceFd, buffer.PlaneBuffers[0].Fd, out uvHandle);
-            if (result != 0)
-            {
-                return 0;
-            }
-            uvOffset = 0; // Separate buffer, so offset is 0
-        }
-        else
-        {
-            // Contiguous buffer - UV plane starts after Y plane data
-            uvHandle = yHandle; // Same handle
-            // Use stride * height for correct offset (accounts for padding)
-            uvOffset = yPitch * (uint)buffer.Height;
-            Console.Error.WriteLine($"[DRM] Creating NV12 framebuffer: Width={buffer.Width}, Height={buffer.Height}, Stride={yPitch}");
-            Console.Error.WriteLine($"[DRM]   Y: handle={yHandle}, pitch={yPitch}, offset={yOffset}");
-            Console.Error.WriteLine($"[DRM]   UV: handle={uvHandle}, pitch={uvPitch}, offset={uvOffset}");
-        }
+        // Contiguous buffer - UV plane starts after Y plane data
+        uvHandle = yHandle; // Same handle
+        // Use stride * height for correct offset (accounts for padding)
+        uvOffset = yPitch * (uint)buffer.Height;
+        Console.Error.WriteLine($"[DRM] Creating NV12 framebuffer: Width={buffer.Width}, Height={buffer.Height}, Stride={yPitch}");
+        Console.Error.WriteLine($"[DRM]   Y: handle={yHandle}, pitch={yPitch}, offset={yOffset}");
+        Console.Error.WriteLine($"[DRM]   UV: handle={uvHandle}, pitch={uvPitch}, offset={uvOffset}");
 
         uint* handles = stackalloc uint[4] { yHandle, uvHandle, 0, 0 };
         uint* pitches = stackalloc uint[4] { yPitch, uvPitch, 0, 0 };
@@ -245,17 +120,6 @@ public class DrmBufferManager : IDisposable
         return fbId;
     }
 
-    /// <summary>
-    /// Removes a framebuffer.
-    /// </summary>
-    public void RemoveFramebuffer(uint fbId)
-    {
-        if (fbId != 0)
-        {
-            LibDrm.drmModeRmFB(_drmDevice.DeviceFd, fbId);
-        }
-    }
-
     public void Dispose()
     {
         if (_disposed)
@@ -272,42 +136,5 @@ public class DrmBufferManager : IDisposable
 
         _buffers.Clear();
         _disposed = true;
-    }
-}
-
-/// <summary>
-/// Represents a managed DRM buffer with associated metadata.
-/// </summary>
-[SupportedOSPlatform("linux")]
-public class ManagedDrmBuffer : IDisposable
-{
-    public required DmaBuffers.DmaBuffer DmaBuffer { get; init; }
-
-    /// <summary>
-    /// Additional plane buffers for multi-planar formats (e.g., separate UV buffer for NV12)
-    /// </summary>
-    public List<DmaBuffers.DmaBuffer>? PlaneBuffers { get; init; }
-
-    public int Width { get; init; }
-    public int Height { get; init; }
-    public uint Format { get; init; }
-    public int Index { get; init; }
-    public uint Stride { get; init; } // BytesPerLine - actual stride including padding
-    public uint DrmHandle { get; set; }
-    public uint FramebufferId { get; set; }
-
-    public void Dispose()
-    {
-        DmaBuffer.UnmapBuffer();
-        DmaBuffer.Dispose();
-
-        if (PlaneBuffers != null)
-        {
-            foreach (var plane in PlaneBuffers)
-            {
-                plane.UnmapBuffer();
-                plane.Dispose();
-            }
-        }
     }
 }
