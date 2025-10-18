@@ -576,42 +576,17 @@ public class H264V4L2StatelessDecoder
     private void SetupDmaBufCaptureQueue()
     {
         _logger.LogInformation("Setting up DMABUF capture queue with DRM PRIME buffers");
-
-        // Query the actual negotiated capture format to get correct plane sizes
         var negotiatedFormat = _device.GetCaptureFormatMPlane();
-        _logger.LogInformation("Negotiated capture format: {Width}x{Height}, NumPlanes={NumPlanes}, PixelFormat=0x{PixelFormat:X}",
-            negotiatedFormat.Width, negotiatedFormat.Height, negotiatedFormat.NumPlanes, negotiatedFormat.PixelFormat);
 
-        uint numPlanes = negotiatedFormat.NumPlanes;
-        if (numPlanes != 1)
+        if (negotiatedFormat.NumPlanes != 1)
         {
             throw new Exception("We support only 1 plane");
         }
 
-        // Get plane format information
-        var planeFormats = negotiatedFormat.PlaneFormats;
-
-        // Log plane sizes from negotiated format
-        for (int i = 0; i < negotiatedFormat.NumPlanes; i++)
-        {
-            _logger.LogInformation("  Plane {Index}: SizeImage={SizeImage}, BytesPerLine={BytesPerLine}",
-                i, planeFormats[i].SizeImage, planeFormats[i].BytesPerLine);
-        }
-
-        // Single-plane mode: contiguous buffer with Y and UV at different offsets
-        // Use the actual buffer size and stride reported by V4L2
-        var totalBufferSize = planeFormats[0].SizeImage;
-        var stride = planeFormats[0].BytesPerLine;
-        _logger.LogInformation("Using contiguous buffer allocation (single DMA-BUF per buffer), size={Size}, stride={Stride}", totalBufferSize, stride);
-        //_drmBuffers = _drmBufferManager.AllocateNv12ContiguousBuffersWithSize(
-        //    (int)width,
-        //    (int)height,
-        //    (int)_configuration.CaptureBufferCount);
-
         _drmBuffers = _drmBufferManager.AllocateFromFormat(
             negotiatedFormat.Width,
             negotiatedFormat.Height,
-            planeFormats[0],
+            negotiatedFormat.PlaneFormats[0],
             _configuration.CaptureBufferCount, new PixelFormat(negotiatedFormat.PixelFormat));
 
         if (_drmBuffers.Count != _configuration.CaptureBufferCount)
@@ -619,22 +594,9 @@ public class H264V4L2StatelessDecoder
             throw new Exception($"Failed to allocate {_configuration.CaptureBufferCount} DRM buffers");
         }
 
-        var bufferFds = new List<int[]>();
-        foreach (var drmBuffer in _drmBuffers)
-        {
-            int fd = drmBuffer.DmaBuffer.Fd;
-            bufferFds.Add(new[] { fd });
-        }
+        var fds = _drmBuffers.Select(drmBuffer => drmBuffer.DmaBuffer.Fd).ToArray();
+        _device.CaptureMPlaneQueue.InitDmaBuf(fds, negotiatedFormat.PlaneFormats[0].SizeImage, 0u);
 
-        _logger.LogInformation("V4L2 contiguous mode: 1 plane, size={Size}, offset=0", totalBufferSize);
-
-        var v4l2PlaneSizes = new[] { totalBufferSize };
-        var v4l2PlaneOffsets = new[] { 0u };
-        // Initialize V4L2 capture queue with DMABUF
-        _device.CaptureMPlaneQueue.InitDmaBuf(bufferFds.ToArray(), v4l2PlaneSizes, v4l2PlaneOffsets);
-
-        _logger.LogInformation("DMABUF capture queue initialized with {Count} buffers ({Mode} mode)",
-            _drmBuffers.Count, numPlanes == 1 ? "contiguous" : "separate planes");
     }
 
     private void StartStreaming()

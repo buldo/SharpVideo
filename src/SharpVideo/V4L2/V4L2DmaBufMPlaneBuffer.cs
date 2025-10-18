@@ -13,39 +13,26 @@ public class V4L2DmaBufMPlaneBuffer
 
     public V4L2DmaBufMPlaneBuffer(
         uint index,
-        int[] dmaBufferFds,
-        uint[] planeSizes,
-        uint[] planeOffsets)
+        int dmaBufferFds,
+        uint planeSizes,
+        uint planeOffsets)
     {
-        if (dmaBufferFds.Length != planeSizes.Length)
-        {
-            throw new ArgumentException("Number of FDs must match number of plane sizes");
-        }
-
-        if (planeSizes.Length != planeOffsets.Length)
-        {
-            throw new ArgumentException("Number of plane sizes must match number of plane offsets");
-        }
-
         Index = index;
         DmaBufferFds = dmaBufferFds;
 
-        _planes = new V4L2Plane[planeSizes.Length];
-        for (int i = 0; i < planeSizes.Length; i++)
+        _planes = new V4L2Plane[1];
+        _planes[0] = new V4L2Plane
         {
-            _planes[i] = new V4L2Plane
-            {
-                BytesUsed = 0, // For capture buffers, driver fills this on dequeue
-                Length = planeSizes[i],
-                Memory = new V4L2Plane.PlaneMemory { Fd = dmaBufferFds[i] },
-                DataOffset = planeOffsets[i] // Use provided offset (0 for separate buffers, stride*height for contiguous UV)
-            };
-        }
+            BytesUsed = 0, // For capture buffers, driver fills this on dequeue
+            Length = planeSizes,
+            Memory = new V4L2Plane.PlaneMemory { Fd = dmaBufferFds },
+            DataOffset = planeOffsets // Use provided offset (0 for separate buffers, stride*height for contiguous UV)
+        };
     }
 
     public uint Index { get; }
 
-    public int[] DmaBufferFds { get; }
+    public int DmaBufferFds { get; }
 
     public V4L2Plane[] Planes => _planes;
 

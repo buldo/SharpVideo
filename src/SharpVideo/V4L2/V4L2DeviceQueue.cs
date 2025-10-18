@@ -226,7 +226,7 @@ public class V4L2DeviceQueue
     /// <param name="dmaBufferFds">Array of DMA buffer file descriptors (one per buffer)</param>
     /// <param name="planeSizes">Array of plane sizes (one per plane)</param>
     /// <param name="planeOffsets">Array of plane offsets within each buffer (one per plane)</param>
-    public virtual void InitDmaBuf(int[][] dmaBufferFds, uint[] planeSizes, uint[] planeOffsets)
+    public virtual void InitDmaBuf(int[] dmaBufferFds, uint planeSizes, uint planeOffsets)
     {
         if (_isInitialized)
         {
