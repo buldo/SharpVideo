@@ -36,15 +36,13 @@ public class DrmPresenter
         var resources = drmDevice.GetResources();
         if (resources == null)
         {
-            logger.LogError("Failed to get DRM resources");
-            return null;
+            throw new Exception("Failed to get DRM resources");
         }
 
         var connector = resources.Connectors.FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
         if (connector == null)
         {
-            logger.LogError("No connected display found");
-            return null;
+            throw new Exception("No connected display found");
         }
 
         logger.LogInformation("Found connected display: {Type}", connector.ConnectorType);
@@ -52,8 +50,7 @@ public class DrmPresenter
         var mode = connector.Modes.FirstOrDefault(m => m.HDisplay == width && m.VDisplay == height);
         if (mode == null)
         {
-            logger.LogError("No {Width}x{Height} mode found", width, height);
-            return null;
+            throw new Exception($"No {width}x{height} mode found");
         }
 
         logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{RefreshRate}Hz)",
@@ -62,8 +59,7 @@ public class DrmPresenter
         var encoder = connector.Encoder ?? connector.Encoders.FirstOrDefault();
         if (encoder == null)
         {
-            logger.LogError("No encoder found");
-            return null;
+            throw new Exception("No encoder found");
         }
 
         var crtcId = encoder.CrtcId;
@@ -76,8 +72,7 @@ public class DrmPresenter
 
         if (crtcId == 0)
         {
-            logger.LogError("No available CRTC found");
-            return null;
+            throw new Exception("No available CRTC found");
         }
 
         logger.LogInformation("Using CRTC ID: {CrtcId}", crtcId);
@@ -98,8 +93,7 @@ public class DrmPresenter
 
         if (primaryPlane == null)
         {
-            logger.LogError("No primary plane found");
-            return null;
+            throw new Exception("No primary plane found");
         }
 
         logger.LogInformation("Found primary plane: ID {PlaneId}", primaryPlane.Id);
@@ -118,8 +112,7 @@ public class DrmPresenter
 
         if (nv12Plane == null)
         {
-            logger.LogError("No NV12-capable overlay plane found");
-            return null;
+            throw new Exception("No NV12-capable overlay plane found");
         }
 
         logger.LogInformation("Found NV12 overlay plane: ID {PlaneId}", nv12Plane.Id);

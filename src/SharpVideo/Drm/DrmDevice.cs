@@ -3,7 +3,6 @@ using SharpVideo.Linux.Native;
 
 namespace SharpVideo.Drm;
 
-// TODO: Add dispose
 [SupportedOSPlatform("linux")]
 public class DrmDevice : IDisposable
 {
