@@ -46,15 +46,11 @@ public class V4L2DeviceCaptureQueue : V4L2DeviceQueue
         Enqueue(mappedBuffer);
     }
 
-    public void ReuseDmaBufBuffer(uint index)
+    public void ReuseDmaBufBuffer(V4L2DmaBufMPlaneBuffer buffer)
     {
-        var dmaBufBuffer = DmaBufBuffersPool.Buffers[(int)index];
         // Reset BytesUsed to 0 for capture buffers (driver fills it on dequeue)
-        for (int i = 0; i < dmaBufBuffer.Planes.Length; i++)
-        {
-            dmaBufBuffer.SetPlaneBytesUsed(i, 0);
-        }
-        EnqueueDmaBuf(dmaBufBuffer);
+        buffer.ResetPlanesUsed();
+        EnqueueDmaBuf(buffer);
     }
 
     public void EnqueueAllBuffers()

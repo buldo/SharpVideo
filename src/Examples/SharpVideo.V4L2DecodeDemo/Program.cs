@@ -66,10 +66,10 @@ internal class Program
             decoderLogger,
             config,
             span =>
-        {
-            decodedFrames++;
-            //saver.TryEnqueueFrame(span, 1920, 1080);
-        }, null, null);
+            {
+                decodedFrames++;
+                //saver.TryEnqueueFrame(span, 1920, 1080);
+            }, null);
 
         await using var fileStream = File.OpenRead(filePath);
         var decodeStopWatch = Stopwatch.StartNew();

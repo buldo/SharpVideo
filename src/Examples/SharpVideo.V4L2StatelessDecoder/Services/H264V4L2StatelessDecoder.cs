@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.Drm;
 using SharpVideo.H264;
 using SharpVideo.Linux.Native;
+using SharpVideo.Utils;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2StatelessDecoder.Models;
 
@@ -18,18 +19,12 @@ public class H264V4L2StatelessDecoder
 
     private readonly DecoderConfiguration _configuration;
     private readonly Action<ReadOnlySpan<byte>>? _processDecodedAction;
-    private readonly Action<uint>? _processDecodedBufferIndex;
+    private Action<SharedDmaBuffer>? _processDecodedBufferIndex;
     private readonly DrmBufferManager _drmBufferManager;
-    private List<ManagedDrmBuffer>? _drmBuffers;
+    private List<SharedDmaBuffer>? _drmBuffers;
 
     private bool _disposed;
     private int _framesDecoded;
-    private readonly Stopwatch _decodingStopwatch = new();
-
-    /// <summary>
-    /// Gets the DRM buffers allocated for zero-copy decode (available after initialization).
-    /// </summary>
-    public IReadOnlyList<ManagedDrmBuffer>? DrmBuffers => _drmBuffers;
 
     private readonly bool _supportsSliceParamsControl;
 
@@ -54,7 +49,6 @@ public class H264V4L2StatelessDecoder
         ILogger<H264V4L2StatelessDecoder> logger,
         DecoderConfiguration configuration,
         Action<ReadOnlySpan<byte>>? processDecodedAction,
-        Action<uint>? processDecodedBufferIndex,
         DrmBufferManager drmBufferManager)
     {
         _device = device;
@@ -62,7 +56,6 @@ public class H264V4L2StatelessDecoder
         _logger = logger;
         _configuration = configuration;
         _processDecodedAction = processDecodedAction;
-        _processDecodedBufferIndex = processDecodedBufferIndex;
         _drmBufferManager = drmBufferManager;
         _supportsSliceParamsControl =
             device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
@@ -71,12 +64,9 @@ public class H264V4L2StatelessDecoder
         {
             throw new ArgumentException("DrmBufferManager is required when UseDrmPrimeBuffers is true");
         }
-
-        if (_configuration.UseDrmPrimeBuffers && _processDecodedBufferIndex == null)
-        {
-            throw new ArgumentException("processDecodedBufferIndex callback is required when UseDrmPrimeBuffers is true");
-        }
     }
+
+    public H264V4L2StatelessDecoderStatistics Statistics { get; } = new();
 
     /// <summary>
     /// Decodes H.264 stream using V4L2 hardware acceleration with efficient stream processing
@@ -84,15 +74,17 @@ public class H264V4L2StatelessDecoder
     public async Task DecodeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
     {
         if (stream == null)
+        {
             throw new ArgumentNullException(nameof(stream));
+        }
 
         if (!stream.CanRead)
+        {
             throw new ArgumentException("Stream must be readable", nameof(stream));
+        }
 
         _logger.LogInformation("Starting H.264 stateless stream decode");
-        _decodingStopwatch.Start();
-
-        InitializeDecoder();
+        var decodingStopwatch = Stopwatch.StartNew();
 
         using var naluProvider = new H264AnnexBNaluProvider();
         _logger.LogInformation("NALU provider created; beginning stream processing");
@@ -120,14 +112,14 @@ public class H264V4L2StatelessDecoder
             drainAttempts++;
         }
 
-        _decodingStopwatch.Stop();
-        var elapsedSeconds = _decodingStopwatch.Elapsed.TotalSeconds;
-        var fps = elapsedSeconds > 0 ? _framesDecoded / elapsedSeconds : 0;
+        decodingStopwatch.Stop();
+        Statistics.DecodeElapsed = decodingStopwatch.Elapsed;
+        var fps = Statistics.DecodeElapsed.TotalSeconds > 0 ? _framesDecoded / Statistics.DecodeElapsed.TotalSeconds : 0;
 
         _logger.LogInformation(
             "Stateless decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
             _framesDecoded,
-            elapsedSeconds,
+            Statistics.DecodeElapsed.TotalSeconds,
             fps);
     }
 
@@ -439,7 +431,7 @@ public class H264V4L2StatelessDecoder
             if (_configuration.UseDrmPrimeBuffers)
             {
                 // For DMABUF mode, pass buffer index to caller
-                _processDecodedBufferIndex!(dequeuedBuffer.Index);
+                _processDecodedBufferIndex(_drmBuffers[(int)dequeuedBuffer.Index]);
                 // Don't requeue - let the display system handle it
             }
             else
@@ -454,9 +446,15 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Capture buffer processing thread stopped");
     }
 
-    private void InitializeDecoder()
+    public void InitializeDecoder(Action<SharedDmaBuffer>? processDecodedBufferIndex)
     {
         _logger.LogInformation("Initializing H.264 stateless decoder...");
+
+        _processDecodedBufferIndex = processDecodedBufferIndex;
+        if (_configuration.UseDrmPrimeBuffers && _processDecodedBufferIndex == null)
+        {
+            throw new ArgumentException("processDecodedBufferIndex callback is required when UseDrmPrimeBuffers is true");
+        }
 
         // Log device information for debugging
         _logger.LogInformation("Device fd: {Fd}, Controls: {ControlCount}, ExtControls: {ExtControlCount}",
@@ -596,7 +594,14 @@ public class H264V4L2StatelessDecoder
 
         var fds = _drmBuffers.Select(drmBuffer => drmBuffer.DmaBuffer.Fd).ToArray();
         _device.CaptureMPlaneQueue.InitDmaBuf(fds, negotiatedFormat.PlaneFormats[0].SizeImage, 0u);
-
+        foreach (var buffer in _drmBuffers)
+        {
+            buffer.V4L2Buffer = _device
+                .CaptureMPlaneQueue
+                .DmaBufBuffersPool
+                .Buffers
+                .Single(b => b.DmaBufferFd == buffer.DmaBuffer.Fd);
+        }
     }
 
     private void StartStreaming()
@@ -670,14 +675,14 @@ public class H264V4L2StatelessDecoder
     /// <summary>
     /// Requeues a DMABUF capture buffer after display is done with it.
     /// </summary>
-    public void RequeueCaptureBuffer(uint bufferIndex)
+    public void RequeueCaptureBuffer(SharedDmaBuffer buffer)
     {
         if (!_configuration.UseDrmPrimeBuffers)
         {
             throw new InvalidOperationException("RequeueCaptureBuffer can only be used with DRM PRIME buffers");
         }
 
-        _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(bufferIndex);
+        _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(buffer.V4L2Buffer);
     }
 
     public async ValueTask DisposeAsync()
@@ -691,4 +696,9 @@ public class H264V4L2StatelessDecoder
         GC.SuppressFinalize(this);
         await Task.CompletedTask;
     }
+}
+
+public class H264V4L2StatelessDecoderStatistics
+{
+    public TimeSpan DecodeElapsed { get; set; }
 }

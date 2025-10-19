@@ -17,7 +17,7 @@ public class DrmBufferManager : IDisposable
 {
     private readonly DrmDevice _drmDevice;
     private readonly DmaBuffersAllocator _allocator;
-    private readonly FrozenDictionary<PixelFormat, List<ManagedDrmBuffer>> _managedDrmBuffers;
+    private readonly FrozenDictionary<PixelFormat, List<SharedDmaBuffer>> _managedDrmBuffers;
     private bool _disposed;
 
     public DrmBufferManager(
@@ -28,17 +28,17 @@ public class DrmBufferManager : IDisposable
         _drmDevice = drmDevice;
         _allocator = allocator;
         _managedDrmBuffers =
-            supportedPixelFormats.ToFrozenDictionary(format => format, format => new List<ManagedDrmBuffer>());
+            supportedPixelFormats.ToFrozenDictionary(format => format, format => new List<SharedDmaBuffer>());
     }
 
-    public List<ManagedDrmBuffer> AllocateFromFormat(
+    public List<SharedDmaBuffer> AllocateFromFormat(
         uint width,
         uint height,
         V4L2PlanePix planeFormat,
         uint buffersCount,
         PixelFormat pixelFormat)
     {
-        var buffers = new List<ManagedDrmBuffer>();
+        var buffers = new List<SharedDmaBuffer>();
 
         for (int i = 0; i < buffersCount; i++)
         {
@@ -50,7 +50,7 @@ public class DrmBufferManager : IDisposable
         return buffers;
     }
 
-    private ManagedDrmBuffer AllocateBuffer(
+    private SharedDmaBuffer AllocateBuffer(
         uint width,
         uint height,
         uint fullSize,
@@ -63,7 +63,7 @@ public class DrmBufferManager : IDisposable
             throw new Exception("Failed to allocate buffer");
         }
 
-        var managedBuffer = new ManagedDrmBuffer
+        var managedBuffer = new SharedDmaBuffer
         {
             DmaBuffer = buffer,
             Width = width,
@@ -78,7 +78,7 @@ public class DrmBufferManager : IDisposable
     }
 
 
-    public ManagedDrmBuffer AllocateBuffer(
+    public SharedDmaBuffer AllocateBuffer(
         uint width,
         uint height,
         PixelFormat pixelFormat)
@@ -91,7 +91,7 @@ public class DrmBufferManager : IDisposable
             throw new Exception("Failed to allocate buffer");
         }
 
-        var managedBuffer = new ManagedDrmBuffer
+        var managedBuffer = new SharedDmaBuffer
         {
             DmaBuffer = buffer,
             Width = width,
@@ -108,7 +108,7 @@ public class DrmBufferManager : IDisposable
     /// <summary>
     /// Creates a DRM framebuffer for the given buffer.
     /// </summary>
-    public unsafe uint CreateFramebuffer(ManagedDrmBuffer buffer)
+    public unsafe uint CreateFramebuffer(SharedDmaBuffer buffer)
     {
         // Convert Y plane DMA-BUF FD to DRM handle
         var result = LibDrm.drmPrimeFDToHandle(_drmDevice.DeviceFd, buffer.DmaBuffer.Fd, out uint yHandle);
@@ -151,8 +151,6 @@ public class DrmBufferManager : IDisposable
         {
             return 0;
         }
-
-        buffer.FramebufferId = fbId;
 
         return fbId;
     }

@@ -11,23 +11,35 @@ namespace SharpVideo.Utils;
 [SupportedOSPlatform("linux")]
 public class DrmPresenter
 {
+    private readonly List<SharedDmaBuffer> _processedBuffers = new();
     private readonly DrmDevice _device;
+    private readonly DrmBufferManager _bufferManager;
     private readonly DisplayContext _context;
     private readonly DrmCapabilitiesState _capabilities;
     private readonly ILogger _logger;
     private readonly PixelFormat _primaryPlanePixelFormat;
+    private readonly uint _width;
+    private readonly uint _height;
+
+    private SharedDmaBuffer? _currentFrame;
 
     private DrmPresenter(
         DrmDevice device,
+        DrmBufferManager bufferManager,
         DisplayContext context,
         DrmCapabilitiesState capabilities,
         PixelFormat primaryPlanePixelFormat,
+        uint width,
+        uint height,
         ILogger logger)
     {
         _device = device;
+        _bufferManager = bufferManager;
         _context = context;
         _capabilities = capabilities;
         _primaryPlanePixelFormat = primaryPlanePixelFormat;
+        _width = width;
+        _height = height;
         _logger = logger;
     }
 
@@ -194,15 +206,24 @@ public class DrmPresenter
         };
 
         logger.LogInformation("Display setup complete");
-        return new(drmDevice, context, capabilities, primaryPlaneFormat, logger);
+        return new(drmDevice, bufferManager, context, capabilities, primaryPlaneFormat, width, height, logger);
     }
 
     public bool SetOverlayPlane(
-        ManagedDrmBuffer drmBuffer,
-        uint dstWidth,
-        uint dstHeight
-    )
+        SharedDmaBuffer drmBuffer)
     {
+        if (drmBuffer.FramebufferId == 0)
+        {
+            drmBuffer.FramebufferId = _bufferManager.CreateFramebuffer(drmBuffer);
+        }
+
+        if (_currentFrame != null)
+        {
+            _processedBuffers.Add(_currentFrame);
+        }
+
+        _currentFrame = drmBuffer;
+
         return SetPlane(
             _device.DeviceFd,
             _context.Nv12Plane.Id,
@@ -210,13 +231,19 @@ public class DrmPresenter
             drmBuffer.FramebufferId,
             drmBuffer.Width,
             drmBuffer.Height,
-            dstWidth,
-            dstHeight,
+            _width,
+            _height,
             _context.AtomicUpdater,
             _capabilities.AsyncPageFlip,
             _logger);
     }
 
+    public SharedDmaBuffer[] GetPresentedFrames()
+    {
+        var ret = _processedBuffers.ToArray();
+        _processedBuffers.Clear();
+        return ret;
+    }
 
     private static void DumpCapabilities(DrmCapabilitiesState caps, ILogger logger)
     {
@@ -278,9 +305,9 @@ public class DrmPresenter
                 crtcId,
                 fbId,
                 0, 0, // crtcX, crtcY
-                (uint)dstWidth, (uint)dstHeight,
+                dstWidth, dstHeight,
                 0, 0, // srcX, srcY (16.16 fixed point, but we pass 0)
-                (uint)srcWidth << 16, (uint)srcHeight << 16, // srcW, srcH in 16.16 fixed point
+                srcWidth << 16, srcHeight << 16, // srcW, srcH in 16.16 fixed point
                 tryAsync);
 
             if (success)
@@ -292,8 +319,8 @@ public class DrmPresenter
 
         // Legacy API fallback
         var result = LibDrm.drmModeSetPlane(drmFd, planeId, crtcId, fbId, 0,
-            0, 0, (uint)dstWidth, (uint)dstHeight,
-            0, 0, (uint)srcWidth << 16, (uint)srcHeight << 16);
+            0, 0, dstWidth, dstHeight,
+            0, 0, srcWidth << 16, srcHeight << 16);
         if (result != 0)
         {
             logger.LogError("Failed to set plane {PlaneId}: {Result}", planeId, result);
@@ -400,7 +427,7 @@ public class DrmPresenter
 
     private static unsafe (uint fbId, uint handle) CreateRgbFramebuffer(
         DrmDevice drmDevice,
-        ManagedDrmBuffer rgbBuf,
+        SharedDmaBuffer rgbBuf,
         uint width,
         uint height,
         PixelFormat rgbFormat,
@@ -421,8 +448,8 @@ public class DrmPresenter
 
         var resultFb = LibDrm.drmModeAddFB2(
             drmDevice.DeviceFd,
-            (uint)width,
-            (uint)height,
+            width,
+            height,
             rgbFormat.Fourcc,
             rgbHandles,
             rgbPitches,
@@ -445,7 +472,7 @@ public class DrmPresenter
         public required uint ConnectorId { get; init; }
         public required DrmPlane PrimaryPlane { get; init; }
         public required DrmPlane Nv12Plane { get; init; }
-        public ManagedDrmBuffer RgbBuffer { get; set; }
+        public SharedDmaBuffer RgbBuffer { get; set; }
         public uint RgbFbId { get; set; }
         public uint Nv12FbId { get; set; }
         public AtomicPlaneUpdater? AtomicUpdater { get; set; }

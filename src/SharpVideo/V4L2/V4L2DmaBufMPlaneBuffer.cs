@@ -1,4 +1,6 @@
+using System;
 using System.Runtime.Versioning;
+
 using SharpVideo.Linux.Native;
 
 namespace SharpVideo.V4L2;
@@ -13,39 +15,36 @@ public class V4L2DmaBufMPlaneBuffer
 
     public V4L2DmaBufMPlaneBuffer(
         uint index,
-        int dmaBufferFds,
+        int dmaBufferFd,
         uint planeSizes,
         uint planeOffsets)
     {
         Index = index;
-        DmaBufferFds = dmaBufferFds;
+        DmaBufferFd = dmaBufferFd;
 
         _planes = new V4L2Plane[1];
         _planes[0] = new V4L2Plane
         {
             BytesUsed = 0, // For capture buffers, driver fills this on dequeue
             Length = planeSizes,
-            Memory = new V4L2Plane.PlaneMemory { Fd = dmaBufferFds },
+            Memory = new V4L2Plane.PlaneMemory { Fd = dmaBufferFd },
             DataOffset = planeOffsets // Use provided offset (0 for separate buffers, stride*height for contiguous UV)
         };
     }
 
     public uint Index { get; }
 
-    public int DmaBufferFds { get; }
+    public int DmaBufferFd { get; }
 
     public V4L2Plane[] Planes => _planes;
 
     public V4L2Memory Memory => V4L2Memory.DMABUF;
 
-    /// <summary>
-    /// Updates the bytesused field for a specific plane.
-    /// </summary>
-    public void SetPlaneBytesUsed(int planeIndex, uint bytesUsed)
+    public void ResetPlanesUsed()
     {
-        if (planeIndex >= 0 && planeIndex < _planes.Length)
+        for (int i = 0; i < Planes.Length; i++)
         {
-            _planes[planeIndex].BytesUsed = bytesUsed;
+            _planes[i].BytesUsed = 0;
         }
     }
 }
