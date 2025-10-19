@@ -97,14 +97,6 @@ public class V4L2DeviceQueue
             RequestFd = request?.Fd ?? 0
         };
 
-        // Debug logging
-        Console.WriteLine($"Queueing DMABUF buffer {dmaBufBuffer.Index}:");
-        Console.WriteLine($"  Type: {_type}, Memory: {V4L2Memory.DMABUF}, Length: {dmaBufBuffer.Planes.Length}");
-        for (int i = 0; i < dmaBufBuffer.Planes.Length; i++)
-        {
-            Console.WriteLine($"  Plane {i}: FD={dmaBufBuffer.Planes[i].Memory.Fd}, Length={dmaBufBuffer.Planes[i].Length}, BytesUsed={dmaBufBuffer.Planes[i].BytesUsed}, DataOffset={dmaBufBuffer.Planes[i].DataOffset}");
-        }
-
         unsafe
         {
             fixed (V4L2Plane* planePtr = dmaBufBuffer.Planes)
@@ -114,10 +106,8 @@ public class V4L2DeviceQueue
                 var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
                 if (!result.Success)
                 {
-                    Console.WriteLine($"  FAILED: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
                     throw new Exception($"Failed to queue DMABUF buffer for {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
                 }
-                Console.WriteLine($"  SUCCESS");
             }
         }
     }

@@ -23,6 +23,7 @@ public class Player
     private Task _decodeTask;
     private Task _displayTask;
 
+    private ManualResetEventSlim _decodeCompleted = new(false);
 
     public Player(
         DrmPresenter presenter,
@@ -43,12 +44,14 @@ public class Player
 
     public void StartPlay(FileStream fileStream)
     {
-        _decodeTask = _decoder.DecodeStreamAsync(fileStream);
+        _decodeTask = Task.Run(() => DecodeLocalAsync(fileStream));
         _displayTask = Task.Run(() => DisplayRoutine(displayCts.Token));
     }
 
     public void WaitCompleted()
     {
+        _decodeCompleted.Wait();
+        displayCts.Cancel(false);
         Task.WaitAll(_decodeTask, _displayTask);
         Statistics.DecodeElapsed = _decoder.Statistics.DecodeElapsed;
     }
@@ -59,13 +62,28 @@ public class Player
         _buffersToPresent.Add(buffer);
     }
 
+    private async Task DecodeLocalAsync(FileStream fileStream)
+    {
+        await _decoder.DecodeStreamAsync(fileStream);
+        _decodeCompleted.Set();
+    }
+
     private void DisplayRoutine(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Display thread started");
         var displayStopwatch = Stopwatch.StartNew();
-        while(!cancellationToken.IsCancellationRequested && Statistics.DecodedFrames != Statistics.PresentedFrames)
+        while(!(cancellationToken.IsCancellationRequested && Statistics.DecodedFrames == Statistics.PresentedFrames))
         {
-            var buffer = _buffersToPresent.Take(cancellationToken);
+            SharedDmaBuffer buffer;
+            try
+            {
+                buffer = _buffersToPresent.Take(cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
             _presenter.SetOverlayPlane(buffer);
             Statistics.IncrementPresentedFrames();
             var toRequeue = _presenter.GetPresentedFrames();
