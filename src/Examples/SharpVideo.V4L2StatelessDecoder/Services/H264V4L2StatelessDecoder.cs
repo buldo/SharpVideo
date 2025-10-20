@@ -35,14 +35,6 @@ public class H264V4L2StatelessDecoder
     // DPB (Decoded Picture Buffer) tracking
     private readonly List<DpbEntry> _dpb = new();
 
-    private class DpbEntry
-    {
-        public uint FrameNum { get; set; }
-        public uint PicOrderCnt { get; set; }
-        public bool IsReference { get; set; }
-        public bool IsLongTerm { get; set; }
-    }
-
     public H264V4L2StatelessDecoder(
         V4L2Device device,
         MediaDevice? mediaDevice,
@@ -192,7 +184,7 @@ public class H264V4L2StatelessDecoder
 
             naluCount++;
 
-            ProcessNaluByType(naluData, naluState, streamState); // Use WithoutHeader instead of manual span slicing
+            ProcessNaluByType(naluData, naluState, streamState);
         }
 
         _logger.LogInformation("Finished processing NALUs ({Count} total)", naluCount);
@@ -701,9 +693,4 @@ public class H264V4L2StatelessDecoder
         GC.SuppressFinalize(this);
         await Task.CompletedTask;
     }
-}
-
-public class H264V4L2StatelessDecoderStatistics
-{
-    public TimeSpan DecodeElapsed { get; set; }
 }
