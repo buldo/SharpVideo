@@ -155,6 +155,11 @@ public class H264V4L2StatelessDecoder
                 }
             }
         }
+        catch(Exception ex)
+        {
+            _logger.LogError(ex, "Error while feeding stream to NALU provider");
+            throw;
+        }
         finally
         {
             naluProvider.CompleteWriting();

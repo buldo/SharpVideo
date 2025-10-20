@@ -2,7 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Runtime.Versioning;
-
+using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Linux.Native;
 using SharpVideo.Utils;
@@ -17,16 +17,19 @@ public class DrmBufferManager : IDisposable
 {
     private readonly DrmDevice _drmDevice;
     private readonly DmaBuffersAllocator _allocator;
+    private readonly ILogger<DrmBufferManager> _logger;
     private readonly FrozenDictionary<PixelFormat, List<SharedDmaBuffer>> _managedDrmBuffers;
     private bool _disposed;
 
     public DrmBufferManager(
         DrmDevice drmDevice,
         DmaBuffersAllocator allocator,
-        PixelFormat[] supportedPixelFormats)
+        PixelFormat[] supportedPixelFormats,
+        ILogger<DrmBufferManager> logger)
     {
         _drmDevice = drmDevice;
         _allocator = allocator;
+        _logger = logger;
         _managedDrmBuffers =
             supportedPixelFormats.ToFrozenDictionary(format => format, format => new List<SharedDmaBuffer>());
     }
@@ -128,9 +131,7 @@ public class DrmBufferManager : IDisposable
         uint uvHandle = yHandle; // Same handle
         // Use stride * height for correct offset (accounts for padding)
         uint uvOffset = yPitch * (uint)buffer.Height;
-        Console.Error.WriteLine($"[DRM] Creating NV12 framebuffer: Width={buffer.Width}, Height={buffer.Height}, Stride={yPitch}");
-        Console.Error.WriteLine($"[DRM]   Y: handle={yHandle}, pitch={yPitch}, offset={yOffset}");
-        Console.Error.WriteLine($"[DRM]   UV: handle={uvHandle}, pitch={uvPitch}, offset={uvOffset}");
+        _logger.LogInformation($"[DRM] Creating NV12 framebuffer: Width={buffer.Width}, Height={buffer.Height}, Stride={yPitch}");
 
         uint* handles = stackalloc uint[4] { yHandle, uvHandle, 0, 0 };
         uint* pitches = stackalloc uint[4] { yPitch, uvPitch, 0, 0 };

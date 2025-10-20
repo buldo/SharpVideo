@@ -60,6 +60,7 @@ public class Player
     {
         Statistics.IncrementDecodedFrames();
         _buffersToPresent.Add(buffer);
+        _logger.LogTrace("Frame decoded: {DecodedCount}", Statistics.DecodedFrames);
     }
 
     private async Task DecodeLocalAsync(FileStream fileStream)
@@ -84,6 +85,7 @@ public class Player
                 break;
             }
 
+            _logger.LogTrace("Presenting frame {FrameNumber}; InQueue: {InQueue}", Statistics.PresentedFrames + 1, _buffersToPresent.Count);
             _presenter.SetOverlayPlane(buffer);
             Statistics.IncrementPresentedFrames();
             var toRequeue = _presenter.GetPresentedFrames();
@@ -91,6 +93,7 @@ public class Player
             {
                 _decoder.RequeueCaptureBuffer(toRequeue[i]);
             }
+            //_logger.LogTrace("Buffers requeued: {RequeuedCount}", toRequeue.Length);
         }
         displayStopwatch.Stop();
 

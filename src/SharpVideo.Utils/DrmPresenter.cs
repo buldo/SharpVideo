@@ -136,19 +136,15 @@ public class DrmPresenter
 
         logger.LogInformation("Found NV12 overlay plane: ID {PlaneId}", nv12Plane.Id);
 
-        // Initialize atomic plane updater for better performance
-        // Note: Atomic modesetting may not work on all hardware/kernels
-        // Falls back to legacy API if atomic commits fail at runtime
+        var capabilities = drmDevice.GetDeviceCapabilities();
         AtomicPlaneUpdater? atomicUpdater = null;
-        try
+#if DEBUG
+        DumpCapabilities(capabilities, logger);
+#endif
+        if (capabilities.AtomicAsyncPageFlip || capabilities.AsyncPageFlip)
         {
             atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, nv12Plane.Id, crtcId);
-            logger.LogInformation(
-                "✓ Atomic modesetting infrastructure initialized (will attempt atomic plane updates)");
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning("Could not initialize atomic modesetting infrastructure: {Error}", ex.Message);
+            logger.LogInformation("Atomic modesetting infrastructure initialized (will attempt atomic plane updates)");
         }
 
         var primaryPlaneFormat = KnownPixelFormats.DRM_FORMAT_XRGB8888;
@@ -187,11 +183,6 @@ public class DrmPresenter
             rgbBuf.Dispose();
             return null;
         }
-
-        var capabilities = drmDevice.GetDeviceCapabilities();
-#if DEBUG
-        DumpCapabilities(capabilities, logger);
-#endif
 
         var context = new DisplayContext
         {

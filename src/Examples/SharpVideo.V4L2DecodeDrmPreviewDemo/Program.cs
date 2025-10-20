@@ -22,7 +22,7 @@ internal class Program
 
     private static readonly ILoggerFactory LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory
         .Create(builder =>
-        builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        builder.AddConsole().SetMinimumLevel(LogLevel.Trace));
 
     private static readonly ILogger Logger = LoggerFactory.CreateLogger<Program>();
 
@@ -45,10 +45,12 @@ internal class Program
             throw new Exception("Failed to create DMA buffers allocator.");
         }
 
+        var drmBufferManagerLogger = LoggerFactory.CreateLogger<DrmBufferManager>();
         using var drmBufferManager = new DrmBufferManager(
             drmDevice,
             allocator,
-            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_XRGB8888]);
+            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_XRGB8888],
+            drmBufferManagerLogger);
         var presenter = DrmPresenter.Create(drmDevice, Width, Height, drmBufferManager, Logger);
 
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
