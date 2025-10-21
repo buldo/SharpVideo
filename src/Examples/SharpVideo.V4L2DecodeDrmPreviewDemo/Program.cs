@@ -21,8 +21,13 @@ internal class Program
     private const int Height = 1080;
 
     private static readonly ILoggerFactory LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory
-        .Create(builder =>
-        builder.AddConsole().SetMinimumLevel(LogLevel.Trace));
+        .Create(builder => builder.AddConsole()
+        #if DEBUG
+        .SetMinimumLevel(LogLevel.Trace)
+        #else
+        .SetMinimumLevel(LogLevel.Warning)
+        #endif
+        );
 
     private static readonly ILogger Logger = LoggerFactory.CreateLogger<Program>();
 
@@ -85,10 +90,11 @@ internal class Program
 
         await Task.Delay(100);
 
-        Logger.LogInformation("=== Final Statistics===");
-        Logger.LogInformation("Decoding stream completed in {ElapsedTime:F2} seconds", player.Statistics.DecodeElapsed.TotalSeconds);
-        Logger.LogInformation("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}", player.Statistics.DecodedFrames, player.Statistics.DecodedFrames / player.Statistics.DecodeElapsed.TotalSeconds);
-        Logger.LogInformation("Processing completed successfully!");
+        Logger.LogWarning("=== Final Statistics===");
+        Logger.LogWarning("Decoding stream completed in {ElapsedTime:F2} seconds", player.Statistics.DecodeElapsed.TotalSeconds);
+        Logger.LogWarning("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}", player.Statistics.DecodedFrames, player.Statistics.DecodedFrames / player.Statistics.DecodeElapsed.TotalSeconds);
+        Logger.LogWarning("Displayed {FrameCount} frames, average present FPS: {Fps:F2}", player.Statistics.PresentedFrames, player.Statistics.PresentedFrames / player.Statistics.PresentElapsed.TotalSeconds);
+        Logger.LogWarning("Processing completed successfully!");
 
         presenter.CleanupDisplay();
 
@@ -165,7 +171,11 @@ internal class Program
         logger.LogInformation("Enabling DRM client capabilities");
         foreach (var cap in capsToEnable)
         {
-            if (!drmDevice.TrySetClientCapability(cap, true, out var code))
+            if (drmDevice.TrySetClientCapability(cap, true, out var code))
+            {
+                logger.LogInformation("Enabled {Capability}", cap);
+            }
+            else
             {
                 logger.LogWarning("Failed to enable {Capability}: error {Code}", cap, code);
             }

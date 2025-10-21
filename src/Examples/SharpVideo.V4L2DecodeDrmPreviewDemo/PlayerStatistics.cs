@@ -11,6 +11,8 @@ public class PlayerStatistics
 
     public uint PresentedFrames => _presentedFrames;
 
+    public TimeSpan PresentElapsed { get; internal set; }
+
     public void IncrementDecodedFrames()
     {
         Interlocked.Increment(ref _decodedFrames);

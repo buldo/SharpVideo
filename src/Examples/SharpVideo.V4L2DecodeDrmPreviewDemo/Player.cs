@@ -60,7 +60,7 @@ public class Player
     private void ProcessBuffer(SharedDmaBuffer buffer)
     {
         Statistics.IncrementDecodedFrames();
-        
+
         // Try to add without blocking - if queue is full, drop the oldest frame to reduce latency
         if (!_buffersToPresent.TryAdd(buffer, 0))
         {
@@ -70,7 +70,7 @@ public class Player
             }
             _buffersToPresent.Add(buffer); // Block until space available
         }
-        
+
         if (_logger.IsEnabled(LogLevel.Trace))
         {
             _logger.LogTrace("Frame decoded: {DecodedCount}", Statistics.DecodedFrames);
@@ -101,14 +101,14 @@ public class Player
 
             if (_logger.IsEnabled(LogLevel.Trace))
             {
-                _logger.LogTrace("Presenting frame {FrameNumber}; InQueue: {InQueue}", 
+                _logger.LogTrace("Presenting frame {FrameNumber}; InQueue: {InQueue}",
                     Statistics.PresentedFrames + 1, _buffersToPresent.Count);
             }
-    
+
             _presenter.SetOverlayPlane(buffer);
             Statistics.IncrementPresentedFrames();
             var toRequeue = _presenter.GetPresentedFrames();
-    
+
             // Batch requeue for better performance
             for (int i = 0; i < toRequeue.Length; i++)
             {
@@ -116,8 +116,9 @@ public class Player
             }
         }
         displayStopwatch.Stop();
+        Statistics.PresentElapsed = displayStopwatch.Elapsed;
 
-        _logger.LogInformation("Display thread stopped. Frames: {FrameCount}; Time: {Elapsed}s)", 
+        _logger.LogInformation("Display thread stopped. Frames: {FrameCount}; Time: {Elapsed}s)",
             Statistics.PresentedFrames, displayStopwatch.Elapsed.TotalSeconds);
     }
 
