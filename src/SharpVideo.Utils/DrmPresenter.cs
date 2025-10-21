@@ -20,6 +20,7 @@ public class DrmPresenter
     private readonly PixelFormat _primaryPlanePixelFormat;
     private readonly uint _width;
     private readonly uint _height;
+    private readonly AtomicDisplayManager? _atomicDisplayManager;
 
     private SharedDmaBuffer? _currentFrame;
 
@@ -31,6 +32,7 @@ public class DrmPresenter
         PixelFormat primaryPlanePixelFormat,
         uint width,
         uint height,
+        AtomicDisplayManager? atomicDisplayManager,
         ILogger logger)
     {
         _device = device;
@@ -40,6 +42,7 @@ public class DrmPresenter
         _primaryPlanePixelFormat = primaryPlanePixelFormat;
         _width = width;
         _height = height;
+        _atomicDisplayManager = atomicDisplayManager;
         _logger = logger;
     }
 
@@ -138,13 +141,75 @@ public class DrmPresenter
 
         var capabilities = drmDevice.GetDeviceCapabilities();
         AtomicPlaneUpdater? atomicUpdater = null;
+        AtomicDisplayManager? atomicDisplayManager = null;
 #if DEBUG
         DumpCapabilities(capabilities, logger);
 #endif
-        if (capabilities.AtomicAsyncPageFlip || capabilities.AsyncPageFlip)
+
+        // Determine which display method to use:
+        // 1. AtomicDisplayManager: When atomic is available but async page flip is NOT supported
+        //    (uses VBlank-synchronized event-driven atomic commits)
+        // 2. AtomicPlaneUpdater: When atomic async page flip IS supported
+        //    (uses async atomic commits)
+        // 3. Legacy API: Fallback for older hardware
+
+        // Check if atomic modesetting was successfully enabled (done in Program.cs via DRM_CLIENT_CAP_ATOMIC)
+        // We can check this by trying to use atomic API - if it fails, atomic is not supported
+        // For now, we assume atomic is enabled if we got this far
+
+        if (!capabilities.AtomicAsyncPageFlip)
         {
+            // Atomic is available but async page flip is NOT supported
+            // Use event-driven atomic mode with VBlank synchronization
+            logger.LogInformation("Using atomic modesetting with VBlank synchronization (async page flip not supported)");
+
+            // Get all required property IDs for the plane
+            var fbIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "FB_ID");
+            var crtcIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_ID");
+            var crtcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_X");
+            var crtcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_Y");
+            var crtcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_W");
+            var crtcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_H");
+            var srcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_X");
+            var srcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_Y");
+            var srcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_W");
+            var srcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_H");
+
+            if (fbIdPropertyId == 0 || crtcIdPropertyId == 0 ||
+                crtcXPropertyId == 0 || crtcYPropertyId == 0 ||
+                crtcWPropertyId == 0 || crtcHPropertyId == 0 ||
+                srcXPropertyId == 0 || srcYPropertyId == 0 ||
+                srcWPropertyId == 0 || srcHPropertyId == 0)
+            {
+                logger.LogError("Failed to find required plane properties");
+                return null;
+            }
+
+            atomicDisplayManager = new AtomicDisplayManager(
+                drmDevice.DeviceFd,
+                nv12Plane.Id,
+                crtcId,
+                fbIdPropertyId,
+                crtcIdPropertyId,
+                crtcXPropertyId,
+                crtcYPropertyId,
+                crtcWPropertyId,
+                crtcHPropertyId,
+                srcXPropertyId,
+                srcYPropertyId,
+                srcWPropertyId,
+                srcHPropertyId,
+                width,  // source width
+                height, // source height
+                width,  // destination width
+                height, // destination height
+                logger);
+        }
+        else
+        {
+            // Atomic async page flip is supported - use AtomicPlaneUpdater
             atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, nv12Plane.Id, crtcId);
-            logger.LogInformation("Atomic modesetting infrastructure initialized (will attempt atomic plane updates)");
+            logger.LogInformation("Atomic modesetting with async page flip initialized");
         }
 
         var primaryPlaneFormat = KnownPixelFormats.DRM_FORMAT_XRGB8888;
@@ -197,7 +262,7 @@ public class DrmPresenter
         };
 
         logger.LogInformation("Display setup complete");
-        return new(drmDevice, bufferManager, context, capabilities, primaryPlaneFormat, width, height, logger);
+        return new(drmDevice, bufferManager, context, capabilities, primaryPlaneFormat, width, height, atomicDisplayManager, logger);
     }
 
     public bool SetOverlayPlane(
@@ -208,6 +273,14 @@ public class DrmPresenter
             drmBuffer.FramebufferId = _bufferManager.CreateFramebuffer(drmBuffer);
         }
 
+        // Use atomic display manager if available
+        if (_atomicDisplayManager != null)
+        {
+            _atomicDisplayManager.SubmitFrame(drmBuffer, drmBuffer.FramebufferId);
+            return true;
+        }
+
+        // Legacy path
         if (_currentFrame != null)
         {
             _processedBuffers.Add(_currentFrame);
@@ -231,6 +304,13 @@ public class DrmPresenter
 
     public SharedDmaBuffer[] GetPresentedFrames()
     {
+        // Use atomic display manager if available
+        if (_atomicDisplayManager != null)
+        {
+            return _atomicDisplayManager.GetCompletedBuffers();
+        }
+
+        // Legacy path
         var ret = _processedBuffers.ToArray();
         _processedBuffers.Clear();
         return ret;
@@ -334,6 +414,11 @@ public class DrmPresenter
 
         try
         {
+            if (_atomicDisplayManager != null)
+            {
+                _atomicDisplayManager.Dispose();
+            }
+
             if (_context.Nv12FbId != 0)
             {
                 var result = LibDrm.drmModeRmFB(_device.DeviceFd, _context.Nv12FbId);
@@ -455,6 +540,43 @@ public class DrmPresenter
 
         logger.LogInformation("Created RGB framebuffer with ID: {FbId}", rgbFbId);
         return (rgbFbId, rgbHandle);
+    }
+
+    private static unsafe uint GetPlanePropertyId(int drmFd, uint planeId, string propertyName)
+    {
+        var props = LibDrm.drmModeObjectGetProperties(drmFd, planeId, LibDrm.DRM_MODE_OBJECT_PLANE);
+        if (props == null)
+            return 0;
+
+        try
+        {
+            for (int i = 0; i < props->CountProps; i++)
+            {
+                var propId = props->Props[i];
+                var prop = LibDrm.drmModeGetProperty(drmFd, propId);
+                if (prop == null)
+                    continue;
+
+                try
+                {
+                    var name = prop->NameString;
+                    if (name != null && name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return propId;
+                    }
+                }
+                finally
+                {
+                    LibDrm.drmModeFreeProperty(prop);
+                }
+            }
+        }
+        finally
+        {
+            LibDrm.drmModeFreeObjectProperties(props);
+        }
+
+        return 0;
     }
 
     private class DisplayContext

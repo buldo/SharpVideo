@@ -405,4 +405,47 @@ public static unsafe partial class LibDrm
         DrmModeAtomicReq* req,
         DrmModeAtomicFlags flags,
         nint user_data);
+
+    // -------------------- Event Handling ------------------------------
+
+    /// <summary>
+    /// Page flip handler callback delegate.
+    /// </summary>
+    /// <param name="fd">DRM device file descriptor</param>
+    /// <param name="sequence">Frame sequence number</param>
+    /// <param name="tv_sec">Event timestamp seconds</param>
+    /// <param name="tv_usec">Event timestamp microseconds</param>
+    /// <param name="user_data">User data pointer passed to drmModeAtomicCommit</param>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void DrmEventPageFlipHandler(
+        int fd,
+        uint sequence,
+        uint tv_sec,
+        uint tv_usec,
+        nint user_data);
+
+    /// <summary>
+    /// VBlank handler callback delegate.
+    /// </summary>
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void DrmEventVBlankHandler(
+        int fd,
+        uint sequence,
+        uint tv_sec,
+        uint tv_usec,
+        nint user_data);
+
+    /// <summary>
+    /// Handle DRM events from file descriptor.
+    /// </summary>
+    /// <param name="fd">DRM device file descriptor</param>
+    /// <param name="evctx">Event context with callbacks</param>
+    /// <returns>0 on success, negative on error</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmHandleEvent")]
+    public static partial int drmHandleEvent(int fd, DrmEventContext* evctx);
+
+    /// <summary>
+    /// DRM event context version.
+    /// </summary>
+    public const int DRM_EVENT_CONTEXT_VERSION = 4;
 }
