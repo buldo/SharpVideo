@@ -88,9 +88,9 @@ public class H264V4L2StatelessDecoder
         _logger.LogInformation("Draining decoder pipeline...");
         int drainAttempts = 0;
         int lastFrameCount = _framesDecoded;
-        var spinWait = new SpinWait();
 
-        while (drainAttempts < 2000) // Up to 2 seconds total with faster polling
+        // Use more aggressive polling initially, then back off
+        while (drainAttempts < 100) // Reduced from 2000 to 100 iterations
         {
             _device.OutputMPlaneQueue.ReclaimProcessed();
 
@@ -102,8 +102,8 @@ public class H264V4L2StatelessDecoder
                 drainAttempts = 0; // Reset timeout if we're making progress
             }
 
-            // Use SpinWait for more efficient polling (adaptive waiting)
-            spinWait.SpinOnce();
+            // Short sleep instead of SpinWait for better CPU usage
+            Thread.Sleep(1);
             drainAttempts++;
         }
 
