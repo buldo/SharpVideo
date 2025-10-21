@@ -160,7 +160,7 @@ internal class Program
         return File.OpenRead(filePath);
     }
 
-    private static void EnableDrmCapabilities(DrmDevice drmDevice, ILogger logger)
+    private static List<DrmClientCapability> EnableDrmCapabilities(DrmDevice drmDevice, ILogger logger)
     {
         var capsToEnable = new[]
         {
@@ -169,16 +169,20 @@ internal class Program
         };
 
         logger.LogInformation("Enabling DRM client capabilities");
+        List<DrmClientCapability> enabledCaps = new();
         foreach (var cap in capsToEnable)
         {
             if (drmDevice.TrySetClientCapability(cap, true, out var code))
             {
                 logger.LogInformation("Enabled {Capability}", cap);
+                enabledCaps.Add(cap);
             }
             else
             {
                 logger.LogWarning("Failed to enable {Capability}: error {Code}", cap, code);
             }
         }
+
+        return enabledCaps;
     }
 }
