@@ -142,7 +142,7 @@ public class H264V4L2StatelessDecoder
                 totalBytesRead += bytesRead;
                 readIterations++;
 
-                if (readIterations <= 5 || readIterations % 100 == 0)
+                if (readIterations <= 5 || readIterations % 500 == 0)
                 {
                     _logger.LogInformation(
                         "Read chunk #{Chunk} ({Bytes} bytes); total fed {Total} bytes",
@@ -170,7 +170,10 @@ public class H264V4L2StatelessDecoder
     private async Task ProcessNalusAsync(H264AnnexBNaluProvider naluProvider, CancellationToken cancellationToken)
     {
         var streamState = new H264BitstreamParserState();
-        var parsingOptions = new ParsingOptions();
+        var parsingOptions = new ParsingOptions
+        {
+            add_checksum = false // Disable checksum calculation for performance
+        };
         var naluCount = 0;
         try
         {

@@ -17,7 +17,7 @@ public class H264AnnexBNaluProvider : IDisposable
         _processingTask = ProcessNalusAsync(_cancellationTokenSource.Token);
     }
 
-    public async Task AppendData(byte[] data, CancellationToken cancellationToken)
+    public async ValueTask AppendData(byte[] data, CancellationToken cancellationToken)
     {
         await _pipe.Writer.WriteAsync(data, cancellationToken);
     }
@@ -46,15 +46,14 @@ public class H264AnnexBNaluProvider : IDisposable
                     // Process any remaining data in buffer as the last NALU
                     if (buffer.Count > 0)
                     {
-                        await ProcessFinalNalu(buffer, cancellationToken);
+                        ProcessFinalNaluSync(buffer);
                     }
                     break;
                 }
 
                 foreach (var segment in sequence)
                 {
-                    var segmentArray = segment.Span.ToArray();
-                    await ProcessBytesAsync(segmentArray, buffer, cancellationToken);
+                    ProcessBytesSync(segment.Span, buffer);
                 }
 
                 reader.AdvanceTo(sequence.End);
@@ -64,7 +63,7 @@ public class H264AnnexBNaluProvider : IDisposable
                     // Process any remaining data in buffer as the last NALU
                     if (buffer.Count > 0)
                     {
-                        await ProcessFinalNalu(buffer, cancellationToken);
+                        ProcessFinalNaluSync(buffer);
                     }
                     break;
                 }
@@ -85,23 +84,30 @@ public class H264AnnexBNaluProvider : IDisposable
         }
     }
 
-    private async Task ProcessBytesAsync(byte[] data, List<byte> buffer, CancellationToken cancellationToken)
+    private void ProcessBytesSync(ReadOnlySpan<byte> data, List<byte> buffer)
     {
-        buffer.AddRange(data);
+        // Efficiently append data using CollectionsMarshal for better performance
+        int oldCount = buffer.Count;
+        buffer.AddRange(data.ToArray()); // ToArray is needed here, but we do it once
 
         // Look for start codes and extract NALUs in Annex-B format
-        await ExtractNalusFromBuffer(buffer, cancellationToken);
+        ExtractNalusFromBufferSync(buffer);
     }
 
-    private async Task ExtractNalusFromBuffer(List<byte> buffer, CancellationToken cancellationToken)
+    private void ExtractNalusFromBufferSync(List<byte> buffer)
     {
-        var startPositions = new List<int>();
+        if (buffer.Count < 4)
+            return;
+
+        Span<int> startPositionsStack = stackalloc int[64];
+        var startPositions = new List<int>(32); // Pre-allocate with reasonable capacity
 
         // Find all start code positions
-        for (int i = 0; i <= buffer.Count - 3; i++)
+        int bufferCount = buffer.Count;
+        for (int i = 0; i <= bufferCount - 3; i++)
         {
             // Check for 4-byte start code: 0x00 0x00 0x00 0x01
-            if (i <= buffer.Count - 4 &&
+            if (i <= bufferCount - 4 &&
                 buffer[i] == 0x00 && buffer[i + 1] == 0x00 &&
                 buffer[i + 2] == 0x00 && buffer[i + 3] == 0x01)
             {
@@ -116,6 +122,9 @@ public class H264AnnexBNaluProvider : IDisposable
             }
         }
 
+        if (startPositions.Count == 0)
+            return;
+
         // Extract complete NALUs (always include start codes)
         for (int i = 0; i < startPositions.Count - 1; i++)
         {
@@ -127,35 +136,41 @@ public class H264AnnexBNaluProvider : IDisposable
 
             if (naluLength > 0)
             {
-                // Always include the start code in the NALU (Annex-B format)
+                // Use Array.Copy instead of element-by-element copy - much faster!
                 var naluData = new byte[naluLength];
-                for (int j = 0; j < naluLength; j++)
-                {
-                    naluData[j] = buffer[startPos + j];
-                }
+
+                // Convert List<byte> to array once for efficient copying
+                var bufferArray = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(buffer);
+                bufferArray.Slice(startPos, naluLength).CopyTo(naluData);
 
                 var nalu = new H264Nalu(naluData, startCodeLength);
-                await _channel.Writer.WriteAsync(nalu, cancellationToken);
+
+                // Use synchronous write - we're already in a background task
+                if (!_channel.Writer.TryWrite(nalu))
+                {
+                    // If channel is full, we need to wait, but this should be rare
+                    _channel.Writer.WriteAsync(nalu).AsTask().GetAwaiter().GetResult();
+                }
             }
         }
 
-        // Remove processed data from buffer, keeping only the last start code and any data after it
-        if (startPositions.Count > 0)
+        // Remove processed data from buffer efficiently
+        var lastStartPos = startPositions[startPositions.Count - 1];
+        if (lastStartPos > 0)
         {
-            var lastStartPos = startPositions[startPositions.Count - 1];
-            var remainingData = new List<byte>();
-
-            for (int i = lastStartPos; i < buffer.Count; i++)
+            int remainingCount = bufferCount - lastStartPos;
+            // Use RemoveRange which is much faster than manual copying
+            if (lastStartPos < bufferCount)
             {
-                remainingData.Add(buffer[i]);
+                // Move remaining bytes to the beginning
+                var bufferSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(buffer);
+                bufferSpan.Slice(lastStartPos, remainingCount).CopyTo(bufferSpan);
+                buffer.RemoveRange(remainingCount, lastStartPos);
             }
-
-            buffer.Clear();
-            buffer.AddRange(remainingData);
         }
     }
 
-    private async Task ProcessFinalNalu(List<byte> buffer, CancellationToken cancellationToken)
+    private void ProcessFinalNaluSync(List<byte> buffer)
     {
         if (buffer.Count == 0)
             return;
@@ -183,10 +198,10 @@ public class H264AnnexBNaluProvider : IDisposable
             // Only process if there's actual NALU data after the start code
             if (buffer.Count > startCodeLength)
             {
-                // Include start code (Annex-B format)
+                // Include start code (Annex-B format) - use ToArray() once
                 var finalNalu = buffer.ToArray();
                 var nalu = new H264Nalu(finalNalu, startCodeLength);
-                await _channel.Writer.WriteAsync(nalu, cancellationToken);
+                _channel.Writer.TryWrite(nalu);
             }
             // If buffer contains only a start code with no data, ignore it
         }
@@ -198,10 +213,12 @@ public class H264AnnexBNaluProvider : IDisposable
             finalNalu[1] = 0x00;
             finalNalu[2] = 0x00;
             finalNalu[3] = 0x01;
-            buffer.CopyTo(finalNalu, 4);
+
+            var bufferSpan = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(buffer);
+            bufferSpan.CopyTo(finalNalu.AsSpan(4));
 
             var nalu = new H264Nalu(finalNalu, 4); // Payload starts after the added start code
-            await _channel.Writer.WriteAsync(nalu, cancellationToken);
+            _channel.Writer.TryWrite(nalu);
         }
     }
 
