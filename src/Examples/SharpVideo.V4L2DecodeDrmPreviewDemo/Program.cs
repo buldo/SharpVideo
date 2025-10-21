@@ -64,9 +64,9 @@ internal class Program
         var config = new DecoderConfiguration
         {
             // Use more buffers if streaming is supported for smoother playback
-            OutputBufferCount = deviceInfo.DeviceCapabilities.HasFlag(V4L2Capabilities.STREAMING) ? 16u : 8u,
-            CaptureBufferCount = deviceInfo.DeviceCapabilities.HasFlag(V4L2Capabilities.STREAMING) ? 16u : 8u,
-            RequestPoolSize = 32,
+            OutputBufferCount = 3u,
+            CaptureBufferCount = 6u,
+            RequestPoolSize = 6,
             UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode for lowest latency
         };
 

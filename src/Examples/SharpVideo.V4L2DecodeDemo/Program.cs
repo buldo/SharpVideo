@@ -73,6 +73,7 @@ internal class Program
 
         await using var fileStream = File.OpenRead(filePath);
         var decodeStopWatch = Stopwatch.StartNew();
+        decoder.InitializeDecoder(null);
         await decoder.DecodeStreamAsync(fileStream);
 
         logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
