@@ -167,24 +167,33 @@ public class H264V4L2StatelessDecoder
         var streamState = new H264BitstreamParserState();
         var parsingOptions = new ParsingOptions();
         var naluCount = 0;
-        await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
+        try
         {
-            if (naluData.Data.Length < 1)
+            await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
             {
-                continue;
+                _logger.LogTrace("Processing NALU #{Index} (size: {Size} bytes)", naluCount + 1, naluData.Data.Length);
+                if (naluData.Data.Length < 1)
+                {
+                    continue;
+                }
+
+                var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
+
+                if (naluState == null)
+                {
+                    _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
+                    continue;
+                }
+
+                naluCount++;
+
+                ProcessNaluByType(naluData, naluState, streamState);
             }
-
-            var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
-
-            if (naluState == null)
-            {
-                _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
-                continue;
-            }
-
-            naluCount++;
-
-            ProcessNaluByType(naluData, naluState, streamState);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error while ProcessNalusAsync");
+            throw;
         }
 
         _logger.LogInformation("Finished processing NALUs ({Count} total)", naluCount);
@@ -244,14 +253,18 @@ public class H264V4L2StatelessDecoder
         bool isKeyFrame,
         H264BitstreamParserState streamState)
     {
-        _device.OutputMPlaneQueue.ReclaimProcessed();
+        // First, ensure there's a free buffer available before acquiring media request
+        _device.OutputMPlaneQueue.EnsureFreeBuffer();
 
+        // Now acquire media request if needed (buffer is guaranteed to be available)
         MediaRequest? request = null;
         if (_mediaDevice != null)
         {
             request = _device.OutputMPlaneQueue.AcquireMediaRequest();
             SubmitFrameControls(header, isKeyFrame, request, streamState);
         }
+
+        // Write buffer and enqueue
         _device.OutputMPlaneQueue.WriteBufferAndEnqueue(frameData, request);
         request?.Queue();
     }

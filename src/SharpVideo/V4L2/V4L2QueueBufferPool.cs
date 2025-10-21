@@ -88,6 +88,11 @@ public class V4L2QueueBufferPool
 
     // IMHO, AcquireBuffer and SetBufferState - maybe should be in V4L2DeviceQueue
 
+    internal bool HasFreeBuffer()
+    {
+        return !_freeBuffers.IsEmpty;
+    }
+
     internal V4L2MMapMPlaneBuffer AcquireBuffer()
     {
         // TODO: rewrite

@@ -6,7 +6,7 @@ namespace SharpVideo.V4L2;
 [SupportedOSPlatform("linux")]
 public class V4L2DeviceOutputQueue : V4L2DeviceQueue
 {
-    private MediaRequestsPool _requestsPool;
+    private MediaRequestsPool? _requestsPool;
     private MediaRequest?[] _associatedMediaRequests = new MediaRequest[256]; // Hope it will be enough
 
     internal V4L2DeviceOutputQueue(int deviceFd, V4L2BufferType type, Func<uint> planesCountAccessor) : base(deviceFd, type, planesCountAccessor)
@@ -20,6 +20,10 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
 
     public MediaRequest AcquireMediaRequest()
     {
+        if (_requestsPool == null)
+        {
+            throw new InvalidOperationException("Media requests pool not initialized. Call AssociateMediaRequests first.");
+        }
         return _requestsPool.Acquire();
     }
 
@@ -55,8 +59,39 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
             if (mediaRequest != null)
             {
                 _associatedMediaRequests[dequeuedBuffer.Index] = null;
-                _requestsPool.Release(mediaRequest);
+                _requestsPool?.Release(mediaRequest);
+            }
+        }
+    }
 
+    /// <summary>
+    /// Ensures that a free buffer is available in the pool by reclaiming processed buffers if needed.
+    /// This method will block if all buffers are currently in use by hardware, actively polling
+    /// until at least one buffer becomes available.
+    /// </summary>
+    public void EnsureFreeBuffer()
+    {
+        EnsureInitialised();
+
+        // Keep reclaiming processed buffers until we have at least one free
+        while (!BuffersPool.HasFreeBuffer())
+        {
+            var dequeuedBuffer = Dequeue();
+            if (dequeuedBuffer != null)
+            {
+                BuffersPool.Release(dequeuedBuffer.Index);
+
+                var mediaRequest = _associatedMediaRequests[dequeuedBuffer.Index];
+                if (mediaRequest != null)
+                {
+                    _associatedMediaRequests[dequeuedBuffer.Index] = null;
+                    _requestsPool?.Release(mediaRequest);
+                }
+            }
+            else
+            {
+                // No buffer ready yet, wait a bit
+                Thread.Sleep(1);
             }
         }
     }
