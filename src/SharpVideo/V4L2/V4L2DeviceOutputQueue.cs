@@ -15,14 +15,14 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
 
     public void AssociateMediaRequests(IEnumerable<MediaRequest> requests)
     {
-        _requestsPool = new MediaRequestsPool(requests.ToArray());
+      _requestsPool = new MediaRequestsPool(requests.ToArray());
     }
 
     public MediaRequest AcquireMediaRequest()
     {
         if (_requestsPool == null)
         {
-            throw new InvalidOperationException("Media requests pool not initialized. Call AssociateMediaRequests first.");
+     throw new InvalidOperationException("Media requests pool not initialized. Call AssociateMediaRequests first.");
         }
         return _requestsPool.Acquire();
     }
@@ -30,37 +30,37 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
     public override void InitMMap(uint buffersCount)
     {
         base.InitMMap(buffersCount);
-        _associatedMediaRequests = new MediaRequest[BuffersPool.Buffers.Count];
-    }
+ _associatedMediaRequests = new MediaRequest[BuffersPool.Buffers.Count];
+  }
 
     public void WriteBufferAndEnqueue(ReadOnlySpan<byte> data, MediaRequest? request = null)
     {
         EnsureInitialised();
-        var buffer = BuffersPool.AcquireBuffer();
+ var buffer = BuffersPool.AcquireBuffer();
         buffer.CopyDataToPlane(data, 0);
         _associatedMediaRequests[buffer.Index] = request;
-        Enqueue(buffer, request);
+   Enqueue(buffer, request);
     }
 
     public void ReclaimProcessed()
-    {
+{
         while (true)
-        {
+    {
             var dequeuedBuffer = Dequeue();
-            if (dequeuedBuffer == null)
-            {
-                // No more buffers available
-                break;
+ if (dequeuedBuffer == null)
+         {
+  // No more buffers available
+     break;
             }
 
-            BuffersPool.Release(dequeuedBuffer.Index);
+      BuffersPool.Release(dequeuedBuffer.Index);
 
             var mediaRequest = _associatedMediaRequests[dequeuedBuffer.Index];
-            if (mediaRequest != null)
-            {
-                _associatedMediaRequests[dequeuedBuffer.Index] = null;
-                _requestsPool?.Release(mediaRequest);
-            }
+        if (mediaRequest != null)
+      {
+       _associatedMediaRequests[dequeuedBuffer.Index] = null;
+      _requestsPool?.Release(mediaRequest);
+     }
         }
     }
 
@@ -71,58 +71,63 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
     /// </summary>
     public void EnsureFreeBuffer()
     {
-        EnsureInitialised();
+     EnsureInitialised();
 
-        // Keep reclaiming processed buffers until we have at least one free
-        while (!BuffersPool.HasFreeBuffer())
+     // Keep reclaiming processed buffers until we have at least one free
+        var spinWait = new SpinWait();
+   while (!BuffersPool.HasFreeBuffer())
         {
-            var dequeuedBuffer = Dequeue();
-            if (dequeuedBuffer != null)
-            {
-                BuffersPool.Release(dequeuedBuffer.Index);
+  var dequeuedBuffer = Dequeue();
+      if (dequeuedBuffer != null)
+    {
+     BuffersPool.Release(dequeuedBuffer.Index);
 
-                var mediaRequest = _associatedMediaRequests[dequeuedBuffer.Index];
-                if (mediaRequest != null)
-                {
-                    _associatedMediaRequests[dequeuedBuffer.Index] = null;
-                    _requestsPool?.Release(mediaRequest);
-                }
-            }
-            else
+           var mediaRequest = _associatedMediaRequests[dequeuedBuffer.Index];
+    if (mediaRequest != null)
+        {
+      _associatedMediaRequests[dequeuedBuffer.Index] = null;
+          _requestsPool?.Release(mediaRequest);
+    }
+       }
+     else
             {
-                // No buffer ready yet, wait a bit
-                Thread.Sleep(1);
-            }
+    // No buffer ready yet, use SpinWait for efficient waiting
+       spinWait.SpinOnce();
+          }
         }
     }
 
     private class MediaRequestsPool
     {
-        private readonly Dictionary<MediaRequest, bool> _requests;
+     private readonly MediaRequest[] _requests;
+   private readonly Queue<MediaRequest> _freeRequests;
 
-        public MediaRequestsPool(MediaRequest[] requests)
+ public MediaRequestsPool(MediaRequest[] requests)
         {
-            _requests = requests.ToDictionary(request => request, _ => false);
+_requests = requests;
+       _freeRequests = new Queue<MediaRequest>(requests);
         }
 
-        public MediaRequest Acquire()
+   public MediaRequest Acquire()
         {
-            foreach (var pair in _requests)
+      lock (_freeRequests)
             {
-                if (!pair.Value)
-                {
-                    _requests[pair.Key] = true;
-                    return pair.Key;
-                }
-            }
+    if (_freeRequests.Count > 0)
+        {
+      return _freeRequests.Dequeue();
+          }
+ }
 
-            throw new Exception("No free media requests");
+       throw new Exception("No free media requests");
         }
 
         public void Release(MediaRequest request)
         {
             request.ReInit();
-            _requests[request] = false;
+    lock (_freeRequests)
+      {
+      _freeRequests.Enqueue(request);
+         }
         }
     }
 }

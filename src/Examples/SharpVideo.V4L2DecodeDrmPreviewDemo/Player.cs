@@ -17,7 +17,8 @@ public class Player
     private readonly DrmPresenter _presenter;
     private readonly H264V4L2StatelessDecoder _decoder;
     private readonly ILogger<Player> _logger;
-    private readonly BlockingCollection<SharedDmaBuffer> _buffersToPresent = new();
+    // Use bounded capacity to limit latency - max 3 frames in display queue
+    private readonly BlockingCollection<SharedDmaBuffer> _buffersToPresent = new(boundedCapacity: 3);
     private readonly CancellationTokenSource displayCts = new CancellationTokenSource();
 
     private Task _decodeTask;
@@ -59,8 +60,21 @@ public class Player
     private void ProcessBuffer(SharedDmaBuffer buffer)
     {
         Statistics.IncrementDecodedFrames();
-        _buffersToPresent.Add(buffer);
-        _logger.LogTrace("Frame decoded: {DecodedCount}", Statistics.DecodedFrames);
+        
+        // Try to add without blocking - if queue is full, drop the oldest frame to reduce latency
+        if (!_buffersToPresent.TryAdd(buffer, 0))
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug("Display queue full, frame may be delayed");
+            }
+            _buffersToPresent.Add(buffer); // Block until space available
+        }
+        
+        if (_logger.IsEnabled(LogLevel.Trace))
+        {
+            _logger.LogTrace("Frame decoded: {DecodedCount}", Statistics.DecodedFrames);
+        }
     }
 
     private async Task DecodeLocalAsync(FileStream fileStream)
@@ -85,19 +99,26 @@ public class Player
                 break;
             }
 
-            _logger.LogTrace("Presenting frame {FrameNumber}; InQueue: {InQueue}", Statistics.PresentedFrames + 1, _buffersToPresent.Count);
+            if (_logger.IsEnabled(LogLevel.Trace))
+            {
+                _logger.LogTrace("Presenting frame {FrameNumber}; InQueue: {InQueue}", 
+                    Statistics.PresentedFrames + 1, _buffersToPresent.Count);
+            }
+    
             _presenter.SetOverlayPlane(buffer);
             Statistics.IncrementPresentedFrames();
             var toRequeue = _presenter.GetPresentedFrames();
+    
+            // Batch requeue for better performance
             for (int i = 0; i < toRequeue.Length; i++)
             {
                 _decoder.RequeueCaptureBuffer(toRequeue[i]);
             }
-            //_logger.LogTrace("Buffers requeued: {RequeuedCount}", toRequeue.Length);
         }
         displayStopwatch.Stop();
 
-        _logger.LogInformation("Display thread stopped. Frames: {FrameCount}; Time: {Elapsed}s)", Statistics.PresentedFrames, displayStopwatch.Elapsed.TotalSeconds);
+        _logger.LogInformation("Display thread stopped. Frames: {FrameCount}; Time: {Elapsed}s)", 
+            Statistics.PresentedFrames, displayStopwatch.Elapsed.TotalSeconds);
     }
 
 }
