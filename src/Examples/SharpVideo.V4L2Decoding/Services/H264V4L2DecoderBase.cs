@@ -61,6 +61,11 @@ public abstract class H264V4L2DecoderBase : IAsyncDisposable
     protected abstract void ConfigureDecoderControls();
 
     /// <summary>
+    /// Decodes H.264 stream - to be implemented by derived classes
+    /// </summary>
+    public abstract Task DecodeStreamAsync(Stream stream, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Setup decoder-specific buffer configuration - can be overridden by derived classes
     /// </summary>
     protected virtual void SetupDecoderBuffers()

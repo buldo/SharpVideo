@@ -15,7 +15,7 @@ namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 public class Player
 {
     private readonly DrmPresenter _presenter;
-    private readonly H264V4L2StatelessDecoder _decoder;
+    private readonly H264V4L2DecoderBase _decoder;
     private readonly ILogger<Player> _logger;
     // Use bounded capacity to limit latency - max 3 frames in display queue
     private readonly BlockingCollection<SharedDmaBuffer> _buffersToPresent = new(boundedCapacity: 3);
@@ -28,7 +28,7 @@ public class Player
 
     public Player(
         DrmPresenter presenter,
-        H264V4L2StatelessDecoder decoder,
+        H264V4L2DecoderBase decoder,
         ILogger<Player> logger)
     {
         _presenter = presenter;

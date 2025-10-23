@@ -31,7 +31,7 @@ public class H264V4L2StatefulDecoder : H264V4L2DecoderBase
     /// <summary>
     /// Decodes H.264 stream using V4L2 stateful hardware decoder
     /// </summary>
-    public async Task DecodeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
+    public override async Task DecodeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
     {
         if (stream == null)
         {

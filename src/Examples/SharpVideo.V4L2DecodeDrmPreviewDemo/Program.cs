@@ -11,7 +11,8 @@ using SharpVideo.V4L2Decoding.Services;
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
 /// <summary>
-/// Demonstrates H.264 video decoding using V4L2 stateless decoder with zero-copy DRM display.
+/// Demonstrates H.264 video decoding using V4L2 decoder with zero-copy DRM display.
+/// Automatically selects stateless or stateful decoder based on hardware capabilities.
 /// Uses DMABUF sharing between V4L2 decoder and DRM display for efficient video presentation.
 /// </summary>
 [SupportedOSPlatform("linux")]
@@ -61,18 +62,32 @@ internal class Program
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
         using var _ = v4L2Device; // Ensure disposal
 
+        // Detect decoder type
+        var decoderType = H264V4L2DecoderFactory.DetectDecoderType(deviceInfo);
+        Logger.LogInformation("Detected decoder type: {DecoderType}", decoderType);
+
         var config = new DecoderConfiguration
         {
             // Use more buffers if streaming is supported for smoother playback
             OutputBufferCount = 3u,
             CaptureBufferCount = 6u,
-            RequestPoolSize = 6,
+            RequestPoolSize = 6, // Only used for stateless
             UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode for lowest latency
         };
 
-        var decoderLogger = LoggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
-        using var mediaDevice = GetMediaDevice();
-        await using var decoder = new H264V4L2StatelessDecoder(
+        var decoderLogger = LoggerFactory.CreateLogger("H264Decoder");
+  
+        // Open media device only if using stateless decoder
+        MediaDevice? mediaDevice = null;
+        if (decoderType == DecoderType.Stateless)
+        {
+            mediaDevice = GetMediaDevice();
+        }
+        using var _mediaDevice = mediaDevice; // Ensure disposal
+
+        // Create appropriate decoder using factory
+        await using var decoder = H264V4L2DecoderFactory.CreateDecoder(
+            decoderType,
             v4L2Device,
             mediaDevice,
             decoderLogger,
@@ -97,7 +112,6 @@ internal class Program
         Logger.LogWarning("Processing completed successfully!");
 
         presenter.CleanupDisplay();
-
     }
 
     private static (V4L2Device device, V4L2DeviceInfo deviceInfo) GetVideoDevice(ILogger logger)
