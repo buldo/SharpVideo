@@ -233,4 +233,43 @@ public class V4L2Device : IDisposable
 
         return format.Pix_mp.NumPlanes;
     }
+
+    /// <summary>
+    /// Send stop command to the decoder to drain the pipeline
+    /// </summary>
+    public void DecoderCommandStop(bool immediately = false)
+    {
+        ThrowIfDisposed();
+        var result = LibV4L2.StopDecoder(_deviceFd, immediately);
+        if (!result.Success)
+        {
+            throw new Exception($"Failed to send decoder stop command: {result.ErrorMessage}");
+        }
+    }
+
+    /// <summary>
+    /// Send start command to the decoder
+    /// </summary>
+    public void DecoderCommandStart()
+    {
+        ThrowIfDisposed();
+        var result = LibV4L2.StartDecoder(_deviceFd);
+        if (!result.Success)
+        {
+            throw new Exception($"Failed to send decoder start command: {result.ErrorMessage}");
+        }
+    }
+
+    /// <summary>
+    /// Send flush command to the decoder
+    /// </summary>
+    public void DecoderCommandFlush()
+    {
+        ThrowIfDisposed();
+        var result = LibV4L2.FlushDecoder(_deviceFd);
+        if (!result.Success)
+        {
+            throw new Exception($"Failed to send decoder flush command: {result.ErrorMessage}");
+        }
+    }
 }

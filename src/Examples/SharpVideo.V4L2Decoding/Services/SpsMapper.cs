@@ -2,7 +2,7 @@
 using SharpVideo.H264;
 using SharpVideo.Linux.Native;
 
-namespace SharpVideo.V4L2StatelessDecoder.Services;
+namespace SharpVideo.V4L2Decoding.Services;
 
 [SupportedOSPlatform("linux")]
 public static class SpsMapper

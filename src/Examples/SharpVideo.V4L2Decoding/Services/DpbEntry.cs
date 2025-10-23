@@ -1,4 +1,4 @@
-﻿namespace SharpVideo.V4L2StatelessDecoder.Services;
+﻿namespace SharpVideo.V4L2Decoding.Services;
 
 internal class DpbEntry
 {

@@ -5,8 +5,8 @@ using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2StatelessDecoder.Models;
-using SharpVideo.V4L2StatelessDecoder.Services;
+using SharpVideo.V4L2Decoding.Models;
+using SharpVideo.V4L2Decoding.Services;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
