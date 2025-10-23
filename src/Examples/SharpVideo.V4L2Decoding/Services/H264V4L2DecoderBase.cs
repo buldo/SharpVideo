@@ -24,6 +24,7 @@ public abstract class H264V4L2DecoderBase : IAsyncDisposable
 
     protected bool Disposed;
     protected int FramesDecoded;
+    private Exception? _streamError; // Track stream errors
 
     // Thread for processing capture buffers
     protected Thread? CaptureThread;
@@ -49,6 +50,16 @@ public abstract class H264V4L2DecoderBase : IAsyncDisposable
     }
 
     public H264V4L2DecoderStatistics Statistics { get; } = new();
+
+    /// <summary>
+    /// Gets the stream error if one occurred during decoding
+    /// </summary>
+    public Exception? StreamError => _streamError;
+
+    /// <summary>
+    /// Gets whether the decoder encountered a stream error
+    /// </summary>
+    public bool HasStreamError => _streamError != null;
 
     /// <summary>
     /// Configure output and capture formats - to be implemented by derived classes
@@ -219,32 +230,109 @@ public abstract class H264V4L2DecoderBase : IAsyncDisposable
         var cancellationToken = CaptureThreadCts!.Token;
         Logger.LogInformation("Capture buffer processing thread started");
 
-        while (!cancellationToken.IsCancellationRequested)
+        int consecutiveErrors = 0;
+        const int maxConsecutiveErrors = 5;
+
+        try
         {
-            var dequeuedBuffer = Device.CaptureMPlaneQueue.WaitForReadyBuffer(1000);
-            if (dequeuedBuffer == null)
+            while (!cancellationToken.IsCancellationRequested)
             {
-                continue;
-            }
+                DequeuedBuffer? dequeuedBuffer = null;
 
-            FramesDecoded++;
+                try
+                {
+                    dequeuedBuffer = Device.CaptureMPlaneQueue.WaitForReadyBuffer(1000);
+                }
+                catch (Exception ex)
+                {
+                    // Log the error but check if it's a stream error
+                    if (ex.Message.Contains("EPIPE") || ex.Message.Contains("Broken pipe"))
+                    {
+                        var streamEx = new DecoderStreamException(
+      "Decoder stream error (EPIPE): decoder encountered an error. " +
+         "This usually means corrupted data or unsupported stream feature.", ex)
+                        {
+                            ErrorCode = 32, // EPIPE
+    FramesDecoded = FramesDecoded
+    };
+                        _streamError = streamEx;
+                        Logger.LogError(streamEx, "Stream error detected");
+                        Logger.LogInformation("Stopping capture buffer processing due to stream error");
+                        break; // Exit gracefully
+                    }
 
-            if (Configuration.UseDrmPrimeBuffers)
-            {
-                // For DMABUF mode, pass buffer index to caller
-                ProcessDecodedBufferIndex!(DrmBuffers![(int)dequeuedBuffer.Index]);
-                // Don't requeue - let the display system handle it
-            }
-            else
-            {
-                // For MMAP mode, copy data and requeue immediately
-                var buffer = Device.CaptureMPlaneQueue.BuffersPool.Buffers[(int)dequeuedBuffer.Index];
-                ProcessDecodedAction!(buffer.MappedPlanes[0].AsSpan());
-                Device.CaptureMPlaneQueue.ReuseBuffer(dequeuedBuffer.Index);
+                    consecutiveErrors++;
+                    Logger.LogError(ex, "Error waiting for capture buffer (attempt {Count}/{Max})",
+                        consecutiveErrors, maxConsecutiveErrors);
+
+                    if (consecutiveErrors >= maxConsecutiveErrors)
+                    {
+                        Logger.LogError("Too many consecutive errors, stopping capture thread");
+                        _streamError = new DecoderStreamException(
+             $"Decoder failed after {maxConsecutiveErrors} consecutive errors", ex)
+{
+         FramesDecoded = FramesDecoded
+         };
+                        break;
+                    }
+
+                    Thread.Sleep(100); // Brief pause before retry
+                    continue;
+                }
+
+                if (dequeuedBuffer == null)
+                {
+                    // Timeout or stream error - check if we should continue
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= maxConsecutiveErrors)
+                    {
+                        Logger.LogWarning("No buffers received after {Count} attempts, checking stream status", consecutiveErrors);
+                        // Could be end of stream or error
+                        break;
+                    }
+                    continue;
+                }
+
+                // Reset error counter on success
+                consecutiveErrors = 0;
+
+                try
+                {
+                    FramesDecoded++;
+
+                    if (Configuration.UseDrmPrimeBuffers)
+                    {
+                        // For DMABUF mode, pass buffer index to caller
+                        ProcessDecodedBufferIndex!(DrmBuffers![(int)dequeuedBuffer.Index]);
+                        // Don't requeue - let the display system handle it
+                    }
+                    else
+                    {
+                        // For MMAP mode, copy data and requeue immediately
+                        var buffer = Device.CaptureMPlaneQueue.BuffersPool.Buffers[(int)dequeuedBuffer.Index];
+                        ProcessDecodedAction!(buffer.MappedPlanes[0].AsSpan());
+                        Device.CaptureMPlaneQueue.ReuseBuffer(dequeuedBuffer.Index);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Error processing decoded frame {FrameNum}", FramesDecoded);
+                    // Continue processing despite frame processing error
+                }
             }
         }
-
-        Logger.LogInformation("Capture buffer processing thread stopped");
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Fatal error in capture buffer processing thread");
+            _streamError = new DecoderStreamException("Fatal error in capture processing", ex)
+   {
+       FramesDecoded = FramesDecoded
+};
+        }
+        finally
+        {
+            Logger.LogInformation("Capture buffer processing thread stopped. Total frames decoded: {FrameCount}", FramesDecoded);
+        }
     }
 
     /// <summary>

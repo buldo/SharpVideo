@@ -113,9 +113,9 @@ public class V4L2DeviceQueue
     }
 
     /// <summary>
-    /// Dequeues a buffer from the queue. Returns null if no buffer is available (EAGAIN).
+    /// Dequeues a buffer from the queue. Returns null if no buffer is available (EAGAIN) or on stream error (EPIPE).
     /// </summary>
-    /// <returns>Dequeued buffer with metadata, or null if no buffer available</returns>
+    /// <returns>Dequeued buffer with metadata, null if no buffer available, or throws exception on fatal errors</returns>
     internal DequeuedBuffer? Dequeue()
     {
         EnsureInitialised();
@@ -137,8 +137,18 @@ public class V4L2DeviceQueue
             var result = LibV4L2.DequeueBuffer(_deviceFd, ref buffer);
             if (!result.Success)
             {
-                if (result.ErrorCode == 11 || result.ErrorCode == 35) // EAGAIN or EWOULDBLOCK
+                // EAGAIN (11) or EWOULDBLOCK (35) - no buffer ready yet
+                if (result.ErrorCode == 11 || result.ErrorCode == 35)
                 {
+                    return null;
+                }
+
+                // EPIPE (32) - stream error (e.g., decoder encountered an error)
+                // This can happen with corrupted data or unsupported stream features
+                if (result.ErrorCode == 32)
+                {
+                    // Return null to signal end of stream/error condition
+                    // Caller should handle this gracefully
                     return null;
                 }
 
@@ -212,7 +222,7 @@ public class V4L2DeviceQueue
 
     /// <summary>
     /// Initializes queue with DMABUF memory using external DMA buffer file descriptors.
-    /// </summary>
+    /// /// </summary>
     /// <param name="dmaBufferFds">Array of DMA buffer file descriptors (one per buffer)</param>
     /// <param name="planeSizes">Array of plane sizes (one per plane)</param>
     /// <param name="planeOffsets">Array of plane offsets within each buffer (one per plane)</param>
