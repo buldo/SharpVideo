@@ -10,7 +10,7 @@
   <Project Path="Examples/SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
   <Project Path="Examples/SharpVideo.DrmDemo/SharpVideo.DrmDemo.csproj" />
   <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
-  <Project Path="Examples/SharpVideo.V4L2StatelessDecoder/SharpVideo.V4L2StatelessDecoder.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
+  <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
   <Project Path="SharpVideo.Linux.Native.Tests/SharpVideo.Linux.Native.Tests.csproj" />
   <Project Path="SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
   <Project Path="Examples/SharpVideo.ParseH264Demo/SharpVideo.ParseH264Demo.csproj" />
