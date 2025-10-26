@@ -14,7 +14,7 @@ public static class DrmUtils
     /// Opens the first available DRM device from /dev/dri/card*.
     /// </summary>
     /// <returns>Opened DRM device or null if no devices available.</returns>
-    public static DrmDevice? OpenDrmDevice(ILogger logger)
+    public static DrmDevice OpenDrmDevice(ILogger logger)
     {
         var devices = Directory.EnumerateFiles("/dev/dri", "card*", SearchOption.TopDirectoryOnly);
         foreach (var device in devices)
@@ -34,7 +34,8 @@ public static class DrmUtils
                 logger.LogWarning(ex, "Exception while opening DRM device: {Device}", device);
             }
         }
-        return null;
+
+        throw new Exception("Failed to open any DRM device");
     }
 
     public static List<DrmClientCapability> EnableDrmCapabilities(this DrmDevice drmDevice, ILogger logger)

@@ -1,5 +1,8 @@
 ﻿using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
+using SharpVideo.DmaBuffers;
+using SharpVideo.Drm;
+using SharpVideo.Utils;
 
 namespace SharpVideo.MultiPlaneExample
 {
@@ -22,7 +25,17 @@ namespace SharpVideo.MultiPlaneExample
 
         static void Main(string[] args)
         {
-            Console.WriteLine("Hello, World!");
+            var drmDevice = DrmUtils.OpenDrmDevice(Logger);
+            drmDevice.EnableDrmCapabilities(Logger);
+
+            var allocator = DmaBuffersAllocator.Create();
+            var buffersManager = new DrmBufferManager(
+                drmDevice,
+                allocator,
+                [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
+                LoggerFactory.CreateLogger<DrmBufferManager>());
+            var presenter = DrmPresenter.Create(drmDevice, Width, Height, buffersManager, Logger);
+            
         }
     }
 }

@@ -1,4 +1,5 @@
-﻿using System.Runtime.Versioning;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
 
@@ -17,10 +18,11 @@ public class DmaBuffersAllocator
         _fd = heapFd;
     }
 
-    public static bool TryCreate(out DmaBuffersAllocator? buffer)
+    public static bool TryCreate([NotNullWhen(true)] out DmaBuffersAllocator? allocator)
     {
-        string[] paths = {
-            "/dev/dma_heap/reserved",     // Reserved memory heap (often used for video HW)
+        string[] paths =
+        {
+            "/dev/dma_heap/reserved", // Reserved memory heap (often used for video HW)
             "/dev/dma_heap/vidbuf_cached",
             "/dev/dma_heap/linux,cma",
             "/dev/dma_heap/system" // System heap as fallback
@@ -33,15 +35,25 @@ public class DmaBuffersAllocator
             if (heapFd >= 0)
             {
                 Console.WriteLine($"Successfully opened DMA heap: {path}");
-                buffer = new DmaBuffersAllocator(heapFd);
+                allocator = new DmaBuffersAllocator(heapFd);
                 return true;
             }
 
             //Console.WriteLine($"Failed to open DMA heap: {path}, errno: {Marshal.GetLastWin32Error()}");
         }
 
-        buffer = null;
+        allocator = null;
         return false;
+    }
+
+    public static DmaBuffersAllocator Create()
+    {
+        if (TryCreate(out var allocator))
+        {
+            return allocator;
+        }
+
+        throw new Exception("Failed to create DmaBuffersAllocator");
     }
 
     public DmaBuffer? Allocate(ulong size)

@@ -265,7 +265,7 @@ public class DrmPresenter
         return new(drmDevice, bufferManager, context, capabilities, primaryPlaneFormat, width, height, atomicDisplayManager, logger);
     }
 
-    public bool SetOverlayPlane(
+    public bool SetOverlayPlaneBuffer(
         SharedDmaBuffer drmBuffer)
     {
         if (drmBuffer.FramebufferId == 0)
@@ -302,7 +302,7 @@ public class DrmPresenter
             _logger);
     }
 
-    public SharedDmaBuffer[] GetPresentedFrames()
+    public SharedDmaBuffer[] GetPresentedOverlayBuffers()
     {
         // Use atomic display manager if available
         if (_atomicDisplayManager != null)
