@@ -1,4 +1,4 @@
-namespace SharpVideo.V4L2StatelessDecoder.Models;
+namespace SharpVideo.V4L2Decoding.Models;
 
 /// <summary>
 /// Configuration settings for the H.264 decoder

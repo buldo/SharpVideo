@@ -1,13 +1,11 @@
-using System;
-using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
+using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
-using SharpVideo.Utils;
 
-namespace SharpVideo.Drm;
+namespace SharpVideo.Utils;
 
 /// <summary>
 /// Manages DMA buffers allocated for zero-copy sharing between V4L2 decoder and DRM display.

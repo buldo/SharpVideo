@@ -5,8 +5,8 @@ using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2StatelessDecoder.Models;
-using SharpVideo.V4L2StatelessDecoder.Services;
+using SharpVideo.V4L2Decoding.Models;
+using SharpVideo.V4L2Decoding.Services;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
@@ -43,7 +43,7 @@ internal class Program
             throw new Exception("No DRM devices could be opened");
         }
 
-        EnableDrmCapabilities(drmDevice, Logger);
+        drmDevice.EnableDrmCapabilities(Logger);
 
         if (!DmaBuffersAllocator.TryCreate(out var allocator) || allocator == null)
         {
@@ -160,29 +160,4 @@ internal class Program
         return File.OpenRead(filePath);
     }
 
-    private static List<DrmClientCapability> EnableDrmCapabilities(DrmDevice drmDevice, ILogger logger)
-    {
-        var capsToEnable = new[]
-        {
-            DrmClientCapability.DRM_CLIENT_CAP_UNIVERSAL_PLANES,
-            DrmClientCapability.DRM_CLIENT_CAP_ATOMIC
-        };
-
-        logger.LogInformation("Enabling DRM client capabilities");
-        List<DrmClientCapability> enabledCaps = new();
-        foreach (var cap in capsToEnable)
-        {
-            if (drmDevice.TrySetClientCapability(cap, true, out var code))
-            {
-                logger.LogInformation("Enabled {Capability}", cap);
-                enabledCaps.Add(cap);
-            }
-            else
-            {
-                logger.LogWarning("Failed to enable {Capability}: error {Code}", cap, code);
-            }
-        }
-
-        return enabledCaps;
-    }
 }

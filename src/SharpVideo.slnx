@@ -4,20 +4,23 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
+  <Folder Name="/Examples/">
+    <Project Path="Examples/SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
+    <Project Path="Examples/SharpVideo.DrmDemo/SharpVideo.DrmDemo.csproj" />
+    <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
+    <Project Path="Examples/SharpVideo.MultiPlaneExample/SharpVideo.MultiPlaneExample.csproj" Id="53b0ddba-a5a4-48ce-be74-c840e3722322" />
+    <Project Path="Examples/SharpVideo.ParseH264Demo/SharpVideo.ParseH264Demo.csproj" />
+    <Project Path="Examples/SharpVideo.V4L2DecodeDemo/SharpVideo.V4L2DecodeDemo.csproj" />
+    <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
+    <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
+    <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
+    <Project Path="SharpVideo.Utils/SharpVideo.Utils.csproj" Id="6e04e87c-aa49-4d50-bb15-dd6a884fe1fc" />
+  </Folder>
   <Folder Name="/Solution Items/">
     <File Path="../README.md" />
   </Folder>
-  <Project Path="Examples/SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
-  <Project Path="Examples/SharpVideo.DrmDemo/SharpVideo.DrmDemo.csproj" />
-  <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
-  <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
   <Project Path="SharpVideo.Linux.Native.Tests/SharpVideo.Linux.Native.Tests.csproj" />
   <Project Path="SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
-  <Project Path="Examples/SharpVideo.ParseH264Demo/SharpVideo.ParseH264Demo.csproj" />
   <Project Path="SharpVideo.Tests/SharpVideo.Tests.csproj" />
-  <Project Path="Examples/SharpVideo.V4L2DecodeDemo/SharpVideo.V4L2DecodeDemo.csproj" />
-  <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
-  <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
-  <Project Path="SharpVideo.Utils/SharpVideo.Utils.csproj" Id="6e04e87c-aa49-4d50-bb15-dd6a884fe1fc" />
   <Project Path="SharpVideo/SharpVideo.csproj" />
 </Solution>

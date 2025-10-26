@@ -6,9 +6,9 @@ using SharpVideo.H264;
 using SharpVideo.Linux.Native;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2StatelessDecoder.Models;
+using SharpVideo.V4L2Decoding.Models;
 
-namespace SharpVideo.V4L2StatelessDecoder.Services;
+namespace SharpVideo.V4L2Decoding.Services;
 
 [SupportedOSPlatform("linux")]
 public class H264V4L2StatelessDecoder

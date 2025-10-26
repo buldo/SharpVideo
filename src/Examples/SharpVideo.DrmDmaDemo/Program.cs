@@ -2,6 +2,8 @@
 using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
 using System.Runtime.Versioning;
+using Microsoft.Extensions.Logging;
+using SharpVideo.Utils;
 
 namespace SharpVideo.DrmDmaDemo
 {
@@ -11,16 +13,27 @@ namespace SharpVideo.DrmDmaDemo
         private const int Width = 1920;
         private const int Height = 1080;
 
+        private static readonly ILoggerFactory LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory
+            .Create(builder => builder.AddConsole()
+#if DEBUG
+                    .SetMinimumLevel(LogLevel.Trace)
+#else
+        .SetMinimumLevel(LogLevel.Warning)
+#endif
+            );
+
+        private static readonly ILogger Logger = LoggerFactory.CreateLogger<Program>();
+
         static void Main(string[] args)
         {
-            var drmDevice = OpenDrmDevice();
+            var drmDevice = DrmUtils.OpenDrmDevice(Logger);
             if (drmDevice == null)
             {
                 Console.WriteLine("No DRM devices could be opened.");
                 return;
             }
 
-            EnableDrmCapabilities(drmDevice);
+            drmDevice.EnableDrmCapabilities(Logger);
             DumpDeviceCaps(drmDevice);
 
             if (!DmaBuffersAllocator.TryCreate(out var allocator) || allocator == null)
@@ -53,44 +66,6 @@ namespace SharpVideo.DrmDmaDemo
                 nv12Buffer.UnmapBuffer();
                 Console.WriteLine("Unmapped DMA buffer.");
                 nv12Buffer.Dispose();
-            }
-        }
-
-        private static DrmDevice? OpenDrmDevice()
-        {
-            var devices = Directory.EnumerateFiles("/dev/dri", "card*", SearchOption.TopDirectoryOnly);
-            foreach (var device in devices)
-            {
-                var drmDevice = DrmDevice.Open(device);
-                if (drmDevice != null)
-                {
-                    Console.WriteLine($"Opened DRM device: {device}");
-                    return drmDevice;
-                }
-                Console.WriteLine($"Failed to open DRM device: {device}");
-            }
-            return null;
-        }
-
-        private static void EnableDrmCapabilities(DrmDevice drmDevice)
-        {
-            var capsToEnable = new[]
-            {
-                DrmClientCapability.DRM_CLIENT_CAP_UNIVERSAL_PLANES,
-                DrmClientCapability.DRM_CLIENT_CAP_ATOMIC
-            };
-
-            Console.WriteLine("Enabling DRM client capabilities:");
-            foreach (var cap in capsToEnable)
-            {
-                if (!drmDevice.TrySetClientCapability(cap, true, out var code))
-                {
-                    Console.WriteLine($"  {cap}: Failed (error {code})");
-                }
-                else
-                {
-                    Console.WriteLine($"  {cap}: Enabled");
-                }
             }
         }
 

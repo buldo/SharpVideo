@@ -2,8 +2,8 @@ using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2StatelessDecoder.Models;
-using SharpVideo.V4L2StatelessDecoder.Services;
+using SharpVideo.V4L2Decoding.Models;
+using SharpVideo.V4L2Decoding.Services;
 using SixLabors.ImageSharp;
 
 namespace SharpVideo.V4L2DecodeDemo;

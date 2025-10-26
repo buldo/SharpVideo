@@ -1,8 +1,13 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using System.Runtime.Versioning;
+
+using Microsoft.Extensions.Logging;
+
 using SharpVideo.Drm;
+using SharpVideo.Linux.Native;
 
 namespace SharpVideo.Utils;
 
+[SupportedOSPlatform("linux")]
 public static class DrmUtils
 {
     /// <summary>
@@ -31,4 +36,32 @@ public static class DrmUtils
         }
         return null;
     }
+
+    public static List<DrmClientCapability> EnableDrmCapabilities(this DrmDevice drmDevice, ILogger logger)
+    {
+        var capsToEnable = new[]
+        {
+            DrmClientCapability.DRM_CLIENT_CAP_UNIVERSAL_PLANES,
+            DrmClientCapability.DRM_CLIENT_CAP_ATOMIC
+        };
+
+        logger.LogInformation("Enabling DRM client capabilities");
+        List<DrmClientCapability> enabledCaps = new();
+        foreach (var cap in capsToEnable)
+        {
+            if (drmDevice.TrySetClientCapability(cap, true, out var code))
+            {
+                logger.LogInformation("Enabled {Capability}", cap);
+                enabledCaps.Add(cap);
+            }
+            else
+            {
+                logger.LogWarning("Failed to enable {Capability}: error {Code}", cap, code);
+            }
+        }
+
+        return enabledCaps;
+    }
+
+
 }

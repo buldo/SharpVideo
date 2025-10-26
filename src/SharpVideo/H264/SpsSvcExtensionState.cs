@@ -1,4 +1,6 @@
-﻿/// <summary>
+﻿namespace SharpVideo.H264;
+
+/// <summary>
 /// // The parsed state of the SPS SVC extension. Only some select values are
 /// stored.
 /// Add more as they are actually needed.

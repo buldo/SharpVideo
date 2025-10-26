@@ -1,6 +1,4 @@
-using System;
-
-namespace SharpVideo.DrmDmaDemo;
+namespace SharpVideo.Utils;
 
 public static class TestPattern
 {
