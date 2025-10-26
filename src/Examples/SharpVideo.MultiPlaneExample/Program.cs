@@ -11,6 +11,7 @@ namespace SharpVideo.MultiPlaneExample
     {
         private const int Width = 1920;
         private const int Height = 1080;
+        private const int FrameCount = 300; // 10 seconds at 30fps
 
         private static readonly ILoggerFactory LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory
             .Create(builder => builder.AddConsole()
@@ -25,6 +26,10 @@ namespace SharpVideo.MultiPlaneExample
 
         static void Main(string[] args)
         {
+            Logger.LogInformation("=== Multi-Plane Compositing Demo ===");
+            Logger.LogInformation("This demo shows overlay of Primary (ARGB8888) and Overlay (NV12) planes");
+            Logger.LogInformation("Primary plane will be displayed ON TOP of overlay plane using zpos");
+
             var drmDevice = DrmUtils.OpenDrmDevice(Logger);
             drmDevice.EnableDrmCapabilities(Logger);
 
@@ -34,8 +39,102 @@ namespace SharpVideo.MultiPlaneExample
                 allocator,
                 [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
                 LoggerFactory.CreateLogger<DrmBufferManager>());
+
             var presenter = DrmPresenter.Create(drmDevice, Width, Height, buffersManager, Logger);
-            
+
+            try
+            {
+                RunDemo(presenter, buffersManager);
+            }
+            finally
+            {
+                presenter.CleanupDisplay();
+                drmDevice.Dispose();
+            }
+
+            Logger.LogInformation("Demo completed successfully");
+        }
+
+        private static void RunDemo(DrmPresenter presenter, DrmBufferManager bufferManager)
+        {
+            // Initialize primary plane double buffering
+            if (!presenter.InitializePrimaryPlaneDoubleBuffering())
+            {
+                Logger.LogError("Failed to initialize primary plane double buffering");
+                return;
+            }
+
+            // Set z-position to make primary plane appear on top
+            // Overlay planes typically have zpos=0 by default, so we set primary to a higher value
+            // Note: Some hardware may have different default zpos values
+            presenter.SetPlaneZPosition(presenter.GetPrimaryPlaneId(), 10); // Primary on top
+            presenter.SetPlaneZPosition(presenter.GetOverlayPlaneId(), 5); // Overlay below
+
+            // Allocate buffers for overlay plane (NV12)
+            var overlayBufferCount = 3;
+            var overlayBuffers = new List<SharedDmaBuffer>();
+            for (int i = 0; i < overlayBufferCount; i++)
+            {
+                var buffer = bufferManager.AllocateBuffer(Width, Height, KnownPixelFormats.DRM_FORMAT_NV12);
+                buffer.MapBuffer();
+                if (buffer.MapStatus == MapStatus.FailedToMap)
+                {
+                    Logger.LogError("Failed to map overlay buffer {Index}", i);
+                    return;
+                }
+
+                // Fill with NV12 color bars test pattern
+                TestPattern.FillNV12(buffer.DmaBuffer.GetMappedSpan(), Width, Height);
+                buffer.DmaBuffer.SyncMap();
+
+                overlayBuffers.Add(buffer);
+            }
+
+            // Fill primary plane with ARGB8888 test pattern (semi-transparent)
+            var primaryBuffer = presenter.GetPrimaryPlaneBackBuffer();
+            TestPattern.FillARGB8888(primaryBuffer, Width, Height);
+
+            // Present the primary plane
+            if (!presenter.SwapPrimaryPlaneBuffers())
+            {
+                Logger.LogError("Failed to present primary plane");
+                return;
+            }
+
+            Logger.LogInformation("Starting frame presentation ({FrameCount} frames)...", FrameCount);
+
+            var currentOverlayIndex = 0;
+
+            for (int frame = 0; frame < FrameCount; frame++)
+            {
+                // Update overlay plane - cycle through buffers to demonstrate buffer management
+                var currentBuffer = overlayBuffers[currentOverlayIndex];
+                presenter.SetOverlayPlaneBuffer(currentBuffer);
+
+                // Get completed buffers
+                var completed = presenter.GetPresentedOverlayBuffers();
+
+                // Simulate frame timing (30 fps = ~33ms per frame)
+                Thread.Sleep(33);
+
+                // Cycle to next buffer
+                currentOverlayIndex = (currentOverlayIndex + 1) % overlayBufferCount;
+
+                if (frame % 30 == 0)
+                {
+                    Logger.LogInformation("Presented {Frame} frames, completed buffers: {Count}",
+                        frame, completed.Length);
+                }
+            }
+
+            Logger.LogInformation("Frame presentation complete");
+
+            // Cleanup overlay buffers
+            foreach (var buffer in overlayBuffers)
+            {
+                buffer.DmaBuffer.UnmapBuffer();
+                buffer.Dispose();
+            }
         }
     }
 }

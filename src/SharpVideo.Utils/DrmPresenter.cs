@@ -23,6 +23,9 @@ public class DrmPresenter
     private readonly AtomicDisplayManager? _atomicDisplayManager;
 
     private SharedDmaBuffer? _currentFrame;
+    private SharedDmaBuffer? _primaryFrontBuffer;
+    private SharedDmaBuffer? _primaryBackBuffer;
+    private bool _primaryBufferFlipped = false;
 
     private DrmPresenter(
         DrmDevice device,
@@ -47,6 +50,16 @@ public class DrmPresenter
     }
 
     public bool TimestampMonotonic => _capabilities.TimestampMonotonic;
+
+    /// <summary>
+    /// Gets the ID of the primary plane
+    /// </summary>
+    public uint GetPrimaryPlaneId() => _context.PrimaryPlane.Id;
+
+    /// <summary>
+    /// Gets the ID of the overlay plane
+    /// </summary>
+    public uint GetOverlayPlaneId() => _context.Nv12Plane.Id;
 
     public static DrmPresenter Create(
         DrmDevice drmDevice,
@@ -161,7 +174,8 @@ public class DrmPresenter
         {
             // Atomic is available but async page flip is NOT supported
             // Use event-driven atomic mode with VBlank synchronization
-            logger.LogInformation("Using atomic modesetting with VBlank synchronization (async page flip not supported)");
+            logger.LogInformation(
+                "Using atomic modesetting with VBlank synchronization (async page flip not supported)");
 
             // Get all required property IDs for the plane
             var fbIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "FB_ID");
@@ -199,9 +213,9 @@ public class DrmPresenter
                 srcYPropertyId,
                 srcWPropertyId,
                 srcHPropertyId,
-                width,  // source width
+                width, // source width
                 height, // source height
-                width,  // destination width
+                width, // destination width
                 height, // destination height
                 logger);
         }
@@ -262,7 +276,132 @@ public class DrmPresenter
         };
 
         logger.LogInformation("Display setup complete");
-        return new(drmDevice, bufferManager, context, capabilities, primaryPlaneFormat, width, height, atomicDisplayManager, logger);
+        return new(drmDevice, bufferManager, context, capabilities, primaryPlaneFormat, width, height,
+            atomicDisplayManager, logger);
+    }
+
+    /// <summary>
+    /// Initializes double buffering for primary plane with ARGB8888 format.
+    /// Must be called after Create() and before using SetPrimaryPlaneBuffer().
+    /// </summary>
+    public bool InitializePrimaryPlaneDoubleBuffering()
+    {
+        // Create two buffers for double buffering
+        var argb8888Format = KnownPixelFormats.DRM_FORMAT_ARGB8888;
+
+        _primaryFrontBuffer = _bufferManager.AllocateBuffer(_width, _height, argb8888Format);
+        _primaryFrontBuffer.MapBuffer();
+        if (_primaryFrontBuffer.MapStatus == MapStatus.FailedToMap)
+        {
+            _logger.LogError("Failed to map primary front buffer");
+            _primaryFrontBuffer.Dispose();
+            _primaryFrontBuffer = null;
+            return false;
+        }
+
+        _primaryBackBuffer = _bufferManager.AllocateBuffer(_width, _height, argb8888Format);
+        _primaryBackBuffer.MapBuffer();
+        if (_primaryBackBuffer.MapStatus == MapStatus.FailedToMap)
+        {
+            _logger.LogError("Failed to map primary back buffer");
+            _primaryBackBuffer.Dispose();
+            _primaryFrontBuffer?.Dispose();
+            _primaryBackBuffer = null;
+            _primaryFrontBuffer = null;
+            return false;
+        }
+
+        _logger.LogInformation("Primary plane double buffering initialized with ARGB8888 format");
+        return true;
+    }
+
+    /// <summary>
+    /// Sets the z-position property for a plane to control layering order.
+    /// Lower z-pos values are displayed behind higher values.
+    /// </summary>
+    public bool SetPlaneZPosition(uint planeId, ulong zpos)
+    {
+        var zposPropertyId = GetPlanePropertyId(_device.DeviceFd, planeId, "zpos");
+        if (zposPropertyId == 0)
+        {
+            _logger.LogWarning("Plane {PlaneId} does not have zpos property", planeId);
+            return false;
+        }
+
+        var result = LibDrm.drmModeObjectSetProperty(
+            _device.DeviceFd,
+            planeId,
+            LibDrm.DRM_MODE_OBJECT_PLANE,
+            zposPropertyId,
+            zpos);
+
+        if (result != 0)
+        {
+            _logger.LogError("Failed to set zpos={Zpos} for plane {PlaneId}: {Result}", zpos, planeId, result);
+            return false;
+        }
+
+        _logger.LogInformation("Set plane {PlaneId} zpos to {Zpos}", planeId, zpos);
+        return true;
+    }
+
+    /// <summary>
+    /// Gets the current back buffer for primary plane rendering.
+    /// After filling, call SwapPrimaryPlaneBuffers() to present it.
+    /// </summary>
+    public Span<byte> GetPrimaryPlaneBackBuffer()
+    {
+        if (_primaryBackBuffer == null)
+        {
+            throw new InvalidOperationException(
+                "Primary plane double buffering not initialized. Call InitializePrimaryPlaneDoubleBuffering() first.");
+        }
+
+        return _primaryBackBuffer.DmaBuffer.GetMappedSpan();
+    }
+
+    /// <summary>
+    /// Swaps primary plane buffers and presents the back buffer.
+    /// </summary>
+    public bool SwapPrimaryPlaneBuffers()
+    {
+        if (_primaryFrontBuffer == null || _primaryBackBuffer == null)
+        {
+            _logger.LogError("Primary plane buffers not initialized");
+            return false;
+        }
+
+        // Sync the back buffer before presenting
+        _primaryBackBuffer.DmaBuffer.SyncMap();
+
+        // Create framebuffer for back buffer if needed
+        if (_primaryBackBuffer.FramebufferId == 0)
+        {
+            _primaryBackBuffer.FramebufferId = _bufferManager.CreateFramebuffer(_primaryBackBuffer);
+        }
+
+        // Update the plane to show the back buffer
+        var success = SetPlane(
+            _device.DeviceFd,
+            _context.PrimaryPlane.Id,
+            _context.CrtcId,
+            _primaryBackBuffer.FramebufferId,
+            _width,
+            _height,
+            _width,
+            _height,
+            _context.AtomicUpdater,
+            _capabilities.AsyncPageFlip,
+            _logger);
+
+        if (success)
+        {
+            // Swap buffers
+            (_primaryFrontBuffer, _primaryBackBuffer) = (_primaryBackBuffer, _primaryFrontBuffer);
+            _primaryBufferFlipped = true;
+        }
+
+        return success;
     }
 
     public bool SetOverlayPlaneBuffer(
@@ -417,6 +556,29 @@ public class DrmPresenter
             if (_atomicDisplayManager != null)
             {
                 _atomicDisplayManager.Dispose();
+            }
+
+            // Clean up primary plane double buffers
+            if (_primaryFrontBuffer != null)
+            {
+                if (_primaryFrontBuffer.FramebufferId != 0)
+                {
+                    LibDrm.drmModeRmFB(_device.DeviceFd, _primaryFrontBuffer.FramebufferId);
+                }
+
+                _primaryFrontBuffer.DmaBuffer.UnmapBuffer();
+                _primaryFrontBuffer.Dispose();
+            }
+
+            if (_primaryBackBuffer != null)
+            {
+                if (_primaryBackBuffer.FramebufferId != 0)
+                {
+                    LibDrm.drmModeRmFB(_device.DeviceFd, _primaryBackBuffer.FramebufferId);
+                }
+
+                _primaryBackBuffer.DmaBuffer.UnmapBuffer();
+                _primaryBackBuffer.Dispose();
             }
 
             if (_context.Nv12FbId != 0)
