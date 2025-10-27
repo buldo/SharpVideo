@@ -1,7 +1,5 @@
-﻿using System.Runtime.Versioning;
-
+using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
-
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
@@ -23,9 +21,8 @@ public class DrmPresenter
     private readonly AtomicDisplayManager? _atomicDisplayManager;
 
     private SharedDmaBuffer? _currentFrame;
-    private SharedDmaBuffer? _primaryFrontBuffer;
-    private SharedDmaBuffer? _primaryBackBuffer;
-    private bool _primaryBufferFlipped = false;
+    private SharedDmaBuffer _primaryFrontBuffer;
+    private SharedDmaBuffer _primaryBackBuffer;
 
     private DrmPresenter(
         DrmDevice device,
@@ -35,6 +32,8 @@ public class DrmPresenter
         PixelFormat primaryPlanePixelFormat,
         uint width,
         uint height,
+        SharedDmaBuffer primaryFrontBuffer,
+        SharedDmaBuffer primaryBackBuffer,
         AtomicDisplayManager? atomicDisplayManager,
         ILogger logger)
     {
@@ -45,6 +44,8 @@ public class DrmPresenter
         _primaryPlanePixelFormat = primaryPlanePixelFormat;
         _width = width;
         _height = height;
+        _primaryFrontBuffer = primaryFrontBuffer;
+        _primaryBackBuffer = primaryBackBuffer;
         _atomicDisplayManager = atomicDisplayManager;
         _logger = logger;
     }
@@ -59,13 +60,15 @@ public class DrmPresenter
     /// <summary>
     /// Gets the ID of the overlay plane
     /// </summary>
-    public uint GetOverlayPlaneId() => _context.Nv12Plane.Id;
+    public uint GetOverlayPlaneId() => _context.OverlayPlane.Id;
 
-    public static DrmPresenter Create(
+    public static DrmPresenter? Create(
         DrmDevice drmDevice,
         uint width,
         uint height,
         DrmBufferManager bufferManager,
+        PixelFormat primaryPlanePixelFormat,
+        PixelFormat overlayPlanePixelFormat,
         ILogger logger)
     {
         var resources = drmDevice.GetResources();
@@ -133,8 +136,7 @@ public class DrmPresenter
 
         logger.LogInformation("Found primary plane: ID {PlaneId}", primaryPlane.Id);
 
-        var nv12Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc;
-        var nv12Plane = compatiblePlanes.FirstOrDefault(p =>
+        var overlayPlane = compatiblePlanes.FirstOrDefault(p =>
         {
             var props = p.GetProperties();
             var typeProp = props.FirstOrDefault(prop => prop.Name.Equals("type", StringComparison.OrdinalIgnoreCase));
@@ -142,15 +144,16 @@ public class DrmPresenter
                              typeProp.Value < (ulong)typeProp.EnumNames.Count &&
                              typeProp.EnumNames[(int)typeProp.Value]
                                  .Equals("Overlay", StringComparison.OrdinalIgnoreCase);
-            return isOverlay && p.Formats.Contains(nv12Format);
+            return isOverlay && p.Formats.Contains(overlayPlanePixelFormat.Fourcc);
         });
 
-        if (nv12Plane == null)
+        if (overlayPlane == null)
         {
-            throw new Exception("No NV12-capable overlay plane found");
+            throw new Exception($"No overlay plane with {overlayPlanePixelFormat.GetName()} format found");
         }
 
-        logger.LogInformation("Found NV12 overlay plane: ID {PlaneId}", nv12Plane.Id);
+        logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
+            overlayPlanePixelFormat.GetName(), overlayPlane.Id);
 
         var capabilities = drmDevice.GetDeviceCapabilities();
         AtomicPlaneUpdater? atomicUpdater = null;
@@ -159,35 +162,21 @@ public class DrmPresenter
         DumpCapabilities(capabilities, logger);
 #endif
 
-        // Determine which display method to use:
-        // 1. AtomicDisplayManager: When atomic is available but async page flip is NOT supported
-        //    (uses VBlank-synchronized event-driven atomic commits)
-        // 2. AtomicPlaneUpdater: When atomic async page flip IS supported
-        //    (uses async atomic commits)
-        // 3. Legacy API: Fallback for older hardware
-
-        // Check if atomic modesetting was successfully enabled (done in Program.cs via DRM_CLIENT_CAP_ATOMIC)
-        // We can check this by trying to use atomic API - if it fails, atomic is not supported
-        // For now, we assume atomic is enabled if we got this far
-
         if (!capabilities.AtomicAsyncPageFlip)
         {
-            // Atomic is available but async page flip is NOT supported
-            // Use event-driven atomic mode with VBlank synchronization
             logger.LogInformation(
                 "Using atomic modesetting with VBlank synchronization (async page flip not supported)");
 
-            // Get all required property IDs for the plane
-            var fbIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "FB_ID");
-            var crtcIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_ID");
-            var crtcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_X");
-            var crtcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_Y");
-            var crtcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_W");
-            var crtcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "CRTC_H");
-            var srcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_X");
-            var srcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_Y");
-            var srcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_W");
-            var srcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, nv12Plane.Id, "SRC_H");
+            var fbIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "FB_ID");
+            var crtcIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_ID");
+            var crtcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_X");
+            var crtcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_Y");
+            var crtcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_W");
+            var crtcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_H");
+            var srcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_X");
+            var srcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_Y");
+            var srcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_W");
+            var srcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_H");
 
             if (fbIdPropertyId == 0 || crtcIdPropertyId == 0 ||
                 crtcXPropertyId == 0 || crtcYPropertyId == 0 ||
@@ -201,7 +190,7 @@ public class DrmPresenter
 
             atomicDisplayManager = new AtomicDisplayManager(
                 drmDevice.DeviceFd,
-                nv12Plane.Id,
+                overlayPlane.Id,
                 crtcId,
                 fbIdPropertyId,
                 crtcIdPropertyId,
@@ -213,53 +202,81 @@ public class DrmPresenter
                 srcYPropertyId,
                 srcWPropertyId,
                 srcHPropertyId,
-                width, // source width
-                height, // source height
-                width, // destination width
-                height, // destination height
+                width,
+                height,
+                width,
+                height,
                 logger);
         }
         else
         {
-            // Atomic async page flip is supported - use AtomicPlaneUpdater
-            atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, nv12Plane.Id, crtcId);
+            atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, overlayPlane.Id, crtcId);
             logger.LogInformation("Atomic modesetting with async page flip initialized");
         }
 
-        var primaryPlaneFormat = KnownPixelFormats.DRM_FORMAT_XRGB8888;
-        var rgbBuf = bufferManager.AllocateBuffer(width, height, primaryPlaneFormat);
-        rgbBuf.MapBuffer();
-        if (rgbBuf.MapStatus == MapStatus.FailedToMap)
+        // Create double buffers for primary plane
+        logger.LogInformation("Creating double buffers for primary plane with {Format} format",
+            primaryPlanePixelFormat.GetName());
+
+        var primaryFrontBuffer = bufferManager.AllocateBuffer(width, height, primaryPlanePixelFormat);
+        primaryFrontBuffer.MapBuffer();
+        if (primaryFrontBuffer.MapStatus == MapStatus.FailedToMap)
         {
-            logger.LogError("Failed to mmap RGB buffer");
-            rgbBuf.Dispose();
+            logger.LogError("Failed to map primary front buffer");
+            primaryFrontBuffer.Dispose();
             return null;
         }
 
-        rgbBuf.DmaBuffer.GetMappedSpan().Fill(0);
-        rgbBuf.DmaBuffer.SyncMap();
-        logger.LogInformation("Created and filled RGB buffer");
-
-
-        var (rgbFbId, _) = CreateRgbFramebuffer(drmDevice, rgbBuf, width, height, primaryPlaneFormat, logger);
-        if (rgbFbId == 0)
+        var primaryBackBuffer = bufferManager.AllocateBuffer(width, height, primaryPlanePixelFormat);
+        primaryBackBuffer.MapBuffer();
+        if (primaryBackBuffer.MapStatus == MapStatus.FailedToMap)
         {
-            rgbBuf.Dispose();
+            logger.LogError("Failed to map primary back buffer");
+            primaryBackBuffer.Dispose();
+            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
+            primaryFrontBuffer.Dispose();
             return null;
         }
 
-        if (!SetCrtcMode(drmDevice, crtcId, connector.ConnectorId, rgbFbId, mode, width, height, logger))
+        // Initialize front buffer with black/transparent
+        primaryFrontBuffer.DmaBuffer.GetMappedSpan().Fill(0);
+        primaryFrontBuffer.DmaBuffer.SyncMap();
+
+        // Create framebuffer for front buffer
+        var (primaryFbId, _) = CreateFramebuffer(drmDevice, primaryFrontBuffer, width, height,
+            primaryPlanePixelFormat, logger);
+        if (primaryFbId == 0)
         {
-            LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
-            rgbBuf.Dispose();
+            primaryBackBuffer.DmaBuffer.UnmapBuffer();
+            primaryBackBuffer.Dispose();
+            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
+            primaryFrontBuffer.Dispose();
             return null;
         }
 
-        if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, width, height, width, height, null, false,
-                logger))
+        primaryFrontBuffer.FramebufferId = primaryFbId;
+        logger.LogInformation("Created primary plane double buffers");
+
+        // Set CRTC mode with primary plane
+        if (!SetCrtcMode(drmDevice, crtcId, connector.ConnectorId, primaryFbId, mode, width, height, logger))
         {
-            LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
-            rgbBuf.Dispose();
+            LibDrm.drmModeRmFB(drmDevice.DeviceFd, primaryFbId);
+            primaryBackBuffer.DmaBuffer.UnmapBuffer();
+            primaryBackBuffer.Dispose();
+            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
+            primaryFrontBuffer.Dispose();
+            return null;
+        }
+
+        // Set primary plane with initial buffer
+        if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, primaryFbId, width, height, width, height,
+                null, false, logger))
+        {
+            LibDrm.drmModeRmFB(drmDevice.DeviceFd, primaryFbId);
+            primaryBackBuffer.DmaBuffer.UnmapBuffer();
+            primaryBackBuffer.Dispose();
+            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
+            primaryFrontBuffer.Dispose();
             return null;
         }
 
@@ -268,51 +285,24 @@ public class DrmPresenter
             CrtcId = crtcId,
             ConnectorId = connector.ConnectorId,
             PrimaryPlane = primaryPlane,
-            Nv12Plane = nv12Plane,
-            RgbBuffer = rgbBuf,
-            RgbFbId = rgbFbId,
-            Nv12FbId = 0,
+            OverlayPlane = overlayPlane,
+            OverlayFbId = 0,
             AtomicUpdater = atomicUpdater,
         };
 
-        logger.LogInformation("Display setup complete");
-        return new(drmDevice, bufferManager, context, capabilities, primaryPlaneFormat, width, height,
-            atomicDisplayManager, logger);
-    }
-
-    /// <summary>
-    /// Initializes double buffering for primary plane with ARGB8888 format.
-    /// Must be called after Create() and before using SetPrimaryPlaneBuffer().
-    /// </summary>
-    public bool InitializePrimaryPlaneDoubleBuffering()
-    {
-        // Create two buffers for double buffering
-        var argb8888Format = KnownPixelFormats.DRM_FORMAT_ARGB8888;
-
-        _primaryFrontBuffer = _bufferManager.AllocateBuffer(_width, _height, argb8888Format);
-        _primaryFrontBuffer.MapBuffer();
-        if (_primaryFrontBuffer.MapStatus == MapStatus.FailedToMap)
-        {
-            _logger.LogError("Failed to map primary front buffer");
-            _primaryFrontBuffer.Dispose();
-            _primaryFrontBuffer = null;
-            return false;
-        }
-
-        _primaryBackBuffer = _bufferManager.AllocateBuffer(_width, _height, argb8888Format);
-        _primaryBackBuffer.MapBuffer();
-        if (_primaryBackBuffer.MapStatus == MapStatus.FailedToMap)
-        {
-            _logger.LogError("Failed to map primary back buffer");
-            _primaryBackBuffer.Dispose();
-            _primaryFrontBuffer?.Dispose();
-            _primaryBackBuffer = null;
-            _primaryFrontBuffer = null;
-            return false;
-        }
-
-        _logger.LogInformation("Primary plane double buffering initialized with ARGB8888 format");
-        return true;
+        logger.LogInformation("Display setup complete with double buffering");
+        return new DrmPresenter(
+            drmDevice,
+            bufferManager,
+            context,
+            capabilities,
+            primaryPlanePixelFormat,
+            width,
+            height,
+            primaryFrontBuffer,
+            primaryBackBuffer,
+            atomicDisplayManager,
+            logger);
     }
 
     /// <summary>
@@ -351,12 +341,6 @@ public class DrmPresenter
     /// </summary>
     public Span<byte> GetPrimaryPlaneBackBuffer()
     {
-        if (_primaryBackBuffer == null)
-        {
-            throw new InvalidOperationException(
-                "Primary plane double buffering not initialized. Call InitializePrimaryPlaneDoubleBuffering() first.");
-        }
-
         return _primaryBackBuffer.DmaBuffer.GetMappedSpan();
     }
 
@@ -365,12 +349,6 @@ public class DrmPresenter
     /// </summary>
     public bool SwapPrimaryPlaneBuffers()
     {
-        if (_primaryFrontBuffer == null || _primaryBackBuffer == null)
-        {
-            _logger.LogError("Primary plane buffers not initialized");
-            return false;
-        }
-
         // Sync the back buffer before presenting
         _primaryBackBuffer.DmaBuffer.SyncMap();
 
@@ -398,28 +376,24 @@ public class DrmPresenter
         {
             // Swap buffers
             (_primaryFrontBuffer, _primaryBackBuffer) = (_primaryBackBuffer, _primaryFrontBuffer);
-            _primaryBufferFlipped = true;
         }
 
         return success;
     }
 
-    public bool SetOverlayPlaneBuffer(
-        SharedDmaBuffer drmBuffer)
+    public bool SetOverlayPlaneBuffer(SharedDmaBuffer drmBuffer)
     {
         if (drmBuffer.FramebufferId == 0)
         {
             drmBuffer.FramebufferId = _bufferManager.CreateFramebuffer(drmBuffer);
         }
 
-        // Use atomic display manager if available
         if (_atomicDisplayManager != null)
         {
             _atomicDisplayManager.SubmitFrame(drmBuffer, drmBuffer.FramebufferId);
             return true;
         }
 
-        // Legacy path
         if (_currentFrame != null)
         {
             _processedBuffers.Add(_currentFrame);
@@ -429,7 +403,7 @@ public class DrmPresenter
 
         return SetPlane(
             _device.DeviceFd,
-            _context.Nv12Plane.Id,
+            _context.OverlayPlane.Id,
             _context.CrtcId,
             drmBuffer.FramebufferId,
             drmBuffer.Width,
@@ -443,13 +417,11 @@ public class DrmPresenter
 
     public SharedDmaBuffer[] GetPresentedOverlayBuffers()
     {
-        // Use atomic display manager if available
         if (_atomicDisplayManager != null)
         {
             return _atomicDisplayManager.GetCompletedBuffers();
         }
 
-        // Legacy path
         var ret = _processedBuffers.ToArray();
         _processedBuffers.Clear();
         return ret;
@@ -504,30 +476,24 @@ public class DrmPresenter
         bool tryAsync,
         ILogger logger)
     {
-        // srcWidth/srcHeight: dimensions of the framebuffer (may be padded, e.g., 1920x1088)
-        // dstWidth/dstHeight: dimensions to display on screen (e.g., 1920x1080)
-
-        // Try atomic API first if available
         if (atomicUpdater != null)
         {
             var success = atomicUpdater.UpdatePlane(
                 planeId,
                 crtcId,
                 fbId,
-                0, 0, // crtcX, crtcY
+                0, 0,
                 dstWidth, dstHeight,
-                0, 0, // srcX, srcY (16.16 fixed point, but we pass 0)
-                srcWidth << 16, srcHeight << 16, // srcW, srcH in 16.16 fixed point
+                0, 0,
+                srcWidth << 16, srcHeight << 16,
                 tryAsync);
 
             if (success)
                 return true;
 
-            // Fall through to legacy API if atomic fails
             logger.LogWarning("Atomic plane update failed, falling back to legacy API");
         }
 
-        // Legacy API fallback
         var result = LibDrm.drmModeSetPlane(drmFd, planeId, crtcId, fbId, 0,
             0, 0, dstWidth, dstHeight,
             0, 0, srcWidth << 16, srcHeight << 16);
@@ -540,15 +506,8 @@ public class DrmPresenter
         return true;
     }
 
-    /// <summary>
-    /// Cleans up display resources including framebuffers and DMA buffers.
-    /// </summary>
-    /// <summary>
-    /// Cleans up display resources including framebuffers and DMA buffers.
-    /// </summary>
     public void CleanupDisplay()
     {
-
         _logger.LogInformation("Cleaning up display resources");
 
         try
@@ -558,53 +517,30 @@ public class DrmPresenter
                 _atomicDisplayManager.Dispose();
             }
 
-            // Clean up primary plane double buffers
-            if (_primaryFrontBuffer != null)
+            if (_primaryFrontBuffer.FramebufferId != 0)
             {
-                if (_primaryFrontBuffer.FramebufferId != 0)
-                {
-                    LibDrm.drmModeRmFB(_device.DeviceFd, _primaryFrontBuffer.FramebufferId);
-                }
-
-                _primaryFrontBuffer.DmaBuffer.UnmapBuffer();
-                _primaryFrontBuffer.Dispose();
+                LibDrm.drmModeRmFB(_device.DeviceFd, _primaryFrontBuffer.FramebufferId);
             }
 
-            if (_primaryBackBuffer != null)
-            {
-                if (_primaryBackBuffer.FramebufferId != 0)
-                {
-                    LibDrm.drmModeRmFB(_device.DeviceFd, _primaryBackBuffer.FramebufferId);
-                }
+            _primaryFrontBuffer.DmaBuffer.UnmapBuffer();
+            _primaryFrontBuffer.Dispose();
 
-                _primaryBackBuffer.DmaBuffer.UnmapBuffer();
-                _primaryBackBuffer.Dispose();
+            if (_primaryBackBuffer.FramebufferId != 0)
+            {
+                LibDrm.drmModeRmFB(_device.DeviceFd, _primaryBackBuffer.FramebufferId);
             }
 
-            if (_context.Nv12FbId != 0)
+            _primaryBackBuffer.DmaBuffer.UnmapBuffer();
+            _primaryBackBuffer.Dispose();
+
+            if (_context.OverlayFbId != 0)
             {
-                var result = LibDrm.drmModeRmFB(_device.DeviceFd, _context.Nv12FbId);
+                var result = LibDrm.drmModeRmFB(_device.DeviceFd, _context.OverlayFbId);
                 if (result != 0)
                 {
-                    _logger.LogWarning("Failed to remove NV12 framebuffer {FbId}: {Result}",
-                        _context.Nv12FbId, result);
+                    _logger.LogWarning("Failed to remove overlay framebuffer {FbId}: {Result}",
+                        _context.OverlayFbId, result);
                 }
-            }
-
-            if (_context.RgbFbId != 0)
-            {
-                var result = LibDrm.drmModeRmFB(_device.DeviceFd, _context.RgbFbId);
-                if (result != 0)
-                {
-                    _logger.LogWarning("Failed to remove RGB framebuffer {FbId}: {Result}",
-                        _context.RgbFbId, result);
-                }
-            }
-
-            if (_context.RgbBuffer != null)
-            {
-                _context.RgbBuffer.DmaBuffer.UnmapBuffer();
-                _context.RgbBuffer.Dispose();
             }
 
             if (_context.AtomicUpdater != null)
@@ -663,45 +599,62 @@ public class DrmPresenter
         return true;
     }
 
-    private static unsafe (uint fbId, uint handle) CreateRgbFramebuffer(
+    private static unsafe (uint fbId, uint handle) CreateFramebuffer(
         DrmDevice drmDevice,
-        SharedDmaBuffer rgbBuf,
+        SharedDmaBuffer buffer,
         uint width,
         uint height,
-        PixelFormat rgbFormat,
+        PixelFormat format,
         ILogger logger)
     {
-        var result = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, rgbBuf.DmaBuffer.Fd, out uint rgbHandle);
+        var result = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, buffer.DmaBuffer.Fd, out uint handle);
         if (result != 0)
         {
-            logger.LogError("Failed to convert RGB DMA FD to handle: {Result}", result);
+            logger.LogError("Failed to convert DMA FD to handle for {Format}: {Result}", format.GetName(), result);
             return (0, 0);
         }
 
+        uint bytesPerPixel = format.GetName() switch
+        {
+            "DRM_FORMAT_ARGB8888" => 4,
+            "DRM_FORMAT_XRGB8888" => 4,
+            "DRM_FORMAT_RGB888" => 3,
+            "DRM_FORMAT_NV12" => 1,
+            _ => throw new NotSupportedException(
+                $"Pixel format {format.GetName()} not supported for framebuffer creation")
+        };
 
-        uint rgbPitch = (uint)(width * 4);
-        uint* rgbHandles = stackalloc uint[4] { rgbHandle, 0, 0, 0 };
-        uint* rgbPitches = stackalloc uint[4] { rgbPitch, 0, 0, 0 };
-        uint* rgbOffsets = stackalloc uint[4] { 0, 0, 0, 0 };
+        uint pitch = buffer.Stride > 0 ? buffer.Stride : width * bytesPerPixel;
+        uint* handles = stackalloc uint[4] { handle, 0, 0, 0 };
+        uint* pitches = stackalloc uint[4] { pitch, 0, 0, 0 };
+        uint* offsets = stackalloc uint[4] { 0, 0, 0, 0 };
+
+        if (format.GetName() == "DRM_FORMAT_NV12")
+        {
+            handles[1] = handle;
+            pitches[1] = pitch;
+            offsets[1] = pitch * height;
+        }
 
         var resultFb = LibDrm.drmModeAddFB2(
             drmDevice.DeviceFd,
             width,
             height,
-            rgbFormat.Fourcc,
-            rgbHandles,
-            rgbPitches,
-            rgbOffsets,
-            out var rgbFbId,
+            format.Fourcc,
+            handles,
+            pitches,
+            offsets,
+            out var fbId,
             0);
+
         if (resultFb != 0)
         {
-            logger.LogError("Failed to create RGB framebuffer: {Result}", resultFb);
+            logger.LogError("Failed to create {Format} framebuffer: {Result}", format.GetName(), resultFb);
             return (0, 0);
         }
 
-        logger.LogInformation("Created RGB framebuffer with ID: {FbId}", rgbFbId);
-        return (rgbFbId, rgbHandle);
+        logger.LogTrace("Created {Format} framebuffer with ID: {FbId}", format.GetName(), fbId);
+        return (fbId, handle);
     }
 
     private static unsafe uint GetPlanePropertyId(int drmFd, uint planeId, string propertyName)
@@ -746,10 +699,8 @@ public class DrmPresenter
         public required uint CrtcId { get; init; }
         public required uint ConnectorId { get; init; }
         public required DrmPlane PrimaryPlane { get; init; }
-        public required DrmPlane Nv12Plane { get; init; }
-        public SharedDmaBuffer RgbBuffer { get; set; }
-        public uint RgbFbId { get; set; }
-        public uint Nv12FbId { get; set; }
+        public required DrmPlane OverlayPlane { get; init; }
+        public uint OverlayFbId { get; set; }
         public AtomicPlaneUpdater? AtomicUpdater { get; set; }
     }
 }

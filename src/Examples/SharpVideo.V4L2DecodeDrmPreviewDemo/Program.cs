@@ -56,7 +56,14 @@ internal class Program
             allocator,
             [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_XRGB8888],
             drmBufferManagerLogger);
-        var presenter = DrmPresenter.Create(drmDevice, Width, Height, drmBufferManager, Logger);
+        var presenter = DrmPresenter.Create(
+            drmDevice, 
+            Width, 
+            Height, 
+            drmBufferManager,
+            KnownPixelFormats.DRM_FORMAT_XRGB8888,  // Primary plane format
+            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format  
+            Logger);
 
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
         using var _ = v4L2Device; // Ensure disposal

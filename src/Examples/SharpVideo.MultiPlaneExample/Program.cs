@@ -40,7 +40,20 @@ namespace SharpVideo.MultiPlaneExample
                 [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
                 LoggerFactory.CreateLogger<DrmBufferManager>());
 
-            var presenter = DrmPresenter.Create(drmDevice, Width, Height, buffersManager, Logger);
+            var presenter = DrmPresenter.Create(
+                drmDevice,
+                Width,
+                Height,
+                buffersManager,
+                KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary plane format
+                KnownPixelFormats.DRM_FORMAT_NV12,  // Overlay plane format
+                Logger);
+
+            if (presenter == null)
+            {
+                Logger.LogError("Failed to create presenter");
+                return;
+            }
 
             try
             {
@@ -57,18 +70,11 @@ namespace SharpVideo.MultiPlaneExample
 
         private static void RunDemo(DrmPresenter presenter, DrmBufferManager bufferManager)
         {
-            // Initialize primary plane double buffering
-            if (!presenter.InitializePrimaryPlaneDoubleBuffering())
-            {
-                Logger.LogError("Failed to initialize primary plane double buffering");
-                return;
-            }
-
             // Set z-position to make primary plane appear on top
             // Overlay planes typically have zpos=0 by default, so we set primary to a higher value
             // Note: Some hardware may have different default zpos values
             presenter.SetPlaneZPosition(presenter.GetPrimaryPlaneId(), 10); // Primary on top
-            presenter.SetPlaneZPosition(presenter.GetOverlayPlaneId(), 5); // Overlay below
+            presenter.SetPlaneZPosition(presenter.GetOverlayPlaneId(), 5);  // Overlay below
 
             // Allocate buffers for overlay plane (NV12)
             var overlayBufferCount = 3;
