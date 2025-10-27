@@ -23,6 +23,22 @@ public static class BuffersInfoProvider
                     BitsPerPixel = [4 * 8]
                 }
             },
+            {
+                KnownPixelFormats.DRM_FORMAT_ARGB8888,
+                new FormatInfo
+                {
+                    PlanesCount = 1,
+                    BitsPerPixel = [4 * 8]
+                }
+            },
+            {
+                KnownPixelFormats.DRM_FORMAT_RGB888,
+                new FormatInfo
+                {
+                    PlanesCount = 1,
+                    BitsPerPixel = [3 * 8]
+                }
+            },
         }
         .ToFrozenDictionary();
 

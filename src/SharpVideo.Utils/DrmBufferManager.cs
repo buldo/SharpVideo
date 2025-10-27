@@ -111,29 +111,39 @@ public class DrmBufferManager : IDisposable
     /// </summary>
     public unsafe uint CreateFramebuffer(SharedDmaBuffer buffer)
     {
-        // Convert Y plane DMA-BUF FD to DRM handle
-        var result = LibDrm.drmPrimeFDToHandle(_drmDevice.DeviceFd, buffer.DmaBuffer.Fd, out uint yHandle);
+        // Convert DMA-BUF FD to DRM handle
+        var result = LibDrm.drmPrimeFDToHandle(_drmDevice.DeviceFd, buffer.DmaBuffer.Fd, out uint handle);
         if (result != 0)
         {
             return 0;
         }
 
-        //buffer.DrmHandle = yHandle;
+        // Get buffer parameters from BuffersInfoProvider
+        var bufferParams = BuffersInfoProvider.GetBufferParams(buffer.Width, buffer.Height, buffer.Format);
 
-        // Create framebuffer for NV12 format
-        uint yPitch = buffer.Stride > 0 ? buffer.Stride : (uint)buffer.Width;
-        uint uvPitch = yPitch; // UV plane has same stride as Y
-        uint yOffset = 0;
+        uint* handles = stackalloc uint[4];
+        uint* pitches = stackalloc uint[4];
+        uint* offsets = stackalloc uint[4];
 
-        // Contiguous buffer - UV plane starts after Y plane data
-        uint uvHandle = yHandle; // Same handle
-        // Use stride * height for correct offset (accounts for padding)
-        uint uvOffset = yPitch * (uint)buffer.Height;
-        _logger.LogInformation($"[DRM] Creating NV12 framebuffer: Width={buffer.Width}, Height={buffer.Height}, Stride={yPitch}");
+        // Configure handles, pitches and offsets based on plane count
+        for (int i = 0; i < bufferParams.PlanesCount; i++)
+        {
+            handles[i] = handle; // Same handle for all planes in contiguous buffer
+            pitches[i] = buffer.Stride > 0 ? buffer.Stride : bufferParams.Stride;
+            offsets[i] = (uint)bufferParams.PlaneOffsets[i];
+        }
 
-        uint* handles = stackalloc uint[4] { yHandle, uvHandle, 0, 0 };
-        uint* pitches = stackalloc uint[4] { yPitch, uvPitch, 0, 0 };
-        uint* offsets = stackalloc uint[4] { yOffset, uvOffset, 0, 0 };
+        // Fill remaining slots with zeros
+        for (int i = bufferParams.PlanesCount; i < 4; i++)
+        {
+            handles[i] = 0;
+            pitches[i] = 0;
+            offsets[i] = 0;
+        }
+
+        _logger.LogTrace(
+            "[DRM] Creating {Format} framebuffer: Width={Width}, Height={Height}, Stride={Stride}, Planes={Planes}",
+            buffer.Format.GetName(), buffer.Width, buffer.Height, pitches[0], bufferParams.PlanesCount);
 
         var fbResult = LibDrm.drmModeAddFB2(
             _drmDevice.DeviceFd,

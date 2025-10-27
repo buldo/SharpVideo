@@ -614,26 +614,27 @@ public class DrmPresenter
             return (0, 0);
         }
 
-        uint bytesPerPixel = format.GetName() switch
-        {
-            "DRM_FORMAT_ARGB8888" => 4,
-            "DRM_FORMAT_XRGB8888" => 4,
-            "DRM_FORMAT_RGB888" => 3,
-            "DRM_FORMAT_NV12" => 1,
-            _ => throw new NotSupportedException(
-                $"Pixel format {format.GetName()} not supported for framebuffer creation")
-        };
+        // Get buffer parameters from BuffersInfoProvider
+        var bufferParams = BuffersInfoProvider.GetBufferParams(width, height, format);
 
-        uint pitch = buffer.Stride > 0 ? buffer.Stride : width * bytesPerPixel;
-        uint* handles = stackalloc uint[4] { handle, 0, 0, 0 };
-        uint* pitches = stackalloc uint[4] { pitch, 0, 0, 0 };
-        uint* offsets = stackalloc uint[4] { 0, 0, 0, 0 };
+        uint* handles = stackalloc uint[4];
+        uint* pitches = stackalloc uint[4];
+        uint* offsets = stackalloc uint[4];
 
-        if (format.GetName() == "DRM_FORMAT_NV12")
+        // Configure handles, pitches and offsets based on plane count
+        for (int i = 0; i < bufferParams.PlanesCount; i++)
         {
-            handles[1] = handle;
-            pitches[1] = pitch;
-            offsets[1] = pitch * height;
+            handles[i] = handle; // Same handle for all planes in contiguous buffer
+            pitches[i] = buffer.Stride > 0 ? buffer.Stride : bufferParams.Stride;
+            offsets[i] = (uint)bufferParams.PlaneOffsets[i];
+        }
+
+        // Fill remaining slots with zeros
+        for (int i = bufferParams.PlanesCount; i < 4; i++)
+        {
+            handles[i] = 0;
+            pitches[i] = 0;
+            offsets[i] = 0;
         }
 
         var resultFb = LibDrm.drmModeAddFB2(
