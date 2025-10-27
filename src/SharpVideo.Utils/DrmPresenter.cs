@@ -336,6 +336,57 @@ public class DrmPresenter
     }
 
     /// <summary>
+    /// Gets the valid range for the zpos property of a plane.
+    /// Returns (min, max, current) or null if zpos is not supported.
+    /// </summary>
+    public unsafe (ulong min, ulong max, ulong current)? GetPlaneZPositionRange(uint planeId)
+    {
+        var props = LibDrm.drmModeObjectGetProperties(_device.DeviceFd, planeId, LibDrm.DRM_MODE_OBJECT_PLANE);
+        if (props == null)
+            return null;
+
+        try
+        {
+            for (int i = 0; i < props->CountProps; i++)
+            {
+                var propId = props->Props[i];
+                var prop = LibDrm.drmModeGetProperty(_device.DeviceFd, propId);
+                if (prop == null)
+                    continue;
+
+                try
+                {
+                    var name = prop->NameString;
+                    if (name != null && name.Equals("zpos", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var currentValue = props->PropValues[i];
+
+                        // For range properties, values[0] is min and values[1] is max
+                        if (prop->CountValues >= 2)
+                        {
+                            var min = prop->Values[0];
+                            var max = prop->Values[1];
+                            _logger.LogDebug("Plane {PlaneId} zpos range: [{Min}, {Max}], current: {Current}",
+                                planeId, min, max, currentValue);
+                            return (min, max, currentValue);
+                        }
+                    }
+                }
+                finally
+                {
+                    LibDrm.drmModeFreeProperty(prop);
+                }
+            }
+        }
+        finally
+        {
+            LibDrm.drmModeFreeObjectProperties(props);
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Gets the current back buffer for primary plane rendering.
     /// After filling, call SwapPrimaryPlaneBuffers() to present it.
     /// </summary>

@@ -70,11 +70,53 @@ namespace SharpVideo.MultiPlaneExample
 
         private static void RunDemo(DrmPresenter presenter, DrmBufferManager bufferManager)
         {
-            // Set z-position to make primary plane appear on top
-            // Overlay planes typically have zpos=0 by default, so we set primary to a higher value
-            // Note: Some hardware may have different default zpos values
-            presenter.SetPlaneZPosition(presenter.GetPrimaryPlaneId(), 10); // Primary on top
-            presenter.SetPlaneZPosition(presenter.GetOverlayPlaneId(), 5);  // Overlay below
+            // Get zpos ranges for both planes
+            var primaryZposRange = presenter.GetPlaneZPositionRange(presenter.GetPrimaryPlaneId());
+            var overlayZposRange = presenter.GetPlaneZPositionRange(presenter.GetOverlayPlaneId());
+
+            if (primaryZposRange.HasValue)
+            {
+                Logger.LogInformation("Primary plane zpos range: [{Min}, {Max}], current: {Current}",
+                    primaryZposRange.Value.min, primaryZposRange.Value.max, primaryZposRange.Value.current);
+            }
+            else
+            {
+                Logger.LogWarning("Primary plane does not support zpos property");
+            }
+
+            if (overlayZposRange.HasValue)
+            {
+                Logger.LogInformation("Overlay plane zpos range: [{Min}, {Max}], current: {Current}",
+                    overlayZposRange.Value.min, overlayZposRange.Value.max, overlayZposRange.Value.current);
+            }
+            else
+            {
+                Logger.LogWarning("Overlay plane does not support zpos property");
+            }
+
+            // Try to set z-position to make primary plane appear on top
+            // Use the actual supported range values
+            if (primaryZposRange.HasValue && overlayZposRange.HasValue)
+            {
+                // Set primary to max, overlay to min to ensure proper layering
+                var primaryZpos = primaryZposRange.Value.max;
+                var overlayZpos = overlayZposRange.Value.min;
+
+                Logger.LogInformation("Attempting to set Primary zpos={PrimaryZpos}, Overlay zpos={OverlayZpos}",
+                    primaryZpos, overlayZpos);
+
+                var primarySuccess = presenter.SetPlaneZPosition(presenter.GetPrimaryPlaneId(), primaryZpos);
+                var overlaySuccess = presenter.SetPlaneZPosition(presenter.GetOverlayPlaneId(), overlayZpos);
+
+                if (primarySuccess && overlaySuccess)
+                {
+                    Logger.LogInformation("Z-positioning successful: Primary on top, Overlay below");
+                }
+                else
+                {
+                    Logger.LogWarning("Failed to set z-positions as desired");
+                }
+            }
 
             // Allocate buffers for overlay plane (NV12)
             var overlayBufferCount = 3;
