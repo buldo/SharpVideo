@@ -48,20 +48,37 @@ public unsafe class GlRenderer : IDisposable
 
         _logger?.LogInformation("Initializing EGL and OpenGL ES context...");
 
-        // Initialize EGL
-        _eglDisplay = NativeEgl.GetDisplay(NativeEgl.EGL_DEFAULT_DISPLAY);
+        // Try to get EGL display with multiple strategies
+        _eglDisplay = GetEglDisplayWithFallback();
+        
         if (_eglDisplay == 0)
         {
-            throw new Exception("Failed to get EGL display");
+            throw new Exception("Failed to get EGL display with all available methods");
         }
 
+        _logger?.LogDebug("Successfully obtained EGL display: 0x{Display:X}", _eglDisplay);
+
+        // Initialize EGL
         if (!NativeEgl.Initialize(_eglDisplay, out int major, out int minor))
         {
             var error = NativeEgl.GetError();
-            throw new Exception($"Failed to initialize EGL: {NativeEgl.GetErrorString(error)}");
+            var errorMsg = NativeEgl.GetErrorString(error);
+        
+       _logger?.LogError("eglInitialize failed!");
+      _logger?.LogError("Error: {Error} (code: 0x{ErrorCode:X})", errorMsg, error);
+            _logger?.LogError("");
+    _logger?.LogError("Possible causes:");
+  _logger?.LogError("  1. Missing EGL/OpenGL ES drivers");
+   _logger?.LogError("  2. User not in 'video' or 'render' group");
+_logger?.LogError("  3. Missing packages: libgl1-mesa-dev, libgles2-mesa-dev");
+            _logger?.LogError("");
+            _logger?.LogError("Try running the diagnostic script:");
+  _logger?.LogError("  bash check-egl.sh");
+ 
+            throw new Exception($"Failed to initialize EGL: {errorMsg} (error code: 0x{error:X})");
         }
 
-        _logger?.LogInformation("EGL initialized: version {Major}.{Minor}", major, minor);
+        _logger?.LogInformation("? EGL initialized: version {Major}.{Minor}", major, minor);
 
         // Choose config
         int[] configAttribs =
@@ -186,6 +203,73 @@ public unsafe class GlRenderer : IDisposable
         (_vao, _vbo) = CreateTriangle();
 
         _logger?.LogInformation("OpenGL ES renderer initialized successfully");
+    }
+
+    /// <summary>
+    /// Tries multiple strategies to get an EGL display
+    /// </summary>
+    private nint GetEglDisplayWithFallback()
+    {
+    // Strategy 1: Try default display (works if DISPLAY is set)
+        _logger?.LogDebug("Strategy 1: Trying EGL_DEFAULT_DISPLAY...");
+        var display = NativeEgl.GetDisplay(NativeEgl.EGL_DEFAULT_DISPLAY);
+        if (display != 0)
+        {
+  _logger?.LogInformation("? Got display using EGL_DEFAULT_DISPLAY");
+ return display;
+        }
+        _logger?.LogDebug("? EGL_DEFAULT_DISPLAY failed: {Error}", 
+        NativeEgl.GetErrorString(NativeEgl.GetError()));
+
+        // Strategy 2: Try explicitly with NULL (same as default, but explicit)
+  _logger?.LogDebug("Strategy 2: Trying eglGetDisplay(NULL)...");
+        display = NativeEgl.GetDisplay(nint.Zero);
+  if (display != 0)
+        {
+            _logger?.LogInformation("? Got display using explicit NULL");
+    return display;
+        }
+   _logger?.LogDebug("? eglGetDisplay(NULL) failed: {Error}",
+     NativeEgl.GetErrorString(NativeEgl.GetError()));
+
+        // Strategy 3: Try EGL platform extensions (if available)
+        _logger?.LogDebug("Strategy 3: Trying eglGetPlatformDisplayEXT...");
+   var getPlatformDisplay = NativeEgl.GetProcAddress("eglGetPlatformDisplayEXT");
+      if (getPlatformDisplay != 0)
+        {
+            var eglGetPlatformDisplayEXT = 
+     Marshal.GetDelegateForFunctionPointer<NativeEgl.EglGetPlatformDisplayEXT>(getPlatformDisplay);
+
+          // Try GBM platform (for DRM/KMS direct rendering)
+    _logger?.LogDebug("  Trying EGL_PLATFORM_GBM_KHR...");
+   display = eglGetPlatformDisplayEXT(NativeEgl.EGL_PLATFORM_GBM_KHR, nint.Zero, null);
+ if (display != 0)
+     {
+ _logger?.LogInformation("? Got display using GBM platform");
+            return display;
+      }
+
+            // Try device platform
+            _logger?.LogDebug("  Trying EGL_PLATFORM_DEVICE_EXT...");
+            display = eglGetPlatformDisplayEXT(NativeEgl.EGL_PLATFORM_DEVICE_EXT, nint.Zero, null);
+      if (display != 0)
+            {
+      _logger?.LogInformation("? Got display using device platform");
+ return display;
+  }
+  }
+     else
+        {
+ _logger?.LogDebug("? eglGetPlatformDisplayEXT not available");
+ }
+
+        _logger?.LogError("All strategies to get EGL display failed!");
+        _logger?.LogError("Make sure:");
+ _logger?.LogError("  - EGL/OpenGL ES drivers are installed");
+  _logger?.LogError("  - You have permissions to access GPU (/dev/dri/*)");
+        _logger?.LogError("  - libEGL.so.1 and libGLESv2.so.2 are available");
+ 
+   return 0;
     }
 
     private uint CreateShaderProgram()

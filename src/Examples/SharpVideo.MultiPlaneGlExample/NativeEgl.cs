@@ -79,6 +79,12 @@ internal static unsafe class NativeEgl
     // EGL_NO_IMAGE
     public static readonly nint EGL_NO_IMAGE = nint.Zero;
 
+    // EGL Platform extensions (EGL 1.5 / EXT_platform_base)
+    public const int EGL_PLATFORM_GBM_KHR = 0x31D7;
+    public const int EGL_PLATFORM_WAYLAND_KHR = 0x31D8;
+    public const int EGL_PLATFORM_X11_KHR = 0x31D9;
+    public const int EGL_PLATFORM_DEVICE_EXT = 0x313F;
+
     [DllImport(LibEgl, EntryPoint = "eglGetDisplay")]
     public static extern nint GetDisplay(nint display_id);
 
@@ -119,12 +125,18 @@ internal static unsafe class NativeEgl
     [DllImport(LibEgl, EntryPoint = "eglGetProcAddress")]
     public static extern nint GetProcAddress([MarshalAs(UnmanagedType.LPStr)] string procname);
 
+    [DllImport(LibEgl, EntryPoint = "eglQueryString")]
+    public static extern nint QueryString(nint dpy, int name);
+
     // Extension functions (loaded dynamically)
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate nint EglCreateImageKHR(nint dpy, nint ctx, int target, nint buffer, int* attrib_list);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate bool EglDestroyImageKHR(nint dpy, nint image);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate nint EglGetPlatformDisplayEXT(int platform, nint native_display, int* attrib_list);
 
     // GL ES function for binding EGLImage to renderbuffer
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

@@ -16,4 +16,10 @@
 	<PackageReference Include="Silk.NET.OpenGLES" Version="2.22.0" />
   </ItemGroup>
 
+  <!-- Copy helper scripts to output directory -->
+  <ItemGroup>
+    <None Update="*.sh" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="*.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
