@@ -396,6 +396,16 @@ public class DrmPresenter
     }
 
     /// <summary>
+    /// Gets the current back buffer as SharedDmaBuffer for direct GPU rendering (e.g., OpenGL ES).
+    /// This allows zero-copy rendering by providing access to the DMA-BUF file descriptor.
+    /// After rendering, call SwapPrimaryPlaneBuffers() to present it.
+    /// </summary>
+    public SharedDmaBuffer GetPrimaryPlaneBackBufferDma()
+    {
+      return _primaryBackBuffer;
+    }
+
+    /// <summary>
     /// Swaps primary plane buffers and presents the back buffer.
     /// </summary>
     public bool SwapPrimaryPlaneBuffers()
