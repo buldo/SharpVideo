@@ -33,6 +33,12 @@ internal static unsafe class NativeEgl
     public const int EGL_DEFAULT_DISPLAY = 0;
     public const int EGL_NO_CONTEXT = 0;
     public const int EGL_NO_SURFACE = 0;
+    public const int EGL_NO_DISPLAY = 0;
+
+    // Query string names
+    public const int EGL_EXTENSIONS = 0x3055;
+    public const int EGL_VENDOR = 0x3053;
+    public const int EGL_VERSION = 0x3054;
 
     // Config attributes
     public const int EGL_RED_SIZE = 0x3024;
@@ -44,6 +50,8 @@ internal static unsafe class NativeEgl
     public const int EGL_SURFACE_TYPE = 0x3033;
     public const int EGL_RENDERABLE_TYPE = 0x3040;
     public const int EGL_CONFORMANT = 0x3042;
+    public const int EGL_SAMPLES = 0x3031;
+    public const int EGL_NATIVE_VISUAL_ID = 0x302E;
 
     // Surface types
     public const int EGL_PBUFFER_BIT = 0x0001;
@@ -101,6 +109,9 @@ internal static unsafe class NativeEgl
     public static extern bool ChooseConfig(nint dpy, int* attrib_list, nint* configs, int config_size,
         out int num_config);
 
+    [DllImport(LibEgl, EntryPoint = "eglGetConfigAttrib")]
+    public static extern bool GetConfigAttrib(nint dpy, nint config, int attribute, out int value);
+
     [DllImport(LibEgl, EntryPoint = "eglBindAPI")]
     public static extern bool BindAPI(int api);
 
@@ -112,6 +123,9 @@ internal static unsafe class NativeEgl
 
     [DllImport(LibEgl, EntryPoint = "eglCreatePbufferSurface")]
     public static extern nint CreatePbufferSurface(nint dpy, nint config, int* attrib_list);
+
+    [DllImport(LibEgl, EntryPoint = "eglCreateWindowSurface")]
+    public static extern nint CreateWindowSurface(nint dpy, nint config, nint win, int* attrib_list);
 
     [DllImport(LibEgl, EntryPoint = "eglDestroySurface")]
     public static extern bool DestroySurface(nint dpy, nint surface);

@@ -20,6 +20,13 @@ public unsafe class GlRenderer : IDisposable
     private readonly int _width;
     private readonly int _height;
 
+    // DRM file descriptor
+    private readonly int _drmFd;
+
+    // GBM device and surface
+    private readonly nint _gbmDevice;
+    private readonly nint _gbmSurface;
+
     // EGL context
     private readonly nint _eglDisplay;
     private readonly nint _eglContext;
@@ -48,64 +55,102 @@ public unsafe class GlRenderer : IDisposable
 
         _logger?.LogInformation("Initializing EGL and OpenGL ES context...");
 
-        // Try to get EGL display with multiple strategies
-        _eglDisplay = GetEglDisplayWithFallback();
-        
-        if (_eglDisplay == 0)
+        // Open DRM device to get a file descriptor
+        _drmFd = OpenDrmDevice();
+        if (_drmFd < 0)
         {
-            throw new Exception("Failed to get EGL display with all available methods");
+            throw new Exception("Failed to open DRM device");
+        }
+        _logger?.LogDebug("Opened DRM device with FD: {Fd}", _drmFd);
+
+        // Create GBM device from DRM fd (following kmscube approach)
+        _gbmDevice = NativeGbm.CreateDevice(_drmFd);
+        if (_gbmDevice == 0)
+        {
+            SharpVideo.Linux.Native.Libc.close(_drmFd);
+            throw new Exception("Failed to create GBM device");
+        }
+        _logger?.LogDebug("Created GBM device: 0x{Device:X}", _gbmDevice);
+
+        // Create GBM surface for rendering (following kmscube approach)
+        _gbmSurface = NativeGbm.CreateSurface(
+            _gbmDevice,
+            (uint)width,
+            (uint)height,
+            NativeGbm.GBM_FORMAT_XRGB8888,
+            NativeGbm.GBM_BO_USE_SCANOUT | NativeGbm.GBM_BO_USE_RENDERING);
+
+        if (_gbmSurface == 0)
+        {
+            NativeGbm.DestroyDevice(_gbmDevice);
+            SharpVideo.Linux.Native.Libc.close(_drmFd);
+            throw new Exception("Failed to create GBM surface");
+        }
+        _logger?.LogDebug("Created GBM surface: 0x{Surface:X}", _gbmSurface);
+
+        // Get EGL display using GBM platform (kmscube approach)
+        _eglDisplay = GetEglDisplayFromGbm(_gbmDevice);
+
+        if (_eglDisplay == 0 || _eglDisplay == NativeEgl.EGL_NO_DISPLAY)
+        {
+            NativeGbm.DestroyDevice(_gbmDevice);
+            SharpVideo.Linux.Native.Libc.close(_drmFd);
+            throw new Exception("Failed to get EGL display from GBM device");
         }
 
-        _logger?.LogDebug("Successfully obtained EGL display: 0x{Display:X}", _eglDisplay);
+        _logger?.LogDebug("Successfully obtained EGL display from GBM: 0x{Display:X}", _eglDisplay);
 
         // Initialize EGL
         if (!NativeEgl.Initialize(_eglDisplay, out int major, out int minor))
         {
             var error = NativeEgl.GetError();
             var errorMsg = NativeEgl.GetErrorString(error);
-        
-       _logger?.LogError("eglInitialize failed!");
-      _logger?.LogError("Error: {Error} (code: 0x{ErrorCode:X})", errorMsg, error);
-            _logger?.LogError("");
-    _logger?.LogError("Possible causes:");
-  _logger?.LogError("  1. Missing EGL/OpenGL ES drivers");
-   _logger?.LogError("  2. User not in 'video' or 'render' group");
-_logger?.LogError("  3. Missing packages: libgl1-mesa-dev, libgles2-mesa-dev");
-            _logger?.LogError("");
-            _logger?.LogError("Try running the diagnostic script:");
-  _logger?.LogError("  bash check-egl.sh");
- 
+
+            _logger?.LogError("eglInitialize failed!");
+            _logger?.LogError("Error: {Error} (code: 0x{ErrorCode:X})", errorMsg, error);
+
+            NativeGbm.DestroyDevice(_gbmDevice);
+            SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception($"Failed to initialize EGL: {errorMsg} (error code: 0x{error:X})");
         }
 
-        _logger?.LogInformation("? EGL initialized: version {Major}.{Minor}", major, minor);
+        _logger?.LogInformation("✓ EGL initialized: version {Major}.{Minor}", major, minor);
 
-        // Choose config
+        // Log EGL information (following kmscube)
+        var eglVendorPtr = NativeEgl.QueryString(_eglDisplay, NativeEgl.EGL_VENDOR);
+        var eglVersionPtr = NativeEgl.QueryString(_eglDisplay, NativeEgl.EGL_VERSION);
+        var eglExtensionsPtr = NativeEgl.QueryString(_eglDisplay, NativeEgl.EGL_EXTENSIONS);
+
+        if (eglVendorPtr != 0)
+        {
+            var eglVendor = Marshal.PtrToStringAnsi(eglVendorPtr);
+            _logger?.LogDebug("EGL vendor: {Vendor}", eglVendor);
+        }
+        if (eglVersionPtr != 0)
+        {
+            var eglVersion = Marshal.PtrToStringAnsi(eglVersionPtr);
+            _logger?.LogDebug("EGL version: {Version}", eglVersion);
+        }
+        if (eglExtensionsPtr != 0)
+        {
+            var eglExtensions = Marshal.PtrToStringAnsi(eglExtensionsPtr);
+            _logger?.LogDebug("EGL extensions: {Extensions}", eglExtensions);
+        }
+
+        // Choose config (following kmscube approach)
         int[] configAttribs =
         [
-            NativeEgl.EGL_RED_SIZE, 8,
-            NativeEgl.EGL_GREEN_SIZE, 8,
-            NativeEgl.EGL_BLUE_SIZE, 8,
-            NativeEgl.EGL_ALPHA_SIZE, 8,
-            NativeEgl.EGL_DEPTH_SIZE, 0,
-            NativeEgl.EGL_STENCIL_SIZE, 0,
-            NativeEgl.EGL_SURFACE_TYPE, NativeEgl.EGL_PBUFFER_BIT,
-            NativeEgl.EGL_RENDERABLE_TYPE, NativeEgl.EGL_OPENGL_ES3_BIT,
+            NativeEgl.EGL_SURFACE_TYPE, NativeEgl.EGL_WINDOW_BIT,
+            NativeEgl.EGL_RED_SIZE, 1,
+            NativeEgl.EGL_GREEN_SIZE, 1,
+            NativeEgl.EGL_BLUE_SIZE, 1,
+            NativeEgl.EGL_ALPHA_SIZE, 0,
+            NativeEgl.EGL_RENDERABLE_TYPE, NativeEgl.EGL_OPENGL_ES2_BIT,
+            NativeEgl.EGL_SAMPLES, 0,
             NativeEgl.EGL_NONE
         ];
 
-        nint[] configs = new nint[1];
-        fixed (int* attribsPtr = configAttribs)
-        fixed (nint* configsPtr = configs)
-        {
-            if (!NativeEgl.ChooseConfig(_eglDisplay, attribsPtr, configsPtr, 1, out int numConfigs) || numConfigs == 0)
-            {
-                var error = NativeEgl.GetError();
-                throw new Exception($"Failed to choose EGL config: {NativeEgl.GetErrorString(error)}");
-            }
-        }
-
-        var config = configs[0];
+        var config = ChooseConfigMatchingVisual(_eglDisplay, configAttribs, NativeGbm.GBM_FORMAT_XRGB8888);
         _logger?.LogInformation("EGL config chosen");
 
         // Bind OpenGL ES API
@@ -115,11 +160,10 @@ _logger?.LogError("  3. Missing packages: libgl1-mesa-dev, libgles2-mesa-dev");
             throw new Exception($"Failed to bind OpenGL ES API: {NativeEgl.GetErrorString(error)}");
         }
 
-        // Create context
+        // Create context (OpenGL ES 2.0, matching kmscube)
         int[] contextAttribs =
         [
-            NativeEgl.EGL_CONTEXT_MAJOR_VERSION, 3,
-            NativeEgl.EGL_CONTEXT_MINOR_VERSION, 0,
+            NativeEgl.EGL_CONTEXT_CLIENT_VERSION, 2,
             NativeEgl.EGL_NONE
         ];
 
@@ -135,25 +179,15 @@ _logger?.LogError("  3. Missing packages: libgl1-mesa-dev, libgles2-mesa-dev");
 
         _logger?.LogInformation("EGL context created");
 
-        // Create small dummy pbuffer surface (required to make context current)
-        int[] surfaceAttribs =
-        [
-            NativeEgl.EGL_WIDTH, 16,
-            NativeEgl.EGL_HEIGHT, 16,
-            NativeEgl.EGL_NONE
-        ];
-
-        fixed (int* surfaceAttribsPtr = surfaceAttribs)
+        // Create EGL window surface from GBM surface (following kmscube approach)
+        _eglDummySurface = NativeEgl.CreateWindowSurface(_eglDisplay, config, _gbmSurface, null);
+        if (_eglDummySurface == 0 || _eglDummySurface == NativeEgl.EGL_NO_SURFACE)
         {
-            _eglDummySurface = NativeEgl.CreatePbufferSurface(_eglDisplay, config, surfaceAttribsPtr);
-            if (_eglDummySurface == 0)
-            {
-                var error = NativeEgl.GetError();
-                throw new Exception($"Failed to create pbuffer surface: {NativeEgl.GetErrorString(error)}");
-            }
+            var error = NativeEgl.GetError();
+            throw new Exception($"Failed to create EGL window surface: {NativeEgl.GetErrorString(error)}");
         }
 
-        _logger?.LogInformation("EGL dummy pbuffer surface created");
+        _logger?.LogInformation("EGL window surface created from GBM surface");
 
         // Make context current
         if (!NativeEgl.MakeCurrent(_eglDisplay, _eglDummySurface, _eglDummySurface, _eglContext))
@@ -206,83 +240,140 @@ _logger?.LogError("  3. Missing packages: libgl1-mesa-dev, libgles2-mesa-dev");
     }
 
     /// <summary>
-    /// Tries multiple strategies to get an EGL display
+    /// Opens a DRM render device (following kmscube approach)
     /// </summary>
-    private nint GetEglDisplayWithFallback()
+    private int OpenDrmDevice()
     {
-    // Strategy 1: Try default display (works if DISPLAY is set)
-        _logger?.LogDebug("Strategy 1: Trying EGL_DEFAULT_DISPLAY...");
-        var display = NativeEgl.GetDisplay(NativeEgl.EGL_DEFAULT_DISPLAY);
-        if (display != 0)
+        // Try render nodes first (preferred for pure GPU operations)
+        for (int i = 128; i < 192; i++)
         {
-  _logger?.LogInformation("? Got display using EGL_DEFAULT_DISPLAY");
- return display;
-        }
-        _logger?.LogDebug("? EGL_DEFAULT_DISPLAY failed: {Error}", 
-        NativeEgl.GetErrorString(NativeEgl.GetError()));
+            var devicePath = $"/dev/dri/renderD{i}";
+            var fd = SharpVideo.Linux.Native.Libc.open(
+                devicePath,
+                SharpVideo.Linux.Native.OpenFlags.O_RDWR | SharpVideo.Linux.Native.OpenFlags.O_CLOEXEC);
 
-        // Strategy 2: Try explicitly with NULL (same as default, but explicit)
-  _logger?.LogDebug("Strategy 2: Trying eglGetDisplay(NULL)...");
-        display = NativeEgl.GetDisplay(nint.Zero);
-  if (display != 0)
-        {
-            _logger?.LogInformation("? Got display using explicit NULL");
-    return display;
-        }
-   _logger?.LogDebug("? eglGetDisplay(NULL) failed: {Error}",
-     NativeEgl.GetErrorString(NativeEgl.GetError()));
-
-        // Strategy 3: Try EGL platform extensions (if available)
-        _logger?.LogDebug("Strategy 3: Trying eglGetPlatformDisplayEXT...");
-   var getPlatformDisplay = NativeEgl.GetProcAddress("eglGetPlatformDisplayEXT");
-      if (getPlatformDisplay != 0)
-        {
-            var eglGetPlatformDisplayEXT = 
-     Marshal.GetDelegateForFunctionPointer<NativeEgl.EglGetPlatformDisplayEXT>(getPlatformDisplay);
-
-          // Try GBM platform (for DRM/KMS direct rendering)
-    _logger?.LogDebug("  Trying EGL_PLATFORM_GBM_KHR...");
-   display = eglGetPlatformDisplayEXT(NativeEgl.EGL_PLATFORM_GBM_KHR, nint.Zero, null);
- if (display != 0)
-     {
- _logger?.LogInformation("? Got display using GBM platform");
-            return display;
-      }
-
-            // Try device platform
-            _logger?.LogDebug("  Trying EGL_PLATFORM_DEVICE_EXT...");
-            display = eglGetPlatformDisplayEXT(NativeEgl.EGL_PLATFORM_DEVICE_EXT, nint.Zero, null);
-      if (display != 0)
+            if (fd >= 0)
             {
-      _logger?.LogInformation("? Got display using device platform");
- return display;
-  }
-  }
-     else
-        {
- _logger?.LogDebug("? eglGetPlatformDisplayEXT not available");
- }
+                _logger?.LogDebug("Opened DRM render device: {DevicePath}", devicePath);
+                return fd;
+            }
+        }
 
-        _logger?.LogError("All strategies to get EGL display failed!");
-        _logger?.LogError("Make sure:");
- _logger?.LogError("  - EGL/OpenGL ES drivers are installed");
-  _logger?.LogError("  - You have permissions to access GPU (/dev/dri/*)");
-        _logger?.LogError("  - libEGL.so.1 and libGLESv2.so.2 are available");
- 
-   return 0;
+        // Fallback to card0 if no render node available
+        var cardPath = "/dev/dri/card0";
+        var cardFd = SharpVideo.Linux.Native.Libc.open(
+            cardPath,
+            SharpVideo.Linux.Native.OpenFlags.O_RDWR | SharpVideo.Linux.Native.OpenFlags.O_CLOEXEC);
+
+        if (cardFd >= 0)
+        {
+            _logger?.LogDebug("Opened DRM card device: {DevicePath}", cardPath);
+            return cardFd;
+        }
+
+        _logger?.LogError("Failed to open any DRM device");
+        return -1;
+    }
+
+    /// <summary>
+    /// Chooses an EGL config matching the GBM visual format (following kmscube approach)
+    /// </summary>
+    private nint ChooseConfigMatchingVisual(nint display, int[] attribs, uint visualId)
+    {
+        // First, get all configs matching our requirements
+        fixed (int* attribsPtr = attribs)
+        {
+            if (!NativeEgl.ChooseConfig(display, attribsPtr, null, 0, out int count) || count == 0)
+            {
+                var error = NativeEgl.GetError();
+                throw new Exception($"No EGL configs available: {NativeEgl.GetErrorString(error)}");
+            }
+
+            var configs = new nint[count];
+            fixed (nint* configsPtr = configs)
+            {
+                if (!NativeEgl.ChooseConfig(display, attribsPtr, configsPtr, count, out int matched) || matched == 0)
+                {
+                    var error = NativeEgl.GetError();
+                    throw new Exception($"No EGL configs with appropriate attributes: {NativeEgl.GetErrorString(error)}");
+                }
+
+                // Try to find a config with matching NATIVE_VISUAL_ID
+                for (int i = 0; i < matched; i++)
+                {
+                    if (NativeEgl.GetConfigAttrib(display, configs[i], NativeEgl.EGL_NATIVE_VISUAL_ID, out int id))
+                    {
+                        if ((uint)id == visualId)
+                        {
+                            _logger?.LogDebug("Found EGL config matching visual ID 0x{VisualId:X}", visualId);
+                            return configs[i];
+                        }
+                    }
+                }
+
+                // If no exact match, just use the first config
+                _logger?.LogDebug("No exact visual match found, using first config");
+                return configs[0];
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets EGL display from GBM device (following kmscube approach)
+    /// </summary>
+    private nint GetEglDisplayFromGbm(nint gbmDevice)
+    {
+        // Query client extensions first (before display is created)
+        var clientExtPtr = NativeEgl.QueryString(NativeEgl.EGL_NO_DISPLAY, NativeEgl.EGL_EXTENSIONS);
+        string? clientExtensions = null;
+        if (clientExtPtr != 0)
+        {
+            clientExtensions = Marshal.PtrToStringAnsi(clientExtPtr);
+            _logger?.LogDebug("EGL client extensions: {Extensions}", clientExtensions);
+        }
+
+        // Try eglGetPlatformDisplayEXT if available (preferred method)
+        if (clientExtensions?.Contains("EGL_EXT_platform_base") == true)
+        {
+            _logger?.LogDebug("EGL_EXT_platform_base is available, using eglGetPlatformDisplayEXT");
+
+            var getPlatformDisplayPtr = NativeEgl.GetProcAddress("eglGetPlatformDisplayEXT");
+            if (getPlatformDisplayPtr != 0)
+            {
+                var eglGetPlatformDisplayEXT =
+                    Marshal.GetDelegateForFunctionPointer<NativeEgl.EglGetPlatformDisplayEXT>(getPlatformDisplayPtr);
+
+                var display = eglGetPlatformDisplayEXT(NativeEgl.EGL_PLATFORM_GBM_KHR, gbmDevice, null);
+                if (display != 0 && display != NativeEgl.EGL_NO_DISPLAY)
+                {
+                    _logger?.LogInformation("✓ Got EGL display using eglGetPlatformDisplayEXT with GBM platform");
+                    return display;
+                }
+            }
+        }
+
+        // Fallback to eglGetDisplay with GBM device cast to EGLNativeDisplayType
+        _logger?.LogDebug("Falling back to eglGetDisplay with GBM device");
+        var fallbackDisplay = NativeEgl.GetDisplay(gbmDevice);
+        if (fallbackDisplay != 0 && fallbackDisplay != NativeEgl.EGL_NO_DISPLAY)
+        {
+            _logger?.LogInformation("✓ Got EGL display using eglGetDisplay with GBM device");
+            return fallbackDisplay;
+        }
+
+        _logger?.LogError("Failed to get EGL display from GBM device");
+        return 0;
     }
 
     private uint CreateShaderProgram()
     {
-        const string vertexShaderSource = @"#version 300 es
-precision mediump float;
-
-layout(location = 0) in vec3 aPosition;
-layout(location = 1) in vec3 aColor;
+        const string vertexShaderSource = @"
+attribute vec3 aPosition;
+attribute vec3 aColor;
 
 uniform mat4 uTransform;
 
-out vec3 vColor;
+varying vec3 vColor;
 
 void main()
 {
@@ -290,15 +381,14 @@ void main()
     vColor = aColor;
 }";
 
-        const string fragmentShaderSource = @"#version 300 es
+        const string fragmentShaderSource = @"
 precision mediump float;
 
-in vec3 vColor;
-out vec4 FragColor;
+varying vec3 vColor;
 
 void main()
 {
-    FragColor = vec4(vColor, 0.75); // 75% opacity for compositing
+    gl_FragColor = vec4(vColor, 0.75); // 75% opacity for compositing
 }";
 
         // Compile vertex shader
@@ -550,6 +640,27 @@ void main()
         NativeEgl.Terminate(_eglDisplay);
 
         _gl.Dispose();
+
+        // Cleanup GBM surface
+        if (_gbmSurface != 0)
+        {
+            NativeGbm.DestroySurface(_gbmSurface);
+            _logger?.LogDebug("Destroyed GBM surface");
+        }
+
+        // Cleanup GBM device
+        if (_gbmDevice != 0)
+        {
+            NativeGbm.DestroyDevice(_gbmDevice);
+            _logger?.LogDebug("Destroyed GBM device");
+        }
+
+        // Close DRM file descriptor
+        if (_drmFd >= 0)
+        {
+            SharpVideo.Linux.Native.Libc.close(_drmFd);
+            _logger?.LogDebug("Closed DRM file descriptor");
+        }
 
         _logger?.LogInformation("OpenGL ES renderer disposed");
     }
