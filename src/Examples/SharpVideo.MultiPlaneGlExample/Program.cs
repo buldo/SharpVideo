@@ -26,13 +26,7 @@ internal class Program
 
     static void Main(string[] args)
     {
-        Logger.LogInformation("=== Multi-Plane OpenGL ES Compositing Demo ===");
-        Logger.LogInformation("This demo shows hardware-accelerated OpenGL ES rendering with DMA-BUF");
-        Logger.LogInformation("Primary plane: OpenGL ES rendered triangle (ARGB8888) - Direct GPU rendering!");
-        Logger.LogInformation("Overlay plane: NV12 color bars");
-        Logger.LogInformation("");
-        Logger.LogInformation("** ZERO-COPY RENDERING **");
-        Logger.LogInformation("GPU renders directly to DMA-BUF, which is scanned out by display hardware!");
+        System.Environment.SetEnvironmentVariable("EGL_PLATFORM", "drm");
 
         var drmDevice = DrmUtils.OpenDrmDevice(Logger);
         drmDevice.EnableDrmCapabilities(Logger);
