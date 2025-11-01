@@ -71,8 +71,8 @@ namespace SharpVideo.MultiPlaneExample
         private static void RunDemo(DrmPresenter presenter, DrmBufferManager bufferManager)
         {
             // Get zpos ranges for both planes
-            var primaryZposRange = presenter.GetPlaneZPositionRange(presenter.GetPrimaryPlaneId());
-            var overlayZposRange = presenter.GetPlaneZPositionRange(presenter.GetOverlayPlaneId());
+            var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
+            var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
 
             if (primaryZposRange.HasValue)
             {
@@ -105,8 +105,8 @@ namespace SharpVideo.MultiPlaneExample
                 Logger.LogInformation("Attempting to set Primary zpos={PrimaryZpos}, Overlay zpos={OverlayZpos}",
                     primaryZpos, overlayZpos);
 
-                var primarySuccess = presenter.SetPlaneZPosition(presenter.GetPrimaryPlaneId(), primaryZpos);
-                var overlaySuccess = presenter.SetPlaneZPosition(presenter.GetOverlayPlaneId(), overlayZpos);
+                var primarySuccess = presenter.PrimaryPlane.SetPlaneZPosition(primaryZpos);
+                var overlaySuccess = presenter.OverlayPlane.SetPlaneZPosition(overlayZpos);
 
                 if (primarySuccess && overlaySuccess)
                 {

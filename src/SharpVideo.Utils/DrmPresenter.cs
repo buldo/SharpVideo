@@ -19,8 +19,6 @@ public class DrmPresenter
     private readonly uint _height;
     private readonly uint _crtcId;
     private readonly AtomicDisplayManager? _atomicDisplayManager;
-    private readonly DrmPlane _primaryPlane;
-    private readonly DrmPlane _overlayPlane;
     private readonly AtomicPlaneUpdater? _atomicUpdater;
 
     private SharedDmaBuffer? _currentFrame;
@@ -44,8 +42,8 @@ public class DrmPresenter
         ILogger logger)
     {
         _device = device;
-        _primaryPlane = primaryPlane;
-        _overlayPlane = overlayPlane;
+        PrimaryPlane = primaryPlane;
+        OverlayPlane = overlayPlane;
         _crtcId = crtcId;
         _bufferManager = bufferManager;
         _atomicUpdater = atomicUpdater;
@@ -61,15 +59,8 @@ public class DrmPresenter
 
     public bool TimestampMonotonic => _capabilities.TimestampMonotonic;
 
-    /// <summary>
-    /// Gets the ID of the primary plane
-    /// </summary>
-    public uint GetPrimaryPlaneId() => _primaryPlane.Id;
-
-    /// <summary>
-    /// Gets the ID of the overlay plane
-    /// </summary>
-    public uint GetOverlayPlaneId() => _overlayPlane.Id;
+    public DrmPlane PrimaryPlane { get; }
+    public DrmPlane OverlayPlane { get; }
 
     public static DrmPresenter? Create(
         DrmDevice drmDevice,
@@ -176,16 +167,16 @@ public class DrmPresenter
             logger.LogInformation(
                 "Using atomic modesetting with VBlank synchronization (async page flip not supported)");
 
-            var fbIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "FB_ID");
-            var crtcIdPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_ID");
-            var crtcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_X");
-            var crtcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_Y");
-            var crtcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_W");
-            var crtcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "CRTC_H");
-            var srcXPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_X");
-            var srcYPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_Y");
-            var srcWPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_W");
-            var srcHPropertyId = GetPlanePropertyId(drmDevice.DeviceFd, overlayPlane.Id, "SRC_H");
+            var fbIdPropertyId = overlayPlane.GetPlanePropertyId("FB_ID");
+            var crtcIdPropertyId = overlayPlane.GetPlanePropertyId("CRTC_ID");
+            var crtcXPropertyId = overlayPlane.GetPlanePropertyId("CRTC_X");
+            var crtcYPropertyId = overlayPlane.GetPlanePropertyId("CRTC_Y");
+            var crtcWPropertyId = overlayPlane.GetPlanePropertyId("CRTC_W");
+            var crtcHPropertyId = overlayPlane.GetPlanePropertyId("CRTC_H");
+            var srcXPropertyId = overlayPlane.GetPlanePropertyId("SRC_X");
+            var srcYPropertyId = overlayPlane.GetPlanePropertyId("SRC_Y");
+            var srcWPropertyId = overlayPlane.GetPlanePropertyId("SRC_W");
+            var srcHPropertyId = overlayPlane.GetPlanePropertyId("SRC_H");
 
             if (fbIdPropertyId == 0 || crtcIdPropertyId == 0 ||
                 crtcXPropertyId == 0 || crtcYPropertyId == 0 ||
@@ -308,87 +299,6 @@ public class DrmPresenter
     }
 
     /// <summary>
-    /// Sets the z-position property for a plane to control layering order.
-    /// Lower z-pos values are displayed behind higher values.
-    /// </summary>
-    public bool SetPlaneZPosition(uint planeId, ulong zpos)
-    {
-        var zposPropertyId = GetPlanePropertyId(_device.DeviceFd, planeId, "zpos");
-        if (zposPropertyId == 0)
-        {
-            _logger.LogWarning("Plane {PlaneId} does not have zpos property", planeId);
-            return false;
-        }
-
-        var result = LibDrm.drmModeObjectSetProperty(
-            _device.DeviceFd,
-            planeId,
-            LibDrm.DRM_MODE_OBJECT_PLANE,
-            zposPropertyId,
-            zpos);
-
-        if (result != 0)
-        {
-            _logger.LogError("Failed to set zpos={Zpos} for plane {PlaneId}: {Result}", zpos, planeId, result);
-            return false;
-        }
-
-        _logger.LogInformation("Set plane {PlaneId} zpos to {Zpos}", planeId, zpos);
-        return true;
-    }
-
-    /// <summary>
-    /// Gets the valid range for the zpos property of a plane.
-    /// Returns (min, max, current) or null if zpos is not supported.
-    /// </summary>
-    public unsafe (ulong min, ulong max, ulong current)? GetPlaneZPositionRange(uint planeId)
-    {
-        var props = LibDrm.drmModeObjectGetProperties(_device.DeviceFd, planeId, LibDrm.DRM_MODE_OBJECT_PLANE);
-        if (props == null)
-            return null;
-
-        try
-        {
-            for (int i = 0; i < props->CountProps; i++)
-            {
-                var propId = props->Props[i];
-                var prop = LibDrm.drmModeGetProperty(_device.DeviceFd, propId);
-                if (prop == null)
-                    continue;
-
-                try
-                {
-                    var name = prop->NameString;
-                    if (name != null && name.Equals("zpos", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var currentValue = props->PropValues[i];
-
-                        // For range properties, values[0] is min and values[1] is max
-                        if (prop->CountValues >= 2)
-                        {
-                            var min = prop->Values[0];
-                            var max = prop->Values[1];
-                            _logger.LogDebug("Plane {PlaneId} zpos range: [{Min}, {Max}], current: {Current}",
-                                planeId, min, max, currentValue);
-                            return (min, max, currentValue);
-                        }
-                    }
-                }
-                finally
-                {
-                    LibDrm.drmModeFreeProperty(prop);
-                }
-            }
-        }
-        finally
-        {
-            LibDrm.drmModeFreeObjectProperties(props);
-        }
-
-        return null;
-    }
-
-    /// <summary>
     /// Gets the current back buffer for primary plane rendering.
     /// After filling, call SwapPrimaryPlaneBuffers() to present it.
     /// </summary>
@@ -424,7 +334,7 @@ public class DrmPresenter
         // Update the plane to show the back buffer
         var success = SetPlane(
             _device.DeviceFd,
-            _primaryPlane.Id,
+            PrimaryPlane.Id,
             _crtcId,
             _primaryBackBuffer.FramebufferId,
             _width,
@@ -466,7 +376,7 @@ public class DrmPresenter
 
         return SetPlane(
             _device.DeviceFd,
-            _overlayPlane.Id,
+            OverlayPlane.Id,
             _crtcId,
             drmBuffer.FramebufferId,
             drmBuffer.Width,
@@ -711,40 +621,4 @@ public class DrmPresenter
         return (fbId, handle);
     }
 
-    private static unsafe uint GetPlanePropertyId(int drmFd, uint planeId, string propertyName)
-    {
-        var props = LibDrm.drmModeObjectGetProperties(drmFd, planeId, LibDrm.DRM_MODE_OBJECT_PLANE);
-        if (props == null)
-            return 0;
-
-        try
-        {
-            for (int i = 0; i < props->CountProps; i++)
-            {
-                var propId = props->Props[i];
-                var prop = LibDrm.drmModeGetProperty(drmFd, propId);
-                if (prop == null)
-                    continue;
-
-                try
-                {
-                    var name = prop->NameString;
-                    if (name != null && name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return propId;
-                    }
-                }
-                finally
-                {
-                    LibDrm.drmModeFreeProperty(prop);
-                }
-            }
-        }
-        finally
-        {
-            LibDrm.drmModeFreeObjectProperties(props);
-        }
-
-        return 0;
-    }
 }
