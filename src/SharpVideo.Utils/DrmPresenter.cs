@@ -12,13 +12,16 @@ public class DrmPresenter
     private readonly List<SharedDmaBuffer> _processedBuffers = new();
     private readonly DrmDevice _device;
     private readonly DrmBufferManager _bufferManager;
-    private readonly DisplayContext _context;
     private readonly DrmCapabilitiesState _capabilities;
     private readonly ILogger _logger;
     private readonly PixelFormat _primaryPlanePixelFormat;
     private readonly uint _width;
     private readonly uint _height;
+    private readonly uint _crtcId;
     private readonly AtomicDisplayManager? _atomicDisplayManager;
+    private readonly DrmPlane _primaryPlane;
+    private readonly DrmPlane _overlayPlane;
+    private readonly AtomicPlaneUpdater? _atomicUpdater;
 
     private SharedDmaBuffer? _currentFrame;
     private SharedDmaBuffer _primaryFrontBuffer;
@@ -26,8 +29,11 @@ public class DrmPresenter
 
     private DrmPresenter(
         DrmDevice device,
+        DrmPlane primaryPlane,
+        DrmPlane overlayPlane,
+        uint crtcId,
         DrmBufferManager bufferManager,
-        DisplayContext context,
+        AtomicPlaneUpdater? atomicUpdater,
         DrmCapabilitiesState capabilities,
         PixelFormat primaryPlanePixelFormat,
         uint width,
@@ -38,8 +44,11 @@ public class DrmPresenter
         ILogger logger)
     {
         _device = device;
+        _primaryPlane = primaryPlane;
+        _overlayPlane = overlayPlane;
+        _crtcId = crtcId;
         _bufferManager = bufferManager;
-        _context = context;
+        _atomicUpdater = atomicUpdater;
         _capabilities = capabilities;
         _primaryPlanePixelFormat = primaryPlanePixelFormat;
         _width = width;
@@ -55,12 +64,12 @@ public class DrmPresenter
     /// <summary>
     /// Gets the ID of the primary plane
     /// </summary>
-    public uint GetPrimaryPlaneId() => _context.PrimaryPlane.Id;
+    public uint GetPrimaryPlaneId() => _primaryPlane.Id;
 
     /// <summary>
     /// Gets the ID of the overlay plane
     /// </summary>
-    public uint GetOverlayPlaneId() => _context.OverlayPlane.Id;
+    public uint GetOverlayPlaneId() => _overlayPlane.Id;
 
     public static DrmPresenter? Create(
         DrmDevice drmDevice,
@@ -280,21 +289,14 @@ public class DrmPresenter
             return null;
         }
 
-        var context = new DisplayContext
-        {
-            CrtcId = crtcId,
-            ConnectorId = connector.ConnectorId,
-            PrimaryPlane = primaryPlane,
-            OverlayPlane = overlayPlane,
-            OverlayFbId = 0,
-            AtomicUpdater = atomicUpdater,
-        };
-
         logger.LogInformation("Display setup complete with double buffering");
         return new DrmPresenter(
             drmDevice,
+            primaryPlane,
+            overlayPlane,
+            crtcId,
             bufferManager,
-            context,
+            atomicUpdater,
             capabilities,
             primaryPlanePixelFormat,
             width,
@@ -422,14 +424,14 @@ public class DrmPresenter
         // Update the plane to show the back buffer
         var success = SetPlane(
             _device.DeviceFd,
-            _context.PrimaryPlane.Id,
-            _context.CrtcId,
+            _primaryPlane.Id,
+            _crtcId,
             _primaryBackBuffer.FramebufferId,
             _width,
             _height,
             _width,
             _height,
-            _context.AtomicUpdater,
+            _atomicUpdater,
             _capabilities.AsyncPageFlip,
             _logger);
 
@@ -464,14 +466,14 @@ public class DrmPresenter
 
         return SetPlane(
             _device.DeviceFd,
-            _context.OverlayPlane.Id,
-            _context.CrtcId,
+            _overlayPlane.Id,
+            _crtcId,
             drmBuffer.FramebufferId,
             drmBuffer.Width,
             drmBuffer.Height,
             _width,
             _height,
-            _context.AtomicUpdater,
+            _atomicUpdater,
             _capabilities.AsyncPageFlip,
             _logger);
     }
@@ -594,19 +596,9 @@ public class DrmPresenter
             _primaryBackBuffer.DmaBuffer.UnmapBuffer();
             _primaryBackBuffer.Dispose();
 
-            if (_context.OverlayFbId != 0)
+            if (_atomicUpdater != null)
             {
-                var result = LibDrm.drmModeRmFB(_device.DeviceFd, _context.OverlayFbId);
-                if (result != 0)
-                {
-                    _logger.LogWarning("Failed to remove overlay framebuffer {FbId}: {Result}",
-                        _context.OverlayFbId, result);
-                }
-            }
-
-            if (_context.AtomicUpdater != null)
-            {
-                _context.AtomicUpdater.Dispose();
+                _atomicUpdater.Dispose();
             }
         }
         catch (Exception ex)
@@ -754,15 +746,5 @@ public class DrmPresenter
         }
 
         return 0;
-    }
-
-    private class DisplayContext
-    {
-        public required uint CrtcId { get; init; }
-        public required uint ConnectorId { get; init; }
-        public required DrmPlane PrimaryPlane { get; init; }
-        public required DrmPlane OverlayPlane { get; init; }
-        public uint OverlayFbId { get; set; }
-        public AtomicPlaneUpdater? AtomicUpdater { get; set; }
     }
 }
