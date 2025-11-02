@@ -105,9 +105,9 @@ public class Player
                     Statistics.PresentedFrames + 1, _buffersToPresent.Count);
             }
 
-            _presenter.SetOverlayPlaneBuffer(buffer);
+            _presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(buffer);
             Statistics.IncrementPresentedFrames();
-            var toRequeue = _presenter.GetPresentedOverlayBuffers();
+            var toRequeue = _presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers();
 
             // Batch requeue for better performance
             for (int i = 0; i < toRequeue.Length; i++)

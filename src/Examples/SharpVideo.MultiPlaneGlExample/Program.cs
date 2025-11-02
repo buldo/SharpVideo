@@ -139,21 +139,19 @@ internal class Program
         Logger.LogInformation("Using EGL + DMA-BUF extensions for zero-copy rendering");
         using var glRenderer = new GlRenderer(Width, Height, Logger);
         Logger.LogInformation("OpenGL ES renderer initialized successfully!");
-        Logger.LogInformation("");
 
         // Present initial overlay buffer
-        presenter.SetOverlayPlaneBuffer(overlayBuffers[0]);
+        presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(overlayBuffers[0]);
 
         Logger.LogInformation("Starting frame presentation ({FrameCount} frames)...", FrameCount);
         Logger.LogInformation("GPU renders directly to DMA-BUF -> Display hardware scans out -> ZERO COPIES!");
-        Logger.LogInformation("");
 
         var currentOverlayIndex = 0;
 
         for (int frame = 0; frame < FrameCount; frame++)
         {
             // Get the current back buffer DMA-BUF for GPU rendering
-            var primaryDmaBuffer = presenter.GetPrimaryPlaneBackBufferDma();
+            var primaryDmaBuffer = presenter.PrimaryPlanePresenter.GetPrimaryPlaneBackBufferDma();
 
 // Render OpenGL ES content directly to the DMA buffer (ZERO-COPY!)
             // The GPU writes directly to the buffer that the display hardware will scan out
@@ -161,7 +159,7 @@ internal class Program
 
             // Present the primary plane (swap buffers)
             // This just tells the display hardware to switch to the newly rendered buffer
-            if (!presenter.SwapPrimaryPlaneBuffers())
+            if (!presenter.PrimaryPlanePresenter.SwapPrimaryPlaneBuffers())
             {
                 Logger.LogError("Failed to present primary plane at frame {Frame}", frame);
                 break;
@@ -169,10 +167,10 @@ internal class Program
 
             // Update overlay plane - cycle through buffers
             var currentBuffer = overlayBuffers[currentOverlayIndex];
-            presenter.SetOverlayPlaneBuffer(currentBuffer);
+            presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(currentBuffer);
 
 // Get completed buffers
-            var completed = presenter.GetPresentedOverlayBuffers();
+            var completed = presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers();
 
             // Simulate frame timing (30 fps = ~33ms per frame)
             Thread.Sleep(33);
@@ -188,7 +186,6 @@ internal class Program
             }
         }
 
-        Logger.LogInformation("");
         Logger.LogInformation("Frame presentation complete!");
         Logger.LogInformation("All {FrameCount} frames were rendered by GPU directly to DMA-BUF with ZERO copies!",
             FrameCount);

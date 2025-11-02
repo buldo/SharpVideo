@@ -139,11 +139,11 @@ namespace SharpVideo.MultiPlaneExample
             }
 
             // Fill primary plane with ARGB8888 test pattern (semi-transparent)
-            var primaryBuffer = presenter.GetPrimaryPlaneBackBuffer();
+            var primaryBuffer = presenter.PrimaryPlanePresenter.GetPrimaryPlaneBackBuffer();
             TestPattern.FillARGB8888(primaryBuffer, Width, Height);
 
             // Present the primary plane
-            if (!presenter.SwapPrimaryPlaneBuffers())
+            if (!presenter.PrimaryPlanePresenter.SwapPrimaryPlaneBuffers())
             {
                 Logger.LogError("Failed to present primary plane");
                 return;
@@ -157,10 +157,10 @@ namespace SharpVideo.MultiPlaneExample
             {
                 // Update overlay plane - cycle through buffers to demonstrate buffer management
                 var currentBuffer = overlayBuffers[currentOverlayIndex];
-                presenter.SetOverlayPlaneBuffer(currentBuffer);
+                presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(currentBuffer);
 
                 // Get completed buffers
-                var completed = presenter.GetPresentedOverlayBuffers();
+                var completed = presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers();
 
                 // Simulate frame timing (30 fps = ~33ms per frame)
                 Thread.Sleep(33);
