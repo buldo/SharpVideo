@@ -15,9 +15,13 @@
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.8" />
     <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
     <PackageReference Condition="'$(Configuration)' == 'Debug'" Include="Avalonia.Diagnostics" Version="11.3.8" />
+
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0-rc.2.25502.107" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0-rc.2.25502.107" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Examples\SharpVideo.Avalonia.LinuxFramebuffer\SharpVideo.Avalonia.LinuxFramebuffer.csproj" />
+    <ProjectReference Include="..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
   </ItemGroup>
 </Project>
