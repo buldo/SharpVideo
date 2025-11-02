@@ -3,9 +3,9 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Silk.NET.OpenGLES;
 using Microsoft.Extensions.Logging;
-using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
-using SharpVideo.Linux.Native.C;
+using SharpVideo.Gbm;
+using SharpVideo.Linux.Native.Gbm;
 using SharpVideo.Utils;
 
 namespace SharpVideo.MultiPlaneGlExample;
@@ -19,13 +19,12 @@ public unsafe class GlRenderer : IDisposable
 {
     private readonly ILogger? _logger;
     private readonly GL _gl;
-    private readonly DrmDevice _drmDevice;
     private readonly int _width;
     private readonly int _height;
 
     // GBM device and surface
-    private readonly nint _gbmDevice;
-    private readonly nint _gbmSurface;
+    private readonly GbmDevice _gbmDevice;
+    private readonly GbmSurface _gbmSurface;
 
     // EGL context
     private readonly nint _eglDisplay;
@@ -51,44 +50,32 @@ public unsafe class GlRenderer : IDisposable
         DrmDevice drmDevice,
         int width,
         int height,
-        ILogger? logger = null)
+        ILogger logger)
     {
-        _drmDevice = drmDevice;
         _width = width;
         _height = height;
         _logger = logger;
 
-        _logger?.LogInformation("Initializing EGL and OpenGL ES context...");
+        _logger.LogInformation("Initializing EGL and OpenGL ES context...");
 
-        // Create GBM device from DRM fd (following kmscube approach)
-        _gbmDevice = LibGbm.CreateDevice(_drmDevice.DeviceFd);
-        if (_gbmDevice == 0)
-        {
-            throw new Exception("Failed to create GBM device");
-        }
-        _logger?.LogDebug("Created GBM device: 0x{Device:X}", _gbmDevice);
+        _gbmDevice = GbmDevice.CreateFromDrmDevice(drmDevice);
+        _logger.LogDebug("Created GBM device: 0x{Device:X}", _gbmDevice.Fd);
 
         // Create GBM surface for rendering (following kmscube approach)
-        _gbmSurface = LibGbm.CreateSurface(
-            _gbmDevice,
+        _gbmSurface = _gbmDevice.CreateSurface(
             (uint)width,
             (uint)height,
-            LibGbm.GBM_FORMAT_XRGB8888,
-            LibGbm.GBM_BO_USE_SCANOUT | LibGbm.GBM_BO_USE_RENDERING);
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,
+            GbmBoUse.GBM_BO_USE_SCANOUT | GbmBoUse.GBM_BO_USE_RENDERING);
 
-        if (_gbmSurface == 0)
-        {
-            LibGbm.DestroyDevice(_gbmDevice);
-            throw new Exception("Failed to create GBM surface");
-        }
-        _logger?.LogDebug("Created GBM surface: 0x{Surface:X}", _gbmSurface);
+        _logger?.LogDebug("Created GBM surface: 0x{Surface:X}", _gbmSurface.Fd);
 
         // Get EGL display using GBM platform (kmscube approach)
         _eglDisplay = GetEglDisplayFromGbm(_gbmDevice);
 
         if (_eglDisplay == 0 || _eglDisplay == NativeEgl.EGL_NO_DISPLAY)
         {
-            LibGbm.DestroyDevice(_gbmDevice);
+            _gbmDevice.Dispose();
             throw new Exception("Failed to get EGL display from GBM device");
         }
 
@@ -103,7 +90,7 @@ public unsafe class GlRenderer : IDisposable
             _logger?.LogError("eglInitialize failed!");
             _logger?.LogError("Error: {Error} (code: 0x{ErrorCode:X})", errorMsg, error);
 
-            LibGbm.DestroyDevice(_gbmDevice);
+            _gbmDevice.Dispose();
             throw new Exception($"Failed to initialize EGL: {errorMsg} (error code: 0x{error:X})");
         }
 
@@ -119,11 +106,13 @@ public unsafe class GlRenderer : IDisposable
             var eglVendor = Marshal.PtrToStringAnsi(eglVendorPtr);
             _logger?.LogDebug("EGL vendor: {Vendor}", eglVendor);
         }
+
         if (eglVersionPtr != 0)
         {
             var eglVersion = Marshal.PtrToStringAnsi(eglVersionPtr);
             _logger?.LogDebug("EGL version: {Version}", eglVersion);
         }
+
         if (eglExtensionsPtr != 0)
         {
             var eglExtensions = Marshal.PtrToStringAnsi(eglExtensionsPtr);
@@ -143,7 +132,8 @@ public unsafe class GlRenderer : IDisposable
             NativeEgl.EGL_NONE
         ];
 
-        var config = ChooseConfigMatchingVisual(_eglDisplay, configAttribs, LibGbm.GBM_FORMAT_XRGB8888);
+        var config =
+            ChooseConfigMatchingVisual(_eglDisplay, configAttribs, KnownPixelFormats.DRM_FORMAT_XRGB8888.Fourcc);
         _logger?.LogInformation("EGL config chosen");
 
         // Bind OpenGL ES API
@@ -173,7 +163,7 @@ public unsafe class GlRenderer : IDisposable
         _logger?.LogInformation("EGL context created");
 
         // Create EGL window surface from GBM surface (following kmscube approach)
-        _eglDummySurface = NativeEgl.CreateWindowSurface(_eglDisplay, config, _gbmSurface, null);
+        _eglDummySurface = NativeEgl.CreateWindowSurface(_eglDisplay, config, _gbmSurface.Fd, null);
         if (_eglDummySurface == 0 || _eglDummySurface == NativeEgl.EGL_NO_SURFACE)
         {
             var error = NativeEgl.GetError();
@@ -252,7 +242,8 @@ public unsafe class GlRenderer : IDisposable
                 if (!NativeEgl.ChooseConfig(display, attribsPtr, configsPtr, count, out int matched) || matched == 0)
                 {
                     var error = NativeEgl.GetError();
-                    throw new Exception($"No EGL configs with appropriate attributes: {NativeEgl.GetErrorString(error)}");
+                    throw new Exception(
+                        $"No EGL configs with appropriate attributes: {NativeEgl.GetErrorString(error)}");
                 }
 
                 // Try to find a config with matching NATIVE_VISUAL_ID
@@ -278,7 +269,7 @@ public unsafe class GlRenderer : IDisposable
     /// <summary>
     /// Gets EGL display from GBM device (following kmscube approach)
     /// </summary>
-    private nint GetEglDisplayFromGbm(nint gbmDevice)
+    private nint GetEglDisplayFromGbm(GbmDevice gbmDevice)
     {
         // Query client extensions first (before display is created)
         var clientExtPtr = NativeEgl.QueryString(NativeEgl.EGL_NO_DISPLAY, NativeEgl.EGL_EXTENSIONS);
@@ -300,7 +291,7 @@ public unsafe class GlRenderer : IDisposable
                 var eglGetPlatformDisplayEXT =
                     Marshal.GetDelegateForFunctionPointer<NativeEgl.EglGetPlatformDisplayEXT>(getPlatformDisplayPtr);
 
-                var display = eglGetPlatformDisplayEXT(NativeEgl.EGL_PLATFORM_GBM_KHR, gbmDevice, null);
+                var display = eglGetPlatformDisplayEXT(NativeEgl.EGL_PLATFORM_GBM_KHR, gbmDevice.Fd, null);
                 if (display != 0 && display != NativeEgl.EGL_NO_DISPLAY)
                 {
                     _logger?.LogInformation("✓ Got EGL display using eglGetPlatformDisplayEXT with GBM platform");
@@ -311,7 +302,7 @@ public unsafe class GlRenderer : IDisposable
 
         // Fallback to eglGetDisplay with GBM device cast to EGLNativeDisplayType
         _logger?.LogDebug("Falling back to eglGetDisplay with GBM device");
-        var fallbackDisplay = NativeEgl.GetDisplay(gbmDevice);
+        var fallbackDisplay = NativeEgl.GetDisplay(gbmDevice.Fd);
         if (fallbackDisplay != 0 && fallbackDisplay != NativeEgl.EGL_NO_DISPLAY)
         {
             _logger?.LogInformation("✓ Got EGL display using eglGetDisplay with GBM device");
@@ -599,18 +590,12 @@ void main()
         _gl.Dispose();
 
         // Cleanup GBM surface
-        if (_gbmSurface != 0)
-        {
-            LibGbm.DestroySurface(_gbmSurface);
-            _logger?.LogDebug("Destroyed GBM surface");
-        }
+        _gbmSurface?.Dispose();
+        _logger?.LogDebug("Destroyed GBM surface");
 
         // Cleanup GBM device
-        if (_gbmDevice != 0)
-        {
-            LibGbm.DestroyDevice(_gbmDevice);
-            _logger?.LogDebug("Destroyed GBM device");
-        }
+        _gbmDevice?.Dispose();
+        _logger?.LogDebug("Destroyed GBM device");
 
         _logger?.LogInformation("OpenGL ES renderer disposed");
     }
