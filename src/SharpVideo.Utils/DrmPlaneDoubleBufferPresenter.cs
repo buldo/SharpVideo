@@ -30,56 +30,48 @@ public class DrmPlaneDoubleBufferPresenter : DrmSinglePlanePresenter
     {
         _bufferManager = bufferManager;
 
-        var primaryFrontBuffer = bufferManager.AllocateBuffer(width, height, primaryPlanePixelFormat);
-        primaryFrontBuffer.MapBuffer();
-        if (primaryFrontBuffer.MapStatus == MapStatus.FailedToMap)
+        _primaryFrontBuffer = bufferManager.AllocateBuffer(width, height, primaryPlanePixelFormat);
+        _primaryFrontBuffer.MapBuffer();
+        if (_primaryFrontBuffer.MapStatus == MapStatus.FailedToMap)
         {
-            primaryFrontBuffer.Dispose();
+            LocalCleanup();
             throw new Exception("Failed to map primary front buffer");
         }
 
-        var primaryBackBuffer = bufferManager.AllocateBuffer(width, height, primaryPlanePixelFormat);
-        primaryBackBuffer.MapBuffer();
-        if (primaryBackBuffer.MapStatus == MapStatus.FailedToMap)
+        _primaryBackBuffer = bufferManager.AllocateBuffer(width, height, primaryPlanePixelFormat);
+        _primaryBackBuffer.MapBuffer();
+        if (_primaryBackBuffer.MapStatus == MapStatus.FailedToMap)
         {
-            primaryBackBuffer.Dispose();
-            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
-            primaryFrontBuffer.Dispose();
+            LocalCleanup();
             throw new Exception("Failed to map primary back buffer");
         }
 
         // Initialize front buffer with black/transparent
-        primaryFrontBuffer.DmaBuffer.GetMappedSpan().Fill(0);
-        primaryFrontBuffer.DmaBuffer.SyncMap();
+        _primaryFrontBuffer.DmaBuffer.GetMappedSpan().Fill(0);
+        _primaryFrontBuffer.DmaBuffer.SyncMap();
 
         // Create framebuffer for front buffer
         var (primaryFbId, _) = CreateFramebuffer(
             drmDevice,
-            primaryFrontBuffer,
+            _primaryFrontBuffer,
             width,
             height,
             primaryPlanePixelFormat,
             logger);
         if (primaryFbId == 0)
         {
-            primaryBackBuffer.DmaBuffer.UnmapBuffer();
-            primaryBackBuffer.Dispose();
-            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
-            primaryFrontBuffer.Dispose();
+            LocalCleanup();
             throw new Exception();
         }
 
-        primaryFrontBuffer.FramebufferId = primaryFbId;
+        _primaryFrontBuffer.FramebufferId = primaryFbId;
         logger.LogInformation("Created primary plane double buffers");
 
         // Set CRTC mode with primary plane
         if (!SetCrtcMode(drmDevice, crtcId, connectorId, primaryFbId, mode, width, height, logger))
         {
             LibDrm.drmModeRmFB(drmDevice.DeviceFd, primaryFbId);
-            primaryBackBuffer.DmaBuffer.UnmapBuffer();
-            primaryBackBuffer.Dispose();
-            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
-            primaryFrontBuffer.Dispose();
+            LocalCleanup();
             throw new Exception("Failed to set crtc");
         }
 
@@ -87,11 +79,14 @@ public class DrmPlaneDoubleBufferPresenter : DrmSinglePlanePresenter
         if (!SetPlane(primaryFbId, width, height))
         {
             LibDrm.drmModeRmFB(drmDevice.DeviceFd, primaryFbId);
-            primaryBackBuffer.DmaBuffer.UnmapBuffer();
-            primaryBackBuffer.Dispose();
-            primaryFrontBuffer.DmaBuffer.UnmapBuffer();
-            primaryFrontBuffer.Dispose();
+            LocalCleanup();
             throw new Exception("Failed to set plane");
+        }
+
+        void LocalCleanup()
+        {
+            _primaryFrontBuffer?.Dispose();
+            _primaryBackBuffer?.Dispose();
         }
     }
 
