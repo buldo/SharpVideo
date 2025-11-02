@@ -10,6 +10,10 @@ using Avalonia.OpenGL;
 using Avalonia.OpenGL.Egl;
 using Avalonia.OpenGL.Surfaces;
 using Avalonia.Platform;
+using SharpVideo.Drm;
+using SharpVideo.Gbm;
+using SharpVideo.Linux.Native.Gbm;
+using SharpVideo.Utils;
 using static SharpVideo.Avalonia.LinuxFramebuffer.NativeUnsafeMethods;
 using static SharpVideo.Avalonia.LinuxFramebuffer.Output.LibDrm;
 
@@ -17,74 +21,29 @@ namespace SharpVideo.Avalonia.LinuxFramebuffer.Output;
 
 public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
 {
-    [DllImport("libEGL.so.1")]
-    static extern IntPtr eglGetProcAddress(string proc);
-
-    private DrmOutputOptions _outputOptions = new();
-    private DrmCard _card;
-
-    private GbmBoUserDataDestroyCallbackDelegate FbDestroyDelegate;
-    private drmModeModeInfo _mode;
+    private readonly DrmDevice _drmDevice;
+    private readonly DrmPlaneDoubleBufferPresenter _presenter;
+    private GbmSurface _gbmTargetSurface;
     private EglDisplay _eglDisplay;
     private EglSurface _eglSurface;
     private EglContext _deferredContext;
-    private IntPtr _currentBo;
-    private IntPtr _gbmTargetSurface;
-    private uint _crtcId;
+
+
+    [DllImport("libEGL.so.1")]
+    static extern IntPtr eglGetProcAddress(string proc);
 
     public SharpVideoDrmOutput(
-        DrmCard card,
-        bool connectorsForceProbe = false,
-        DrmOutputOptions? options = null)
+        DrmDevice drmDevice,
+        DrmPlaneDoubleBufferPresenter presenter)
     {
-        if (options != null)
-            _outputOptions = options;
-
-        var resources = card.GetResources(connectorsForceProbe);
-
-        IEnumerable<DrmConnector> connectors = resources.Connectors;
-
-        if (options?.ConnectorType is { } connectorType)
-        {
-            connectors = connectors.Where(c => c.ConnectorType == connectorType);
-        }
-
-        if (options?.ConnectorTypeId is { } connectorTypeId)
-        {
-            connectors = connectors.Where(c => c.ConnectorTypeId == connectorTypeId);
-        }
-
-        var connector =
-            connectors.FirstOrDefault(x => x.Connection == DrmModeConnection.DRM_MODE_CONNECTED);
-
-        if (connector == null)
-            throw new InvalidOperationException("Unable to find connected DRM connector");
-
-        DrmModeInfo? mode = null;
-
-        if (options?.VideoMode != null)
-        {
-            mode = connector.Modes
-                .FirstOrDefault(x => x.Resolution.Width == options.VideoMode.Value.Width &&
-                                     x.Resolution.Height == options.VideoMode.Value.Height);
-        }
-
-        mode ??= connector.Modes.OrderByDescending(x => x.IsPreferred)
-            .ThenByDescending(x => x.Resolution.Width * x.Resolution.Height)
-            //.OrderByDescending(x => x.Resolution.Width * x.Resolution.Height)
-            .FirstOrDefault();
-        if (mode == null)
-            throw new InvalidOperationException("Unable to find a usable DRM mode");
-        Init(card, resources, connector, mode);
+        _drmDevice = drmDevice;
+        _presenter = presenter;
+        Init();
     }
 
-    public PixelSize PixelSize => _mode.Resolution;
+    public PixelSize PixelSize => new PixelSize((int)_presenter.Width, (int)_presenter.Height);
 
-    public double Scaling
-    {
-        get => _outputOptions.Scaling;
-        set => _outputOptions.Scaling = value;
-    }
+    public double Scaling { get; set; } = 1.0;
 
     public IPlatformGraphics PlatformGraphics { get; private set; }
 
@@ -96,11 +55,6 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
             throw new InvalidOperationException(
                 "This platform backend can only create render targets for its primary context");
         return CreateGlRenderTarget();
-    }
-
-    void FbDestroyCallback(IntPtr bo, IntPtr userData)
-    {
-        drmModeRmFB(_card.Fd, userData.ToInt32());
     }
 
     uint GetFbIdForBo(IntPtr bo)
@@ -141,96 +95,71 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
         return fbHandle;
     }
 
-    [MemberNotNull(nameof(_card))]
-    [MemberNotNull(nameof(PlatformGraphics))]
-    [MemberNotNull(nameof(FbDestroyDelegate))]
-    [MemberNotNull(nameof(_eglDisplay))]
-    [MemberNotNull(nameof(_eglSurface))]
-    [MemberNotNull(nameof(_deferredContext))]
-    void Init(DrmCard card, DrmResources resources, DrmConnector connector, DrmModeInfo modeInfo)
+    void Init()
     {
-        FbDestroyDelegate = FbDestroyCallback;
-        _card = card;
-        uint GetCrtc()
-        {
-            if (resources.Encoders.TryGetValue(connector.EncoderId, out var encoder))
-            {
-                // Not sure why that should work
-                return encoder.Encoder.crtc_id;
-            }
-            else
-            {
-                foreach (var encId in connector.EncoderIds)
-                {
-                    if (resources.Encoders.TryGetValue(encId, out encoder)
-                        && encoder.PossibleCrtcs.Count > 0)
-                        return encoder.PossibleCrtcs.First().crtc_id;
-                }
+        var device = GbmDevice.CreateFromDrmDevice(_drmDevice);
+        _gbmTargetSurface = device.CreateSurface(
+            _presenter.Width, _presenter.Height,
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,
+            GbmBoUse.GBM_BO_USE_SCANOUT | GbmBoUse.GBM_BO_USE_RENDERING);
 
-                throw new InvalidOperationException("Unable to find CRTC matching the desired mode");
-            }
-        }
-
-        _crtcId = GetCrtc();
-        var device = gbm_create_device(card.Fd);
-        _gbmTargetSurface = gbm_surface_create(device, modeInfo.Resolution.Width, modeInfo.Resolution.Height,
-            GbmColorFormats.GBM_FORMAT_ARGB8888, GbmBoFlags.GBM_BO_USE_SCANOUT | GbmBoFlags.GBM_BO_USE_RENDERING);
-        if (_gbmTargetSurface == IntPtr.Zero)
-            throw new InvalidOperationException("Unable to create GBM surface");
 
         _eglDisplay = new EglDisplay(
             new EglDisplayCreationOptions
             {
                 Egl = new EglInterface(eglGetProcAddress),
                 PlatformType = 0x31D7,
-                PlatformDisplay = device,
+                PlatformDisplay = device.Fd,
                 SupportsMultipleContexts = true,
                 SupportsContextSharing = true
             });
 
-        var surface = _eglDisplay.EglInterface.CreateWindowSurface(_eglDisplay.Handle, _eglDisplay.Config, _gbmTargetSurface, new[] { EglConsts.EGL_NONE, EglConsts.EGL_NONE });
+        var surface = _eglDisplay.EglInterface.CreateWindowSurface(_eglDisplay.Handle, _eglDisplay.Config, _gbmTargetSurface.Fd, new[] { EglConsts.EGL_NONE, EglConsts.EGL_NONE });
 
         _eglSurface = new EglSurface(_eglDisplay, surface);
 
         _deferredContext = _eglDisplay.CreateContext(null);
         PlatformGraphics = new SharedContextGraphics(_deferredContext);
 
-        var initialBufferSwappingColorR = _outputOptions.InitialBufferSwappingColor.R / 255.0f;
-        var initialBufferSwappingColorG = _outputOptions.InitialBufferSwappingColor.G / 255.0f;
-        var initialBufferSwappingColorB = _outputOptions.InitialBufferSwappingColor.B / 255.0f;
-        var initialBufferSwappingColorA = _outputOptions.InitialBufferSwappingColor.A / 255.0f;
+        var initialBufferSwappingColorR = 0 / 255.0f;
+        var initialBufferSwappingColorG = 0 / 255.0f;
+        var initialBufferSwappingColorB = 0 / 255.0f;
+        var initialBufferSwappingColorA = 0 / 255.0f;
         using (_deferredContext.MakeCurrent(_eglSurface))
         {
-            _deferredContext.GlInterface.ClearColor(initialBufferSwappingColorR, initialBufferSwappingColorG,
-                initialBufferSwappingColorB, initialBufferSwappingColorA);
+            _deferredContext.GlInterface.ClearColor(
+                initialBufferSwappingColorR,
+                initialBufferSwappingColorG,
+                initialBufferSwappingColorB,
+                initialBufferSwappingColorA);
             _deferredContext.GlInterface.Clear(GlConsts.GL_COLOR_BUFFER_BIT | GlConsts.GL_STENCIL_BUFFER_BIT);
             _eglSurface.SwapBuffers();
         }
 
-        var bo = gbm_surface_lock_front_buffer(_gbmTargetSurface);
-        var fbId = GetFbIdForBo(bo);
-        var connectorId = connector.Id;
-        var mode = modeInfo.Mode;
+        var bo = gbm_surface_lock_front_buffer(_gbmTargetSurface.Fd);
+        //var fbId = GetFbIdForBo(bo);
+        //var connectorId = connector.Id;
+        //var mode = modeInfo.Mode;
 
 
-        var res = drmModeSetCrtc(_card.Fd, _crtcId, fbId, 0, 0, &connectorId, 1, &mode);
-        if (res != 0)
-            throw new Win32Exception(res, "drmModeSetCrtc failed");
+        //var res = drmModeSetCrtc(_card.Fd, _crtcId, fbId, 0, 0, &connectorId, 1, &mode);
+        //if (res != 0)
+        //    throw new Win32Exception(res, "drmModeSetCrtc failed");
 
-        _mode = mode;
-        _currentBo = bo;
+        //_mode = mode;
+        //_currentBo = bo;
 
-        if (_outputOptions.EnableInitialBufferSwapping)
-        {
-            //Go through two cycles of buffer swapping (there are render artifacts otherwise)
-            for (var c = 0; c < 2; c++)
-                using (CreateGlRenderTarget().BeginDraw())
-                {
-                    _deferredContext.GlInterface.ClearColor(initialBufferSwappingColorR, initialBufferSwappingColorG,
-                        initialBufferSwappingColorB, initialBufferSwappingColorA);
-                    _deferredContext.GlInterface.Clear(GlConsts.GL_COLOR_BUFFER_BIT | GlConsts.GL_STENCIL_BUFFER_BIT);
-                }
-        }
+        //if (_outputOptions.EnableInitialBufferSwapping)
+        //{
+        //    //Go through two cycles of buffer swapping (there are render artifacts otherwise)
+        //    for (var c = 0; c < 2; c++)
+        //        using (CreateGlRenderTarget().BeginDraw())
+        //        {
+        //            _deferredContext.GlInterface.ClearColor(initialBufferSwappingColorR, initialBufferSwappingColorG,
+        //                initialBufferSwappingColorB, initialBufferSwappingColorA);
+        //            _deferredContext.GlInterface.Clear(GlConsts.GL_COLOR_BUFFER_BIT | GlConsts.GL_STENCIL_BUFFER_BIT);
+        //        }
+        //}
 
     }
 

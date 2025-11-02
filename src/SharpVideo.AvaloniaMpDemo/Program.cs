@@ -6,6 +6,8 @@ using Avalonia.LinuxFramebuffer.Input.LibInput;
 using Microsoft.Extensions.Logging;
 
 using SharpVideo.Avalonia.LinuxFramebuffer.Output;
+using SharpVideo.DmaBuffers;
+using SharpVideo.Drm;
 using SharpVideo.Utils;
 
 namespace SharpVideo.AvaloniaMpDemo;
@@ -34,7 +36,25 @@ internal class Program
     public static void Main(string[] args)
     {
         var drmDevice = DrmUtils.OpenDrmDevice(Logger);
-        var drmOutput = new SharpVideoDrmOutput(new DrmCard(drmDevice.DeviceFd));
+        drmDevice.EnableDrmCapabilities(Logger);
+
+        var allocator = DmaBuffersAllocator.Create();
+        var buffersManager = new DrmBufferManager(
+            drmDevice,
+            allocator,
+            [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
+            LoggerFactory.CreateLogger<DrmBufferManager>());
+
+        var presenter = DrmPresenter.Create(
+            drmDevice,
+            Width,
+            Height,
+            buffersManager,
+            KnownPixelFormats.DRM_FORMAT_ARGB8888, // Primary plane format
+            KnownPixelFormats.DRM_FORMAT_NV12, // Overlay plane format
+            Logger);
+
+        var drmOutput = new SharpVideoDrmOutput(presenter.PrimaryPlanePresenter);
 
         BuildAvaloniaApp()
             .StartLinuxDirect(args, drmOutput, new LibInputBackend());

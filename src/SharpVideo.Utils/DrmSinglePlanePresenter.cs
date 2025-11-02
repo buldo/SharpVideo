@@ -9,8 +9,6 @@ namespace SharpVideo.Utils;
 public abstract class DrmSinglePlanePresenter
 {
     private readonly uint _crtcId;
-    private readonly uint _width;
-    private readonly uint _height;
     private readonly DrmCapabilitiesState _capabilities;
     private readonly AtomicPlaneUpdater? _atomicUpdater;
     private readonly ILogger _logger;
@@ -31,12 +29,15 @@ public abstract class DrmSinglePlanePresenter
         _drmDevice = drmDevice;
         _plane = plane;
         _crtcId = crtcId;
-        _width = width;
-        _height = height;
+        Width = width;
+        Height = height;
         _capabilities = capabilities;
         _atomicUpdater = atomicUpdater;
         _logger = logger;
     }
+
+    public uint Width { get; }
+    public uint Height { get; }
 
     public virtual void Cleanup()
     {
@@ -65,7 +66,7 @@ public abstract class DrmSinglePlanePresenter
                 _crtcId,
                 fbId,
                 0, 0,
-                _width, _height,
+                Width, Height,
                 0, 0,
                 srcWidth << 16, srcHeight << 16,
                 _capabilities.AsyncPageFlip);
@@ -84,7 +85,7 @@ public abstract class DrmSinglePlanePresenter
             _crtcId,
             fbId,
             0,
-            0, 0, _width, _height,
+            0, 0, Width, Height,
             0, 0, srcWidth << 16, srcHeight << 16);
         if (result != 0)
         {
