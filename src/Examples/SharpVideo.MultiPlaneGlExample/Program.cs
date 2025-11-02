@@ -55,7 +55,7 @@ internal class Program
 
         try
         {
-            RunDemo(presenter, buffersManager);
+            RunDemo(drmDevice, presenter, buffersManager);
         }
         finally
         {
@@ -66,7 +66,7 @@ internal class Program
         Logger.LogInformation("Demo completed successfully");
     }
 
-    private static void RunDemo(DrmPresenter presenter, DrmBufferManager bufferManager)
+    private static void RunDemo(DrmDevice drmDevice, DrmPresenter presenter, DrmBufferManager bufferManager)
     {
         // Get zpos ranges for both planes
         var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
@@ -137,7 +137,7 @@ internal class Program
         // Initialize hardware-accelerated OpenGL ES renderer with DMA-BUF support
         Logger.LogInformation("Initializing hardware-accelerated OpenGL ES renderer...");
         Logger.LogInformation("Using EGL + DMA-BUF extensions for zero-copy rendering");
-        using var glRenderer = new GlRenderer(Width, Height, Logger);
+        using var glRenderer = new GlRenderer(drmDevice, Width, Height, Logger);
         Logger.LogInformation("OpenGL ES renderer initialized successfully!");
 
         // Present initial overlay buffer

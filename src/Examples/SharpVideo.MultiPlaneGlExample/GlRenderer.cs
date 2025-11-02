@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using Silk.NET.OpenGLES;
 using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
+using SharpVideo.Drm;
 using SharpVideo.Linux.Native.C;
 using SharpVideo.Utils;
 
@@ -18,11 +19,9 @@ public unsafe class GlRenderer : IDisposable
 {
     private readonly ILogger? _logger;
     private readonly GL _gl;
+    private readonly DrmDevice _drmDevice;
     private readonly int _width;
     private readonly int _height;
-
-    // DRM file descriptor
-    private readonly int _drmFd;
 
     // GBM device and surface
     private readonly nint _gbmDevice;
@@ -48,27 +47,23 @@ public unsafe class GlRenderer : IDisposable
 
     private float _rotation = 0.0f;
 
-    public GlRenderer(int width, int height, ILogger? logger = null)
+    public GlRenderer(
+        DrmDevice drmDevice,
+        int width,
+        int height,
+        ILogger? logger = null)
     {
+        _drmDevice = drmDevice;
         _width = width;
         _height = height;
         _logger = logger;
 
         _logger?.LogInformation("Initializing EGL and OpenGL ES context...");
 
-        // Open DRM device to get a file descriptor
-        _drmFd = OpenDrmDevice();
-        if (_drmFd < 0)
-        {
-            throw new Exception("Failed to open DRM device");
-        }
-        _logger?.LogDebug("Opened DRM device with FD: {Fd}", _drmFd);
-
         // Create GBM device from DRM fd (following kmscube approach)
-        _gbmDevice = LibGbm.CreateDevice(_drmFd);
+        _gbmDevice = LibGbm.CreateDevice(_drmDevice.DeviceFd);
         if (_gbmDevice == 0)
         {
-            SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception("Failed to create GBM device");
         }
         _logger?.LogDebug("Created GBM device: 0x{Device:X}", _gbmDevice);
@@ -84,7 +79,6 @@ public unsafe class GlRenderer : IDisposable
         if (_gbmSurface == 0)
         {
             LibGbm.DestroyDevice(_gbmDevice);
-            SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception("Failed to create GBM surface");
         }
         _logger?.LogDebug("Created GBM surface: 0x{Surface:X}", _gbmSurface);
@@ -95,7 +89,6 @@ public unsafe class GlRenderer : IDisposable
         if (_eglDisplay == 0 || _eglDisplay == NativeEgl.EGL_NO_DISPLAY)
         {
             LibGbm.DestroyDevice(_gbmDevice);
-            SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception("Failed to get EGL display from GBM device");
         }
 
@@ -111,7 +104,6 @@ public unsafe class GlRenderer : IDisposable
             _logger?.LogError("Error: {Error} (code: 0x{ErrorCode:X})", errorMsg, error);
 
             LibGbm.DestroyDevice(_gbmDevice);
-            SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception($"Failed to initialize EGL: {errorMsg} (error code: 0x{error:X})");
         }
 
@@ -238,42 +230,6 @@ public unsafe class GlRenderer : IDisposable
         (_vao, _vbo) = CreateTriangle();
 
         _logger?.LogInformation("OpenGL ES renderer initialized successfully");
-    }
-
-    /// <summary>
-    /// Opens a DRM render device (following kmscube approach)
-    /// </summary>
-    private int OpenDrmDevice()
-    {
-        // Try render nodes first (preferred for pure GPU operations)
-        for (int i = 128; i < 192; i++)
-        {
-            var devicePath = $"/dev/dri/renderD{i}";
-            var fd = SharpVideo.Linux.Native.Libc.open(
-                devicePath,
-                OpenFlags.O_RDWR | OpenFlags.O_CLOEXEC);
-
-            if (fd >= 0)
-            {
-                _logger?.LogDebug("Opened DRM render device: {DevicePath}", devicePath);
-                return fd;
-            }
-        }
-
-        // Fallback to card0 if no render node available
-        var cardPath = "/dev/dri/card0";
-        var cardFd = SharpVideo.Linux.Native.Libc.open(
-            cardPath,
-            OpenFlags.O_RDWR | OpenFlags.O_CLOEXEC);
-
-        if (cardFd >= 0)
-        {
-            _logger?.LogDebug("Opened DRM card device: {DevicePath}", cardPath);
-            return cardFd;
-        }
-
-        _logger?.LogError("Failed to open any DRM device");
-        return -1;
     }
 
     /// <summary>
@@ -654,13 +610,6 @@ void main()
         {
             LibGbm.DestroyDevice(_gbmDevice);
             _logger?.LogDebug("Destroyed GBM device");
-        }
-
-        // Close DRM file descriptor
-        if (_drmFd >= 0)
-        {
-            SharpVideo.Linux.Native.Libc.close(_drmFd);
-            _logger?.LogDebug("Closed DRM file descriptor");
         }
 
         _logger?.LogInformation("OpenGL ES renderer disposed");
