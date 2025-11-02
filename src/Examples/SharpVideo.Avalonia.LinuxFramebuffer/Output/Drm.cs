@@ -298,6 +298,7 @@ namespace SharpVideo.Avalonia.LinuxFramebuffer.Output
                 (uint)a | ((uint)b) << 8 | ((uint)c) << 16 | ((uint)d) << 24;
 
             public static uint GBM_FORMAT_XRGB8888 { get; } = FourCC('X', 'R', '2', '4');
+            public static uint GBM_FORMAT_ARGB8888 { get; } = FourCC('A', 'R', '2', '4');
         }
     }
 
