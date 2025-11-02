@@ -1,4 +1,5 @@
 ﻿using SharpVideo.Linux.Native;
+using SharpVideo.Linux.Native.Drm;
 
 namespace SharpVideo.Drm;
 
@@ -17,7 +18,7 @@ public class DrmConnector
     /// <summary>
     /// Connector type.
     /// </summary>
-    public required ConnectorType ConnectorType { get; init; }
+    public required DrmConnectorType ConnectorType { get; init; }
 
     /// <summary>
     /// Connector type ID.

@@ -1,4 +1,6 @@
 using System.Runtime.Versioning;
+using SharpVideo.Linux.Native.C;
+using SharpVideo.Linux.Native.Dma;
 
 namespace SharpVideo.Linux.Native;
 

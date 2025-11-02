@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
 
+using SharpVideo.Linux.Native.Media;
+
 namespace SharpVideo.Linux.Native;
 
 /// <summary>

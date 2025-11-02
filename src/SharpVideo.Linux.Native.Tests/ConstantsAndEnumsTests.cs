@@ -1,5 +1,9 @@
 using System;
 using System.Runtime.Versioning;
+using SharpVideo.Linux.Native.C;
+using SharpVideo.Linux.Native.Drm;
+using SharpVideo.Linux.Native.V4L2;
+
 using Xunit;
 
 namespace SharpVideo.Linux.Native.Tests;
@@ -16,14 +20,14 @@ public class ConstantsAndEnumsTests
     public void TestConnectorType_HasExpectedValues()
     {
         // Test that connector types have expected numeric values
-        Assert.Equal(0u, (uint)ConnectorType.Unknown);
-        Assert.Equal(1u, (uint)ConnectorType.VGA);
-        Assert.Equal(2u, (uint)ConnectorType.DVII);
-        Assert.Equal(3u, (uint)ConnectorType.DVID);
-        Assert.Equal(4u, (uint)ConnectorType.DVIA);
-        Assert.Equal(11u, (uint)ConnectorType.HDMIA);
-        Assert.Equal(12u, (uint)ConnectorType.HDMIB);
-        Assert.Equal(20u, (uint)ConnectorType.USB);
+        Assert.Equal(0u, (uint)DrmConnectorType.Unknown);
+        Assert.Equal(1u, (uint)DrmConnectorType.VGA);
+        Assert.Equal(2u, (uint)DrmConnectorType.DVII);
+        Assert.Equal(3u, (uint)DrmConnectorType.DVID);
+        Assert.Equal(4u, (uint)DrmConnectorType.DVIA);
+        Assert.Equal(11u, (uint)DrmConnectorType.HDMIA);
+        Assert.Equal(12u, (uint)DrmConnectorType.HDMIB);
+        Assert.Equal(20u, (uint)DrmConnectorType.USB);
     }
 
     [Fact]
@@ -732,7 +736,7 @@ public class ConstantsAndEnumsTests
     public void TestAllEnums_ArePublic()
     {
         // Verify that key enums are public and accessible
-        var connectorType = typeof(ConnectorType);
+        var connectorType = typeof(DrmConnectorType);
         var encoderType = typeof(DrmModeEncoderType);
         var bufferType = typeof(V4L2BufferType);
         var memoryType = typeof(V4L2Memory);
@@ -755,7 +759,7 @@ public class ConstantsAndEnumsTests
     public void TestEnums_HaveCorrectUnderlyingTypes()
     {
         // Verify that enums have correct underlying types
-        Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(ConnectorType)));
+        Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(DrmConnectorType)));
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(DrmModeEncoderType)));
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(V4L2BufferType)));
         Assert.Equal(typeof(uint), Enum.GetUnderlyingType(typeof(V4L2Memory)));

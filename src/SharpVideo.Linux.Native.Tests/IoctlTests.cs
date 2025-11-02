@@ -1,5 +1,6 @@
+using SharpVideo.Linux.Native.C;
 using Xunit;
-using SharpVideo.Linux.Native;
+using SharpVideo.Linux.Native.V4L2;
 
 namespace SharpVideo.Linux.Native.Tests;
 

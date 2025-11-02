@@ -1,4 +1,4 @@
-﻿using SharpVideo.Linux.Native;
+﻿using SharpVideo.Linux.Native.Drm;
 
 namespace SharpVideo.Drm;
 

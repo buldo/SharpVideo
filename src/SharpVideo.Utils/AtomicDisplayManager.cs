@@ -1,9 +1,12 @@
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+
 using Microsoft.Extensions.Logging;
+
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
+using SharpVideo.Linux.Native.C;
 
 namespace SharpVideo.Utils;
 

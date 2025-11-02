@@ -3,6 +3,8 @@ using System.Runtime.Versioning;
 using System.Threading.Tasks.Dataflow;
 
 using SharpVideo.Linux.Native;
+using SharpVideo.Linux.Native.C;
+using SharpVideo.Linux.Native.V4L2;
 
 namespace SharpVideo.V4L2;
 

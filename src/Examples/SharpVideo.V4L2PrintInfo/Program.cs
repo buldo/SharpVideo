@@ -1,6 +1,7 @@
 ﻿using System.Runtime.Versioning;
 using System.Text;
 using SharpVideo.Linux.Native;
+using SharpVideo.Linux.Native.V4L2;
 using SharpVideo.V4L2;
 
 namespace SharpVideo.V4L2PrintInfo

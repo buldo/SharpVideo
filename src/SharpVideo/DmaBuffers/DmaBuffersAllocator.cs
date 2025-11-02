@@ -2,7 +2,7 @@
 using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
-
+using SharpVideo.Linux.Native.C;
 using static SharpVideo.Linux.Native.DmaHeapIoctl;
 
 namespace SharpVideo.DmaBuffers;

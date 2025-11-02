@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using Silk.NET.OpenGLES;
 using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
+using SharpVideo.Linux.Native.C;
 using SharpVideo.Utils;
 
 namespace SharpVideo.MultiPlaneGlExample;
@@ -64,7 +65,7 @@ public unsafe class GlRenderer : IDisposable
         _logger?.LogDebug("Opened DRM device with FD: {Fd}", _drmFd);
 
         // Create GBM device from DRM fd (following kmscube approach)
-        _gbmDevice = NativeGbm.CreateDevice(_drmFd);
+        _gbmDevice = LibGbm.CreateDevice(_drmFd);
         if (_gbmDevice == 0)
         {
             SharpVideo.Linux.Native.Libc.close(_drmFd);
@@ -73,16 +74,16 @@ public unsafe class GlRenderer : IDisposable
         _logger?.LogDebug("Created GBM device: 0x{Device:X}", _gbmDevice);
 
         // Create GBM surface for rendering (following kmscube approach)
-        _gbmSurface = NativeGbm.CreateSurface(
+        _gbmSurface = LibGbm.CreateSurface(
             _gbmDevice,
             (uint)width,
             (uint)height,
-            NativeGbm.GBM_FORMAT_XRGB8888,
-            NativeGbm.GBM_BO_USE_SCANOUT | NativeGbm.GBM_BO_USE_RENDERING);
+            LibGbm.GBM_FORMAT_XRGB8888,
+            LibGbm.GBM_BO_USE_SCANOUT | LibGbm.GBM_BO_USE_RENDERING);
 
         if (_gbmSurface == 0)
         {
-            NativeGbm.DestroyDevice(_gbmDevice);
+            LibGbm.DestroyDevice(_gbmDevice);
             SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception("Failed to create GBM surface");
         }
@@ -93,7 +94,7 @@ public unsafe class GlRenderer : IDisposable
 
         if (_eglDisplay == 0 || _eglDisplay == NativeEgl.EGL_NO_DISPLAY)
         {
-            NativeGbm.DestroyDevice(_gbmDevice);
+            LibGbm.DestroyDevice(_gbmDevice);
             SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception("Failed to get EGL display from GBM device");
         }
@@ -109,7 +110,7 @@ public unsafe class GlRenderer : IDisposable
             _logger?.LogError("eglInitialize failed!");
             _logger?.LogError("Error: {Error} (code: 0x{ErrorCode:X})", errorMsg, error);
 
-            NativeGbm.DestroyDevice(_gbmDevice);
+            LibGbm.DestroyDevice(_gbmDevice);
             SharpVideo.Linux.Native.Libc.close(_drmFd);
             throw new Exception($"Failed to initialize EGL: {errorMsg} (error code: 0x{error:X})");
         }
@@ -150,7 +151,7 @@ public unsafe class GlRenderer : IDisposable
             NativeEgl.EGL_NONE
         ];
 
-        var config = ChooseConfigMatchingVisual(_eglDisplay, configAttribs, NativeGbm.GBM_FORMAT_XRGB8888);
+        var config = ChooseConfigMatchingVisual(_eglDisplay, configAttribs, LibGbm.GBM_FORMAT_XRGB8888);
         _logger?.LogInformation("EGL config chosen");
 
         // Bind OpenGL ES API
@@ -250,7 +251,7 @@ public unsafe class GlRenderer : IDisposable
             var devicePath = $"/dev/dri/renderD{i}";
             var fd = SharpVideo.Linux.Native.Libc.open(
                 devicePath,
-                SharpVideo.Linux.Native.OpenFlags.O_RDWR | SharpVideo.Linux.Native.OpenFlags.O_CLOEXEC);
+                OpenFlags.O_RDWR | OpenFlags.O_CLOEXEC);
 
             if (fd >= 0)
             {
@@ -263,7 +264,7 @@ public unsafe class GlRenderer : IDisposable
         var cardPath = "/dev/dri/card0";
         var cardFd = SharpVideo.Linux.Native.Libc.open(
             cardPath,
-            SharpVideo.Linux.Native.OpenFlags.O_RDWR | SharpVideo.Linux.Native.OpenFlags.O_CLOEXEC);
+            OpenFlags.O_RDWR | OpenFlags.O_CLOEXEC);
 
         if (cardFd >= 0)
         {
@@ -644,14 +645,14 @@ void main()
         // Cleanup GBM surface
         if (_gbmSurface != 0)
         {
-            NativeGbm.DestroySurface(_gbmSurface);
+            LibGbm.DestroySurface(_gbmSurface);
             _logger?.LogDebug("Destroyed GBM surface");
         }
 
         // Cleanup GBM device
         if (_gbmDevice != 0)
         {
-            NativeGbm.DestroyDevice(_gbmDevice);
+            LibGbm.DestroyDevice(_gbmDevice);
             _logger?.LogDebug("Destroyed GBM device");
         }
 

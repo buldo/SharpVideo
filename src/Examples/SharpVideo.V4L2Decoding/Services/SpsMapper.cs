@@ -1,6 +1,7 @@
 ﻿using System.Runtime.Versioning;
+
 using SharpVideo.H264;
-using SharpVideo.Linux.Native;
+using SharpVideo.Linux.Native.V4L2;
 
 namespace SharpVideo.V4L2Decoding.Services;
 

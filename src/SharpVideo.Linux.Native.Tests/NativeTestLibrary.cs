@@ -1,5 +1,8 @@
 using System.Runtime.InteropServices;
 
+using SharpVideo.Linux.Native.Dma;
+using SharpVideo.Linux.Native.V4L2;
+
 namespace SharpVideo.Linux.Native.Tests;
 
 /// <summary>

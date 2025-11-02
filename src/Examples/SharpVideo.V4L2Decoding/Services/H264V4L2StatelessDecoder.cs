@@ -1,9 +1,11 @@
 ﻿using System.Diagnostics;
 using System.Runtime.Versioning;
+
 using Microsoft.Extensions.Logging;
+
 using SharpVideo.Drm;
 using SharpVideo.H264;
-using SharpVideo.Linux.Native;
+using SharpVideo.Linux.Native.V4L2;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2Decoding.Models;

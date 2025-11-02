@@ -1,6 +1,9 @@
 using System.Runtime.InteropServices;
 using Xunit;
 using System.Linq;
+using SharpVideo.Linux.Native.Dma;
+using SharpVideo.Linux.Native.Drm;
+using SharpVideo.Linux.Native.V4L2;
 
 namespace SharpVideo.Linux.Native.Tests;
 
@@ -89,7 +92,7 @@ public unsafe class StructureCompatibilityTests
         // Verify that the managed structure fields have the expected distinctive patterns
         Assert.Equal(0xFEEDFACEu, nativeFilledStruct.ConnectorId);
         Assert.Equal(0xDEADBEEFu, nativeFilledStruct.EncoderId);
-        Assert.Equal((ConnectorType)0xCAFEBABE, nativeFilledStruct.ConnectorType);
+        Assert.Equal((DrmConnectorType)0xCAFEBABE, nativeFilledStruct.ConnectorType);
         Assert.Equal(0x12345u, nativeFilledStruct.ConnectorTypeId);
         Assert.Equal((DrmModeConnection)0xABCD, nativeFilledStruct.Connection);
         Assert.Equal(0x11223344u, nativeFilledStruct.MmWidth);
