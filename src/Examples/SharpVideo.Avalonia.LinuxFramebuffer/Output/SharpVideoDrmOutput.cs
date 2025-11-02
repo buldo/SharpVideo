@@ -17,41 +17,25 @@ namespace SharpVideo.Avalonia.LinuxFramebuffer.Output;
 
 public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
 {
+    [DllImport("libEGL.so.1")]
+    static extern IntPtr eglGetProcAddress(string proc);
+
     private DrmOutputOptions _outputOptions = new();
     private DrmCard _card;
-    public PixelSize PixelSize => _mode.Resolution;
 
-    public double Scaling
-    {
-        get => _outputOptions.Scaling;
-        set => _outputOptions.Scaling = value;
-    }
+    private GbmBoUserDataDestroyCallbackDelegate FbDestroyDelegate;
+    private drmModeModeInfo _mode;
+    private EglDisplay _eglDisplay;
+    private EglSurface _eglSurface;
+    private EglContext _deferredContext;
+    private IntPtr _currentBo;
+    private IntPtr _gbmTargetSurface;
+    private uint _crtcId;
 
-    class SharedContextGraphics : IPlatformGraphics
-    {
-        private readonly IPlatformGraphicsContext _context;
-
-        public SharedContextGraphics(IPlatformGraphicsContext context)
-        {
-            _context = context;
-        }
-        public bool UsesSharedContext => true;
-        public IPlatformGraphicsContext CreateContext() => throw new NotSupportedException();
-
-        public IPlatformGraphicsContext GetSharedContext() => _context;
-    }
-
-    public IPlatformGraphics PlatformGraphics { get; private set; }
-
-    public SharpVideoDrmOutput(DrmCard card, DrmResources resources, DrmConnector connector, DrmModeInfo modeInfo,
+    public SharpVideoDrmOutput(
+        DrmCard card,
+        bool connectorsForceProbe = false,
         DrmOutputOptions? options = null)
-    {
-        if (options != null)
-            _outputOptions = options;
-        Init(card, resources, connector, modeInfo);
-    }
-
-    public SharpVideoDrmOutput(DrmCard card, bool connectorsForceProbe = false, DrmOutputOptions? options = null)
     {
         if (options != null)
             _outputOptions = options;
@@ -94,22 +78,25 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
         Init(card, resources, connector, mode);
     }
 
-    public SharpVideoDrmOutput(DrmCard card, DrmResources resources, DrmConnector connector, DrmModeInfo modeInfo)
+    public PixelSize PixelSize => _mode.Resolution;
+
+    public double Scaling
     {
-        Init(card, resources, connector, modeInfo);
+        get => _outputOptions.Scaling;
+        set => _outputOptions.Scaling = value;
     }
 
-    [DllImport("libEGL.so.1")]
-    static extern IntPtr eglGetProcAddress(string proc);
+    public IPlatformGraphics PlatformGraphics { get; private set; }
 
-    private GbmBoUserDataDestroyCallbackDelegate FbDestroyDelegate;
-    private drmModeModeInfo _mode;
-    private EglDisplay _eglDisplay;
-    private EglSurface _eglSurface;
-    private EglContext _deferredContext;
-    private IntPtr _currentBo;
-    private IntPtr _gbmTargetSurface;
-    private uint _crtcId;
+    public IGlPlatformSurfaceRenderTarget CreateGlRenderTarget() => new RenderTarget(this);
+
+    public IGlPlatformSurfaceRenderTarget CreateGlRenderTarget(IGlContext context)
+    {
+        if (context != _deferredContext)
+            throw new InvalidOperationException(
+                "This platform backend can only create render targets for its primary context");
+        return CreateGlRenderTarget();
+    }
 
     void FbDestroyCallback(IntPtr bo, IntPtr userData)
     {
@@ -153,7 +140,6 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
 
         return fbHandle;
     }
-
 
     [MemberNotNull(nameof(_card))]
     [MemberNotNull(nameof(PlatformGraphics))]
@@ -248,16 +234,6 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
 
     }
 
-    public IGlPlatformSurfaceRenderTarget CreateGlRenderTarget() => new RenderTarget(this);
-
-    public IGlPlatformSurfaceRenderTarget CreateGlRenderTarget(IGlContext context)
-    {
-        if (context != _deferredContext)
-            throw new InvalidOperationException(
-                "This platform backend can only create render targets for its primary context");
-        return CreateGlRenderTarget();
-    }
-
     class RenderTarget : IGlPlatformSurfaceRenderTarget
     {
         private readonly SharpVideoDrmOutput _parent;
@@ -340,10 +316,5 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
         {
             return new RenderSession(_parent, _parent._deferredContext.MakeCurrent(_parent._eglSurface));
         }
-    }
-
-    public IGlContext CreateContext()
-    {
-        throw new NotImplementedException();
     }
 }
