@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Runtime.Versioning;
 
 using Avalonia;
 using Avalonia.LinuxFramebuffer.Input.LibInput;
@@ -12,6 +13,7 @@ using SharpVideo.Utils;
 
 namespace SharpVideo.AvaloniaMpDemo;
 
+[SupportedOSPlatform("linux")]
 internal class Program
 {
     private const int Width = 1920;
@@ -53,6 +55,19 @@ internal class Program
             KnownPixelFormats.DRM_FORMAT_ARGB8888, // Primary plane format
             KnownPixelFormats.DRM_FORMAT_NV12, // Overlay plane format
             Logger);
+
+
+        var buffer = buffersManager.AllocateBuffer(Width, Height, KnownPixelFormats.DRM_FORMAT_NV12);
+        buffer.MapBuffer();
+        if (buffer.MapStatus == MapStatus.FailedToMap)
+        {
+            throw new Exception("failed to map");
+        }
+
+        // Fill with NV12 color bars test pattern
+        TestPattern.FillNV12(buffer.DmaBuffer.GetMappedSpan(), Width, Height);
+        buffer.DmaBuffer.SyncMap();
+        presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(buffer);
 
         var drmOutput = new SharpVideoDrmOutput(drmDevice, presenter.PrimaryPlanePresenter);
 
