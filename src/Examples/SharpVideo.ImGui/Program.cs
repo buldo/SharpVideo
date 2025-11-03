@@ -17,8 +17,18 @@ internal class Program
         SDL.Init(SDLInitFlags.Events | SDLInitFlags.Video);
         unsafe
         {
+            //const char* glsl_version = "#version 300 es";
+            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+            SDL.GLSetAttribute(SDLGLAttr.ContextFlags, 0);
+            SDL.GLSetAttribute(SDLGLAttr.ContextProfileMask, SDL.SDL_GL_CONTEXT_PROFILE_ES);
+            SDL.GLSetAttribute(SDLGLAttr.ContextMajorVersion, 3);
+            SDL.GLSetAttribute(SDLGLAttr.ContextMinorVersion, 0);
+
             float main_scale = SDL.GetDisplayContentScale(SDL.GetPrimaryDisplay());
-            var window = SDL.CreateWindow("Test Window", (int)(1280 * main_scale), (int)(720 * main_scale), SDLWindowFlags.Resizable | SDLWindowFlags.Opengl | SDLWindowFlags.HighPixelDensity);
+            var window = SDL.CreateWindow("Test Window", 1920, 1080, SDLWindowFlags.Opengl);
             var windowId = SDL.GetWindowID(window);
 
             var guiContext = Hexa.NET.ImGui.ImGui.CreateContext();
