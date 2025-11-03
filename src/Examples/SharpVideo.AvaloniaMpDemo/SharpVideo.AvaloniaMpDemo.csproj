@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Examples\SharpVideo.Avalonia.LinuxFramebuffer\SharpVideo.Avalonia.LinuxFramebuffer.csproj" />
-    <ProjectReference Include="..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
+    <ProjectReference Include="..\SharpVideo.Avalonia.LinuxFramebuffer\SharpVideo.Avalonia.LinuxFramebuffer.csproj" />
+    <ProjectReference Include="..\..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
   </ItemGroup>
 </Project>

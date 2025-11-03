@@ -16,7 +16,7 @@
     <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
     <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
     <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
-    <Project Path="SharpVideo.AvaloniaMpDemo/SharpVideo.AvaloniaMpDemo.csproj" Id="50ce28c3-afde-4b2f-96c4-68ff8a1a05d9" />
+    <Project Path="Examples/SharpVideo.AvaloniaMpDemo/SharpVideo.AvaloniaMpDemo.csproj" Id="50ce28c3-afde-4b2f-96c4-68ff8a1a05d9" />
     <Project Path="SharpVideo.Utils/SharpVideo.Utils.csproj" Id="6e04e87c-aa49-4d50-bb15-dd6a884fe1fc" />
   </Folder>
   <Folder Name="/Solution Items/">
