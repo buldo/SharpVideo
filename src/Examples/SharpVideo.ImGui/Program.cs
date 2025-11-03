@@ -116,9 +116,15 @@ internal class Program
 
             Logger.LogInformation("Warmup frame completed successfully");
 
+            // Reset ImGui state for main loop
+            Logger.LogDebug("Resetting stopwatch and preparing for main loop");
+            var mainLoopStopwatch = Stopwatch.StartNew();
+
             try
             {
+                Logger.LogInformation("Entering main loop...");
                 RunMainLoop(io, presenter, drmRenderer);
+                Logger.LogInformation("Main loop completed normally");
             }
             finally
             {
@@ -139,6 +145,9 @@ internal class Program
         DrmPresenter<DrmPlaneGbmPresenter, object> presenter,
         DrmImGuiRenderer drmRenderer)
     {
+        Logger.LogInformation("=== RunMainLoop STARTED ===");
+        Logger.LogDebug("Creating stopwatch for main loop timing");
+
         var stopwatch = Stopwatch.StartNew();
         var frameCount = 0;
         var lastFpsTime = stopwatch.Elapsed;
@@ -146,14 +155,18 @@ internal class Program
         var exiting = false;
 
         Logger.LogInformation("Starting main loop - rendering at maximum speed without vsync");
+        Logger.LogDebug("Initial values: frameCount=0, exiting=false");
 
         while (!exiting)
         {
             try
             {
+                Logger.LogDebug("=== Frame {Frame} START ===", frameCount);
                 var currentTime = stopwatch.Elapsed;
                 var deltaTime = (float)(currentTime - lastFrameTime).TotalSeconds;
                 lastFrameTime = currentTime;
+
+                Logger.LogDebug("Frame {Frame}: deltaTime={DeltaTime}s", frameCount, deltaTime);
 
                 // Poll SDL events for input
                 SDL.PumpEvents();
@@ -198,7 +211,7 @@ internal class Program
                 }
                 else
                 {
-                    Logger.LogTrace("Frame {Frame} presented successfully", frameCount);
+                    Logger.LogDebug("Frame {Frame} presented successfully", frameCount);
                 }
 
                 frameCount++;
