@@ -7,7 +7,7 @@ namespace SharpVideo.MultiPlaneGlExample;
 /// Native EGL bindings for creating OpenGL ES context with DMA-BUF support
 /// </summary>
 [SupportedOSPlatform("linux")]
-internal static unsafe class NativeEgl
+public static unsafe class NativeEgl
 {
     private const string LibEgl = "libEGL.so.1";
     private const string LibGlesv2 = "libGLESv2.so.2";

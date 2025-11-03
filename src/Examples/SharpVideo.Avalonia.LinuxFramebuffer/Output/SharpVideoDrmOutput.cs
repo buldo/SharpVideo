@@ -1,19 +1,24 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+
 using Avalonia;
 using Avalonia.LinuxFramebuffer.Output;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Egl;
 using Avalonia.OpenGL.Surfaces;
 using Avalonia.Platform;
+
 using SharpVideo.Drm;
 using SharpVideo.Gbm;
 using SharpVideo.Linux.Native.Gbm;
+using SharpVideo.MultiPlaneGlExample;
 using SharpVideo.Utils;
 
 namespace SharpVideo.Avalonia.LinuxFramebuffer.Output;
 
+[SupportedOSPlatform("linux")]
 public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface, IDisposable
 {
     private readonly DrmDevice _drmDevice;
@@ -112,13 +117,13 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface, 
         // Create EGLImage from DMA-BUF
         int[] imageAttribs =
         [
-            0x3057, (int)_presenter.Width, // EGL_WIDTH
-            0x3056, (int)_presenter.Height, // EGL_HEIGHT
-            0x3271, (int)0x34325241, // EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ARGB8888
-            0x3272, dmaBuffer.DmaBuffer.Fd, // EGL_DMA_BUF_PLANE0_FD_EXT
-            0x3273, 0, // EGL_DMA_BUF_PLANE0_OFFSET_EXT
-            0x3274, (int)dmaBuffer.Stride, // EGL_DMA_BUF_PLANE0_PITCH_EXT
-            0x3038 // EGL_NONE
+            EglConsts.EGL_WIDTH, (int)_presenter.Width, // EGL_WIDTH
+            EglConsts.EGL_HEIGHT, (int)_presenter.Height, // EGL_HEIGHT
+            NativeEgl.EGL_LINUX_DRM_FOURCC_EXT,  (int)KnownPixelFormats.DRM_FORMAT_ARGB8888.Fourcc, // EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ARGB8888
+            NativeEgl.EGL_DMA_BUF_PLANE0_FD_EXT, dmaBuffer.DmaBuffer.Fd, // EGL_DMA_BUF_PLANE0_FD_EXT
+            NativeEgl.EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0, // EGL_DMA_BUF_PLANE0_OFFSET_EXT
+            NativeEgl.EGL_DMA_BUF_PLANE0_PITCH_EXT, (int)dmaBuffer.Stride, // EGL_DMA_BUF_PLANE0_PITCH_EXT
+            NativeEgl.EGL_NONE // EGL_NONE
         ];
 
         IntPtr eglImage;
@@ -217,7 +222,6 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface, 
             public void Dispose()
             {
                 _parent._deferredContext.GlInterface.Flush();
-
                 // Present the rendered buffer through the presenter
                 _parent._presenter.SwapPrimaryPlaneBuffers();
 
@@ -296,17 +300,4 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface, 
             }
         }
     }
-}
-
-// Native EGL extension bindings
-internal static unsafe class NativeEgl
-{
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate IntPtr EglCreateImageKHR(IntPtr dpy, IntPtr ctx, int target, IntPtr buffer, int* attrib_list);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate bool EglDestroyImageKHR(IntPtr dpy, IntPtr image);
-
-    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate void GlEGLImageTargetRenderbufferStorageOES(uint target, IntPtr image);
 }
