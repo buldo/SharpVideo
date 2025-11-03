@@ -136,22 +136,9 @@ public class DrmPresenter
             logger.LogInformation(
                 "Using atomic modesetting with VBlank synchronization (async page flip not supported)");
 
-            var fbIdPropertyId = overlayPlane.GetPlanePropertyId("FB_ID");
-            var crtcIdPropertyId = overlayPlane.GetPlanePropertyId("CRTC_ID");
-            var crtcXPropertyId = overlayPlane.GetPlanePropertyId("CRTC_X");
-            var crtcYPropertyId = overlayPlane.GetPlanePropertyId("CRTC_Y");
-            var crtcWPropertyId = overlayPlane.GetPlanePropertyId("CRTC_W");
-            var crtcHPropertyId = overlayPlane.GetPlanePropertyId("CRTC_H");
-            var srcXPropertyId = overlayPlane.GetPlanePropertyId("SRC_X");
-            var srcYPropertyId = overlayPlane.GetPlanePropertyId("SRC_Y");
-            var srcWPropertyId = overlayPlane.GetPlanePropertyId("SRC_W");
-            var srcHPropertyId = overlayPlane.GetPlanePropertyId("SRC_H");
+            var props = new AtomicPlaneProperties(overlayPlane);
 
-            if (fbIdPropertyId == 0 || crtcIdPropertyId == 0 ||
-                crtcXPropertyId == 0 || crtcYPropertyId == 0 ||
-                crtcWPropertyId == 0 || crtcHPropertyId == 0 ||
-                srcXPropertyId == 0 || srcYPropertyId == 0 ||
-                srcWPropertyId == 0 || srcHPropertyId == 0)
+            if (props.IsValid())
             {
                 logger.LogError("Failed to find required plane properties");
                 return null;
@@ -161,16 +148,7 @@ public class DrmPresenter
                 drmDevice.DeviceFd,
                 overlayPlane.Id,
                 crtcId,
-                fbIdPropertyId,
-                crtcIdPropertyId,
-                crtcXPropertyId,
-                crtcYPropertyId,
-                crtcWPropertyId,
-                crtcHPropertyId,
-                srcXPropertyId,
-                srcYPropertyId,
-                srcWPropertyId,
-                srcHPropertyId,
+                props,
                 width,
                 height,
                 width,
