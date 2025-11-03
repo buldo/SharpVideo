@@ -122,71 +122,12 @@ public class DrmPresenter
             throw new Exception($"No overlay plane with {overlayPlanePixelFormat.GetName()} format found");
         }
 
-        logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
-            overlayPlanePixelFormat.GetName(), overlayPlane.Id);
+        logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}", overlayPlanePixelFormat.GetName(), overlayPlane.Id);
 
-        var capabilities = drmDevice.GetDeviceCapabilities();
-        AtomicPlaneUpdater? atomicUpdater = null;
-        AtomicDisplayManager? atomicDisplayManager = null;
 #if DEBUG
+        var capabilities = drmDevice.GetDeviceCapabilities();
         DumpCapabilities(capabilities, logger);
 #endif
-
-        if (!capabilities.AtomicAsyncPageFlip)
-        {
-            logger.LogInformation(
-                "Using atomic modesetting with VBlank synchronization (async page flip not supported)");
-
-            var fbIdPropertyId = overlayPlane.GetPlanePropertyId("FB_ID");
-            var crtcIdPropertyId = overlayPlane.GetPlanePropertyId("CRTC_ID");
-            var crtcXPropertyId = overlayPlane.GetPlanePropertyId("CRTC_X");
-            var crtcYPropertyId = overlayPlane.GetPlanePropertyId("CRTC_Y");
-            var crtcWPropertyId = overlayPlane.GetPlanePropertyId("CRTC_W");
-            var crtcHPropertyId = overlayPlane.GetPlanePropertyId("CRTC_H");
-            var srcXPropertyId = overlayPlane.GetPlanePropertyId("SRC_X");
-            var srcYPropertyId = overlayPlane.GetPlanePropertyId("SRC_Y");
-            var srcWPropertyId = overlayPlane.GetPlanePropertyId("SRC_W");
-            var srcHPropertyId = overlayPlane.GetPlanePropertyId("SRC_H");
-
-            if (fbIdPropertyId == 0 || crtcIdPropertyId == 0 ||
-                crtcXPropertyId == 0 || crtcYPropertyId == 0 ||
-                crtcWPropertyId == 0 || crtcHPropertyId == 0 ||
-                srcXPropertyId == 0 || srcYPropertyId == 0 ||
-                srcWPropertyId == 0 || srcHPropertyId == 0)
-            {
-                logger.LogError("Failed to find required plane properties");
-                return null;
-            }
-
-            atomicDisplayManager = new AtomicDisplayManager(
-                drmDevice.DeviceFd,
-                overlayPlane.Id,
-                crtcId,
-                fbIdPropertyId,
-                crtcIdPropertyId,
-                crtcXPropertyId,
-                crtcYPropertyId,
-                crtcWPropertyId,
-                crtcHPropertyId,
-                srcXPropertyId,
-                srcYPropertyId,
-                srcWPropertyId,
-                srcHPropertyId,
-                width,
-                height,
-                width,
-                height,
-                logger);
-        }
-        else
-        {
-            atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, overlayPlane.Id, crtcId);
-            logger.LogInformation("Atomic modesetting with async page flip initialized");
-        }
-
-        // Create double buffers for primary plane
-        logger.LogInformation("Creating double buffers for primary plane with {Format} format",
-            primaryPlanePixelFormat.GetName());
 
         var overlayPlanePresenter = new DrmPlaneLastDmaBufferPresenter(
             drmDevice,
@@ -194,10 +135,7 @@ public class DrmPresenter
             crtcId,
             width,
             height,
-            capabilities,
             bufferManager,
-            atomicDisplayManager,
-            atomicUpdater,
             logger);
         var primaryPlanePresenter = new DrmPlaneDoubleBufferPresenter(
             drmDevice,
@@ -205,8 +143,6 @@ public class DrmPresenter
             crtcId,
             width,
             height,
-            capabilities,
-            atomicUpdater,
             logger,
             bufferManager,
             primaryPlanePixelFormat,

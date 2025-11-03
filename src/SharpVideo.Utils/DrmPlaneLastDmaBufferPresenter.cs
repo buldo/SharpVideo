@@ -8,7 +8,7 @@ namespace SharpVideo.Utils;
 public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
 {
     private readonly DrmBufferManager _bufferManager;
-    private readonly AtomicDisplayManager? _atomicDisplayManager;
+    private readonly AtomicFlipManager? _atomicDisplayManager;
 
     private readonly List<SharedDmaBuffer> _processedBuffers = new();
 
@@ -20,15 +20,26 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
         uint crtcId,
         uint width,
         uint height,
-        DrmCapabilitiesState capabilities,
         DrmBufferManager bufferManager,
-        AtomicDisplayManager? atomicDisplayManager,
-        AtomicPlaneUpdater? atomicUpdater,
         ILogger logger)
-        : base(drmDevice, plane, crtcId, width, height, capabilities, atomicUpdater, logger)
+        : base(drmDevice, plane, crtcId, width, height, logger)
     {
         _bufferManager = bufferManager;
-        _atomicDisplayManager = atomicDisplayManager;
+
+        var props = new AtomicPlaneProperties(plane);
+        if (props.IsValid())
+        {
+            _atomicDisplayManager = new AtomicFlipManager(
+                drmDevice,
+                plane,
+                crtcId,
+                props,
+                width,
+                height,
+                width,
+                height,
+                logger);
+        }
     }
 
     public bool SetOverlayPlaneBuffer(SharedDmaBuffer drmBuffer)
