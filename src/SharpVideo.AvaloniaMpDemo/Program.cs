@@ -55,7 +55,7 @@ internal class Program
             KnownPixelFormats.DRM_FORMAT_ARGB8888, // Primary plane format
             KnownPixelFormats.DRM_FORMAT_NV12, // Overlay plane format
             Logger);
-
+        presenter.SetPrimaryPlaneOverOverlayPlane();
 
         var buffer = buffersManager.AllocateBuffer(Width, Height, KnownPixelFormats.DRM_FORMAT_NV12);
         buffer.MapBuffer();

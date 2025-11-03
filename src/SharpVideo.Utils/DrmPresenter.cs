@@ -270,4 +270,52 @@ public class DrmPresenter
             _logger.LogError(ex, "Error during display cleanup");
         }
     }
+
+    public void SetPrimaryPlaneOverOverlayPlane()
+    {
+        // Get zpos ranges for both planes
+        var primaryZposRange = PrimaryPlane.GetPlaneZPositionRange();
+        var overlayZposRange = OverlayPlane.GetPlaneZPositionRange();
+
+        if (primaryZposRange.HasValue)
+        {
+            _logger.LogInformation("Primary plane zpos range: [{Min}, {Max}], current: {Current}",
+                primaryZposRange.Value.min, primaryZposRange.Value.max, primaryZposRange.Value.current);
+        }
+        else
+        {
+            _logger.LogWarning("Primary plane does not support zpos property");
+        }
+
+        if (overlayZposRange.HasValue)
+        {
+            _logger.LogInformation("Overlay plane zpos range: [{Min}, {Max}], current: {Current}",
+                overlayZposRange.Value.min, overlayZposRange.Value.max, overlayZposRange.Value.current);
+        }
+        else
+        {
+            _logger.LogWarning("Overlay plane does not support zpos property");
+        }
+
+        // Try to set z-position to make primary plane appear on top
+        if (primaryZposRange.HasValue && overlayZposRange.HasValue)
+        {
+            var primaryZpos = primaryZposRange.Value.max;
+            var overlayZpos = overlayZposRange.Value.min;
+
+            _logger.LogInformation("Attempting to set Primary zpos={PrimaryZpos}, Overlay zpos={OverlayZpos}", primaryZpos, overlayZpos);
+
+            var primarySuccess = PrimaryPlane.SetPlaneZPosition(primaryZpos);
+            var overlaySuccess = OverlayPlane.SetPlaneZPosition(overlayZpos);
+
+            if (primarySuccess && overlaySuccess)
+            {
+                _logger.LogInformation("Z-positioning successful: Primary on top, Overlay below");
+            }
+            else
+            {
+                _logger.LogWarning("Failed to set z-positions as desired");
+            }
+        }
+    }
 }

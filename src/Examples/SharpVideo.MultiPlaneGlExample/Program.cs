@@ -68,52 +68,7 @@ internal class Program
 
     private static void RunDemo(DrmDevice drmDevice, DrmPresenter presenter, DrmBufferManager bufferManager)
     {
-        // Get zpos ranges for both planes
-        var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
-        var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
-
-        if (primaryZposRange.HasValue)
-        {
-            Logger.LogInformation("Primary plane zpos range: [{Min}, {Max}], current: {Current}",
-                primaryZposRange.Value.min, primaryZposRange.Value.max, primaryZposRange.Value.current);
-        }
-        else
-        {
-            Logger.LogWarning("Primary plane does not support zpos property");
-        }
-
-        if (overlayZposRange.HasValue)
-        {
-            Logger.LogInformation("Overlay plane zpos range: [{Min}, {Max}], current: {Current}",
-                overlayZposRange.Value.min, overlayZposRange.Value.max, overlayZposRange.Value.current);
-        }
-        else
-        {
-            Logger.LogWarning("Overlay plane does not support zpos property");
-        }
-
-        // Try to set z-position to make primary plane appear on top
-        if (primaryZposRange.HasValue && overlayZposRange.HasValue)
-        {
-            var primaryZpos = primaryZposRange.Value.max;
-            var overlayZpos = overlayZposRange.Value.min;
-
-            Logger.LogInformation("Attempting to set Primary zpos={PrimaryZpos}, Overlay zpos={OverlayZpos}",
-                primaryZpos, overlayZpos);
-
-            var primarySuccess = presenter.PrimaryPlane.SetPlaneZPosition(primaryZpos);
-            var overlaySuccess = presenter.OverlayPlane.SetPlaneZPosition(overlayZpos);
-
-            if (primarySuccess && overlaySuccess)
-            {
-                Logger.LogInformation("Z-positioning successful: Primary on top, Overlay below");
-            }
-            else
-            {
-                Logger.LogWarning("Failed to set z-positions as desired");
-            }
-        }
-
+        presenter.SetPrimaryPlaneOverOverlayPlane();
         // Allocate buffers for overlay plane (NV12)
         var overlayBufferCount = 3;
         var overlayBuffers = new List<SharedDmaBuffer>();
