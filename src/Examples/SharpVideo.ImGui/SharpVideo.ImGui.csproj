@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
 	  <PackageReference Include="Hexa.NET.SDL3" Version="1.2.11" />
 	  <PackageReference Include="Hexa.NET.Utilities" Version="2.2.1" />
 	  <PackageReference Include="Hexa.NET.OpenGL3" Version="1.1.0" />
@@ -19,6 +23,9 @@
     <PackageReference Include="Hexa.NET.ImGui.Backends.SDL3" Version="1.0.18" />
 
 
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0-rc.2.25502.107" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0-rc.2.25502.107" />
+    <PackageReference Include="Silk.NET.OpenGLES" Version="2.22.0" />
   </ItemGroup>
 
 </Project>
