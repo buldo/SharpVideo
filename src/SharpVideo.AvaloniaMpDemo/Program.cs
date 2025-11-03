@@ -23,7 +23,7 @@ internal class Program
 #if DEBUG
                 .SetMinimumLevel(LogLevel.Trace)
 #else
-        .SetMinimumLevel(LogLevel.Warning)
+      .SetMinimumLevel(LogLevel.Warning)
 #endif
         );
 
@@ -54,7 +54,7 @@ internal class Program
             KnownPixelFormats.DRM_FORMAT_NV12, // Overlay plane format
             Logger);
 
-        var drmOutput = new SharpVideoDrmOutput(presenter.PrimaryPlanePresenter);
+        var drmOutput = new SharpVideoDrmOutput(drmDevice, presenter.PrimaryPlanePresenter);
 
         BuildAvaloniaApp()
             .StartLinuxDirect(args, drmOutput, new LibInputBackend());

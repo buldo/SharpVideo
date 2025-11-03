@@ -1,8 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.LinuxFramebuffer.Output;
@@ -14,20 +11,28 @@ using SharpVideo.Drm;
 using SharpVideo.Gbm;
 using SharpVideo.Linux.Native.Gbm;
 using SharpVideo.Utils;
-using static SharpVideo.Avalonia.LinuxFramebuffer.NativeUnsafeMethods;
-using static SharpVideo.Avalonia.LinuxFramebuffer.Output.LibDrm;
 
 namespace SharpVideo.Avalonia.LinuxFramebuffer.Output;
 
-public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
+public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface, IDisposable
 {
     private readonly DrmDevice _drmDevice;
     private readonly DrmPlaneDoubleBufferPresenter _presenter;
-    private GbmSurface _gbmTargetSurface;
-    private EglDisplay _eglDisplay;
-    private EglSurface _eglSurface;
-    private EglContext _deferredContext;
+    private readonly GbmDevice _gbmDevice;
+    private readonly GbmSurface _gbmDummySurface;
 
+    private readonly EglDisplay _eglDisplay;
+    private readonly EglContext _deferredContext;
+
+    // EGL extension functions for DMA-BUF rendering
+    private readonly NativeEgl.EglCreateImageKHR? _eglCreateImageKHR;
+    private readonly NativeEgl.EglDestroyImageKHR? _eglDestroyImageKHR;
+    private readonly NativeEgl.GlEGLImageTargetRenderbufferStorageOES? _glEGLImageTargetRenderbufferStorageOES;
+
+    // Per-buffer OpenGL resources
+    private readonly Dictionary<int, DmaBufferGlResources> _dmaBufferResources = new();
+
+    private bool _disposed;
 
     [DllImport("libEGL.so.1")]
     static extern IntPtr eglGetProcAddress(string proc);
@@ -38,7 +43,47 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
     {
         _drmDevice = drmDevice;
         _presenter = presenter;
-        Init();
+
+        // Create GBM device for EGL initialization (similar to GlRenderer)
+        _gbmDevice = GbmDevice.CreateFromDrmDevice(_drmDevice);
+
+        // Create a dummy GBM surface for EGL context initialization
+        _gbmDummySurface = _gbmDevice.CreateSurface(
+            _presenter.Width, _presenter.Height,
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,
+            GbmBoUse.GBM_BO_USE_RENDERING);
+
+        // Initialize EGL display
+        _eglDisplay = new EglDisplay(
+            new EglDisplayCreationOptions
+            {
+                Egl = new EglInterface(eglGetProcAddress),
+                PlatformType = 0x31D7, // EGL_PLATFORM_GBM_KHR
+                PlatformDisplay = _gbmDevice.Fd,
+                SupportsMultipleContexts = true,
+                SupportsContextSharing = true
+            });
+
+        // Create EGL context
+        _deferredContext = _eglDisplay.CreateContext(null);
+        PlatformGraphics = new SharedContextGraphics(_deferredContext);
+
+        // Load EGL extension functions for DMA-BUF support
+        var createImagePtr = eglGetProcAddress("eglCreateImageKHR");
+        var destroyImagePtr = eglGetProcAddress("eglDestroyImageKHR");
+        var targetRenderbufferPtr = eglGetProcAddress("glEGLImageTargetRenderbufferStorageOES");
+
+        if (createImagePtr == IntPtr.Zero || destroyImagePtr == IntPtr.Zero || targetRenderbufferPtr == IntPtr.Zero)
+        {
+            throw new Exception(
+                "Required EGL/GL extensions not available (EGL_KHR_image_base, EGL_EXT_image_dma_buf_import, GL_OES_EGL_image)");
+        }
+
+        _eglCreateImageKHR = Marshal.GetDelegateForFunctionPointer<NativeEgl.EglCreateImageKHR>(createImagePtr);
+        _eglDestroyImageKHR = Marshal.GetDelegateForFunctionPointer<NativeEgl.EglDestroyImageKHR>(destroyImagePtr);
+        _glEGLImageTargetRenderbufferStorageOES =
+            Marshal.GetDelegateForFunctionPointer<NativeEgl.GlEGLImageTargetRenderbufferStorageOES>(
+                targetRenderbufferPtr);
     }
 
     public PixelSize PixelSize => new PixelSize((int)_presenter.Width, (int)_presenter.Height);
@@ -57,110 +102,74 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
         return CreateGlRenderTarget();
     }
 
-    uint GetFbIdForBo(IntPtr bo)
+    private DmaBufferGlResources CreateDmaBufferGlResources(SharedDmaBuffer dmaBuffer)
     {
-        if (bo == IntPtr.Zero)
-            throw new ArgumentException("bo is 0");
-        var data = gbm_bo_get_user_data(bo);
-        if (data != IntPtr.Zero)
-            return (uint)data.ToInt32();
-
-        var w = gbm_bo_get_width(bo);
-        var h = gbm_bo_get_height(bo);
-        var stride = gbm_bo_get_stride(bo);
-        var handle = gbm_bo_get_handle(bo).u32;
-        var format = gbm_bo_get_format(bo);
-
-        // prepare for the new ioctl call
-        var handles = new uint[] { handle, 0, 0, 0 };
-        var pitches = new uint[] { stride, 0, 0, 0 };
-        var offsets = new uint[4];
-
-        var ret = drmModeAddFB2(_card.Fd, w, h, format, handles, pitches,
-            offsets, out var fbHandle, 0);
-
-        if (ret != 0)
+        if (_eglCreateImageKHR == null || _glEGLImageTargetRenderbufferStorageOES == null)
         {
-            // legacy fallback
-            ret = drmModeAddFB(_card.Fd, w, h, 24, 32, stride, (uint)handle,
-                out fbHandle);
-
-            if (ret != 0)
-                throw new Win32Exception(ret, $"drmModeAddFb failed {ret}");
+            throw new InvalidOperationException("EGL extensions not loaded");
         }
 
-        gbm_bo_set_user_data(bo, new IntPtr((int)fbHandle), FbDestroyDelegate);
+        // Create EGLImage from DMA-BUF
+        int[] imageAttribs =
+        [
+            0x3057, (int)_presenter.Width, // EGL_WIDTH
+            0x3056, (int)_presenter.Height, // EGL_HEIGHT
+            0x3271, (int)0x34325241, // EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ARGB8888
+            0x3272, dmaBuffer.DmaBuffer.Fd, // EGL_DMA_BUF_PLANE0_FD_EXT
+            0x3273, 0, // EGL_DMA_BUF_PLANE0_OFFSET_EXT
+            0x3274, (int)dmaBuffer.Stride, // EGL_DMA_BUF_PLANE0_PITCH_EXT
+            0x3038 // EGL_NONE
+        ];
 
-
-        return fbHandle;
-    }
-
-    void Init()
-    {
-        var device = GbmDevice.CreateFromDrmDevice(_drmDevice);
-        _gbmTargetSurface = device.CreateSurface(
-            _presenter.Width, _presenter.Height,
-            KnownPixelFormats.DRM_FORMAT_ARGB8888,
-            GbmBoUse.GBM_BO_USE_SCANOUT | GbmBoUse.GBM_BO_USE_RENDERING);
-
-
-        _eglDisplay = new EglDisplay(
-            new EglDisplayCreationOptions
-            {
-                Egl = new EglInterface(eglGetProcAddress),
-                PlatformType = 0x31D7,
-                PlatformDisplay = device.Fd,
-                SupportsMultipleContexts = true,
-                SupportsContextSharing = true
-            });
-
-        var surface = _eglDisplay.EglInterface.CreateWindowSurface(_eglDisplay.Handle, _eglDisplay.Config, _gbmTargetSurface.Fd, new[] { EglConsts.EGL_NONE, EglConsts.EGL_NONE });
-
-        _eglSurface = new EglSurface(_eglDisplay, surface);
-
-        _deferredContext = _eglDisplay.CreateContext(null);
-        PlatformGraphics = new SharedContextGraphics(_deferredContext);
-
-        var initialBufferSwappingColorR = 0 / 255.0f;
-        var initialBufferSwappingColorG = 0 / 255.0f;
-        var initialBufferSwappingColorB = 0 / 255.0f;
-        var initialBufferSwappingColorA = 0 / 255.0f;
-        using (_deferredContext.MakeCurrent(_eglSurface))
+        IntPtr eglImage;
+        fixed (int* attribsPtr = imageAttribs)
         {
-            _deferredContext.GlInterface.ClearColor(
-                initialBufferSwappingColorR,
-                initialBufferSwappingColorG,
-                initialBufferSwappingColorB,
-                initialBufferSwappingColorA);
-            _deferredContext.GlInterface.Clear(GlConsts.GL_COLOR_BUFFER_BIT | GlConsts.GL_STENCIL_BUFFER_BIT);
-            _eglSurface.SwapBuffers();
+            eglImage = _eglCreateImageKHR(
+                _eglDisplay.Handle,
+                IntPtr.Zero, // EGL_NO_CONTEXT
+                0x3270, // EGL_LINUX_DMA_BUF_EXT
+                IntPtr.Zero,
+                attribsPtr);
         }
 
-        var bo = gbm_surface_lock_front_buffer(_gbmTargetSurface.Fd);
-        //var fbId = GetFbIdForBo(bo);
-        //var connectorId = connector.Id;
-        //var mode = modeInfo.Mode;
+        if (eglImage == IntPtr.Zero)
+        {
+            throw new Exception($"Failed to create EGLImage from DMA-BUF");
+        }
 
+        // Create renderbuffer and bind EGLImage to it
+        var gl = _deferredContext.GlInterface;
+        var renderbuffer = gl.GenRenderbuffer();
+        gl.BindRenderbuffer(GlConsts.GL_RENDERBUFFER, renderbuffer);
+        _glEGLImageTargetRenderbufferStorageOES((uint)GlConsts.GL_RENDERBUFFER, eglImage);
 
-        //var res = drmModeSetCrtc(_card.Fd, _crtcId, fbId, 0, 0, &connectorId, 1, &mode);
-        //if (res != 0)
-        //    throw new Win32Exception(res, "drmModeSetCrtc failed");
+        var glError = gl.GetError();
+        if (glError != 0)
+        {
+            throw new Exception($"Failed to bind EGLImage to renderbuffer: {glError}");
+        }
 
-        //_mode = mode;
-        //_currentBo = bo;
+        // Create framebuffer and attach renderbuffer
+        var framebuffer = gl.GenFramebuffer();
+        gl.BindFramebuffer(GlConsts.GL_FRAMEBUFFER, framebuffer);
+        gl.FramebufferRenderbuffer(
+            GlConsts.GL_FRAMEBUFFER,
+            GlConsts.GL_COLOR_ATTACHMENT0,
+            GlConsts.GL_RENDERBUFFER,
+            renderbuffer);
 
-        //if (_outputOptions.EnableInitialBufferSwapping)
-        //{
-        //    //Go through two cycles of buffer swapping (there are render artifacts otherwise)
-        //    for (var c = 0; c < 2; c++)
-        //        using (CreateGlRenderTarget().BeginDraw())
-        //        {
-        //            _deferredContext.GlInterface.ClearColor(initialBufferSwappingColorR, initialBufferSwappingColorG,
-        //                initialBufferSwappingColorB, initialBufferSwappingColorA);
-        //            _deferredContext.GlInterface.Clear(GlConsts.GL_COLOR_BUFFER_BIT | GlConsts.GL_STENCIL_BUFFER_BIT);
-        //        }
-        //}
+        var status = gl.CheckFramebufferStatus(GlConsts.GL_FRAMEBUFFER);
+        if (status != GlConsts.GL_FRAMEBUFFER_COMPLETE)
+        {
+            throw new Exception($"Framebuffer is not complete: {status}");
+        }
 
+        return new DmaBufferGlResources
+        {
+            EglImage = eglImage,
+            Renderbuffer = renderbuffer,
+            Framebuffer = framebuffer
+        };
     }
 
     class RenderTarget : IGlPlatformSurfaceRenderTarget
@@ -171,70 +180,53 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
         {
             _parent = parent;
         }
+
         public void Dispose()
         {
-            // We are wrapping GBM buffer chain associated with CRTC, and don't free it on a whim
+            // Nothing to dispose - we don't own the buffers
         }
 
         class RenderSession : IGlPlatformSurfaceRenderingSession
         {
             private readonly SharpVideoDrmOutput _parent;
             private readonly IDisposable _clearContext;
+            private readonly SharedDmaBuffer _targetBuffer;
+            private readonly DmaBufferGlResources _glResources;
 
             public RenderSession(SharpVideoDrmOutput parent, IDisposable clearContext)
             {
                 _parent = parent;
                 _clearContext = clearContext;
+
+                // Get the back buffer from presenter
+                _targetBuffer = _parent._presenter.GetPrimaryPlaneBackBufferDma();
+
+                // Get or create GL resources for this DMA buffer
+                if (!_parent._dmaBufferResources.TryGetValue(_targetBuffer.DmaBuffer.Fd, out _glResources))
+                {
+                    _glResources = _parent.CreateDmaBufferGlResources(_targetBuffer);
+                    _parent._dmaBufferResources[_targetBuffer.DmaBuffer.Fd] = _glResources;
+                }
+
+                // Bind the framebuffer that renders to this DMA buffer
+                var gl = _parent._deferredContext.GlInterface;
+                gl.BindFramebuffer(GlConsts.GL_FRAMEBUFFER, _glResources.Framebuffer);
+                gl.Viewport(0, 0, (int)_parent._presenter.Width, (int)_parent._presenter.Height);
             }
 
             public void Dispose()
             {
                 _parent._deferredContext.GlInterface.Flush();
-                _parent._eglSurface.SwapBuffers();
 
-                var nextBo = gbm_surface_lock_front_buffer(_parent._gbmTargetSurface);
-                if (nextBo == IntPtr.Zero)
-                {
-                    // Not sure what else can be done
-                    Console.WriteLine("gbm_surface_lock_front_buffer failed");
-                }
-                else
-                {
+                // Present the rendered buffer through the presenter
+                _parent._presenter.SwapPrimaryPlaneBuffers();
 
-                    var fb = _parent.GetFbIdForBo(nextBo);
-                    bool waitingForFlip = true;
-
-                    drmModePageFlip(_parent._card.Fd, _parent._crtcId, fb, DrmModePageFlip.Event, null);
-
-                    DrmEventPageFlipHandlerDelegate flipCb =
-                        (int fd, uint sequence, uint tv_sec, uint tv_usec, void* user_data) =>
-                        {
-                            waitingForFlip = false;
-                        };
-                    var cbHandle = GCHandle.Alloc(flipCb);
-                    var ctx = new DrmEventContext
-                    {
-                        version = 4,
-                        page_flip_handler = Marshal.GetFunctionPointerForDelegate(flipCb)
-                    };
-                    while (waitingForFlip)
-                    {
-                        var pfd = new PollFd {events = 1, fd = _parent._card.Fd};
-                        poll(&pfd, new IntPtr(1), -1);
-                        drmHandleEvent(_parent._card.Fd, &ctx);
-                    }
-
-                    cbHandle.Free();
-                    gbm_surface_release_buffer(_parent._gbmTargetSurface, _parent._currentBo);
-                    _parent._currentBo = nextBo;
-                }
                 _clearContext.Dispose();
             }
 
-
             public IGlContext Context => _parent._deferredContext;
 
-            public PixelSize Size => _parent._mode.Resolution;
+            public PixelSize Size => new PixelSize((int)_parent._presenter.Width, (int)_parent._presenter.Height);
 
             public double Scaling => _parent.Scaling;
 
@@ -243,7 +235,78 @@ public unsafe class SharpVideoDrmOutput : IGlOutputBackend, IGlPlatformSurface
 
         public IGlPlatformSurfaceRenderingSession BeginDraw()
         {
-            return new RenderSession(_parent, _parent._deferredContext.MakeCurrent(_parent._eglSurface));
+            // Create a dummy EGL surface for context activation (we render to framebuffer)
+            var dummySurface = _parent._eglDisplay.EglInterface.CreatePBufferSurface(
+                _parent._eglDisplay.Handle,
+                _parent._eglDisplay.Config,
+                new[] { 0x3057, 16, 0x3056, 16, 0x3038 }); // EGL_WIDTH, EGL_HEIGHT, EGL_NONE
+
+            var eglSurface = new EglSurface(_parent._eglDisplay, dummySurface);
+            var contextToken = _parent._deferredContext.MakeCurrent(eglSurface);
+
+            return new RenderSession(_parent, new CompositeDisposable(contextToken, eglSurface));
         }
     }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
+        // Cleanup per-buffer resources
+        foreach (var (fd, resources) in _dmaBufferResources)
+        {
+            var gl = _deferredContext.GlInterface;
+            gl.DeleteFramebuffer(resources.Framebuffer);
+            gl.DeleteRenderbuffer(resources.Renderbuffer);
+            _eglDestroyImageKHR?.Invoke(_eglDisplay.Handle, resources.EglImage);
+        }
+
+        _dmaBufferResources.Clear();
+
+        _deferredContext?.Dispose();
+        _eglDisplay?.Dispose();
+        _gbmDummySurface?.Dispose();
+        _gbmDevice?.Dispose();
+    }
+
+    private class DmaBufferGlResources
+    {
+        public required IntPtr EglImage { get; init; }
+        public required int Renderbuffer { get; init; }
+        public required int Framebuffer { get; init; }
+    }
+
+    private class CompositeDisposable : IDisposable
+    {
+        private readonly IDisposable[] _disposables;
+
+        public CompositeDisposable(params IDisposable[] disposables)
+        {
+            _disposables = disposables;
+        }
+
+        public void Dispose()
+        {
+            foreach (var disposable in _disposables)
+            {
+                disposable.Dispose();
+            }
+        }
+    }
+}
+
+// Native EGL extension bindings
+internal static unsafe class NativeEgl
+{
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate IntPtr EglCreateImageKHR(IntPtr dpy, IntPtr ctx, int target, IntPtr buffer, int* attrib_list);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate bool EglDestroyImageKHR(IntPtr dpy, IntPtr image);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    public delegate void GlEGLImageTargetRenderbufferStorageOES(uint target, IntPtr image);
 }
