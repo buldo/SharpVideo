@@ -23,9 +23,8 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
         DrmCapabilitiesState capabilities,
         DrmBufferManager bufferManager,
         AtomicDisplayManager? atomicDisplayManager,
-        AtomicPlaneUpdater? atomicUpdater,
         ILogger logger)
-        : base(drmDevice, plane, crtcId, width, height, capabilities, atomicUpdater, logger)
+        : base(drmDevice, plane, crtcId, width, height, capabilities, logger)
     {
         _bufferManager = bufferManager;
         _atomicDisplayManager = atomicDisplayManager;

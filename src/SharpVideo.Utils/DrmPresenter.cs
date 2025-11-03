@@ -126,12 +126,11 @@ public class DrmPresenter
             overlayPlanePixelFormat.GetName(), overlayPlane.Id);
 
         var capabilities = drmDevice.GetDeviceCapabilities();
-        AtomicPlaneUpdater? atomicUpdater = null;
-        AtomicDisplayManager? atomicDisplayManager = null;
 #if DEBUG
         DumpCapabilities(capabilities, logger);
 #endif
 
+        AtomicDisplayManager? atomicDisplayManager = null;
         if (!capabilities.AtomicAsyncPageFlip)
         {
             logger.LogInformation(
@@ -178,11 +177,6 @@ public class DrmPresenter
                 height,
                 logger);
         }
-        else
-        {
-            atomicUpdater = new AtomicPlaneUpdater(drmDevice.DeviceFd, overlayPlane.Id, crtcId);
-            logger.LogInformation("Atomic modesetting with async page flip initialized");
-        }
 
         // Create double buffers for primary plane
         logger.LogInformation("Creating double buffers for primary plane with {Format} format",
@@ -197,7 +191,6 @@ public class DrmPresenter
             capabilities,
             bufferManager,
             atomicDisplayManager,
-            atomicUpdater,
             logger);
         var primaryPlanePresenter = new DrmPlaneDoubleBufferPresenter(
             drmDevice,
@@ -206,7 +199,6 @@ public class DrmPresenter
             width,
             height,
             capabilities,
-            atomicUpdater,
             logger,
             bufferManager,
             primaryPlanePixelFormat,
