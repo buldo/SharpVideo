@@ -11,24 +11,16 @@ public class DrmPresenter
     private readonly ILogger _logger;
 
     private DrmPresenter(
-        DrmPlane primaryPlane,
         DrmPlaneDoubleBufferPresenter primaryPlanePresenter,
-        DrmPlane overlayPlane,
         DrmPlaneLastDmaBufferPresenter overlayPlanePresenter,
         ILogger logger)
     {
-        PrimaryPlane = primaryPlane;
         PrimaryPlanePresenter = primaryPlanePresenter;
-        OverlayPlane = overlayPlane;
         OverlayPlanePresenter = overlayPlanePresenter;
         _logger = logger;
     }
 
-    public DrmPlane PrimaryPlane { get; }
-
     public DrmPlaneDoubleBufferPresenter PrimaryPlanePresenter { get; }
-
-    public DrmPlane OverlayPlane { get; }
 
     public DrmPlaneLastDmaBufferPresenter OverlayPlanePresenter { get; }
 
@@ -213,9 +205,7 @@ public class DrmPresenter
             connector.ConnectorId,
             mode);
         return new DrmPresenter(
-            primaryPlane,
             primaryPlanePresenter,
-            overlayPlane,
             overlayPlanePresenter,
             logger);
     }
@@ -274,8 +264,8 @@ public class DrmPresenter
     public void SetPrimaryPlaneOverOverlayPlane()
     {
         // Get zpos ranges for both planes
-        var primaryZposRange = PrimaryPlane.GetPlaneZPositionRange();
-        var overlayZposRange = OverlayPlane.GetPlaneZPositionRange();
+        var primaryZposRange = PrimaryPlanePresenter.Plane.GetPlaneZPositionRange();
+        var overlayZposRange = PrimaryPlanePresenter.Plane.GetPlaneZPositionRange();
 
         if (primaryZposRange.HasValue)
         {
@@ -305,8 +295,8 @@ public class DrmPresenter
 
             _logger.LogInformation("Attempting to set Primary zpos={PrimaryZpos}, Overlay zpos={OverlayZpos}", primaryZpos, overlayZpos);
 
-            var primarySuccess = PrimaryPlane.SetPlaneZPosition(primaryZpos);
-            var overlaySuccess = OverlayPlane.SetPlaneZPosition(overlayZpos);
+            var primarySuccess = PrimaryPlanePresenter.Plane.SetPlaneZPosition(primaryZpos);
+            var overlaySuccess = PrimaryPlanePresenter.Plane.SetPlaneZPosition(overlayZpos);
 
             if (primarySuccess && overlaySuccess)
             {

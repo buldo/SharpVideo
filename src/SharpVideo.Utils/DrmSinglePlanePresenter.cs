@@ -14,7 +14,6 @@ public abstract class DrmSinglePlanePresenter
     private readonly ILogger _logger;
 
     protected readonly DrmDevice _drmDevice;
-    protected readonly DrmPlane _plane;
 
     protected DrmSinglePlanePresenter(
         DrmDevice drmDevice,
@@ -27,7 +26,7 @@ public abstract class DrmSinglePlanePresenter
         ILogger logger)
     {
         _drmDevice = drmDevice;
-        _plane = plane;
+        Plane = plane;
         _crtcId = crtcId;
         Width = width;
         Height = height;
@@ -35,6 +34,8 @@ public abstract class DrmSinglePlanePresenter
         _atomicUpdater = atomicUpdater;
         _logger = logger;
     }
+
+    public DrmPlane Plane { get; }
 
     public uint Width { get; }
     public uint Height { get; }
@@ -62,7 +63,7 @@ public abstract class DrmSinglePlanePresenter
         if (_atomicUpdater != null)
         {
             var success = _atomicUpdater.UpdatePlane(
-                _plane.Id,
+                Plane.Id,
                 _crtcId,
                 fbId,
                 0, 0,
@@ -81,7 +82,7 @@ public abstract class DrmSinglePlanePresenter
 
         var result = LibDrm.drmModeSetPlane(
             _drmDevice.DeviceFd,
-            _plane.Id,
+            Plane.Id,
             _crtcId,
             fbId,
             0,
@@ -89,7 +90,7 @@ public abstract class DrmSinglePlanePresenter
             0, 0, srcWidth << 16, srcHeight << 16);
         if (result != 0)
         {
-            _logger.LogError("Failed to set plane {PlaneId}: {Result}", _plane.Id, result);
+            _logger.LogError("Failed to set plane {PlaneId}: {Result}", Plane.Id, result);
             return false;
         }
 
