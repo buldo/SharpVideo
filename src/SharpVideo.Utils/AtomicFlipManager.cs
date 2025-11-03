@@ -2,7 +2,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
-
+using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.C;
 
@@ -13,10 +13,10 @@ namespace SharpVideo.Utils;
 /// Implements a latency-optimized algorithm that always displays the latest available frame.
 /// </summary>
 [SupportedOSPlatform("linux")]
-public unsafe class AtomicDisplayManager : IDisposable
+public unsafe class AtomicFlipManager : IDisposable
 {
-    private readonly int _drmFd;
-    private readonly uint _planeId;
+    private readonly DrmDevice _drmDevice;
+    private readonly DrmPlane _drmPlane;
     private readonly uint _crtcId;
     private readonly AtomicPlaneProperties _props;
     private readonly uint _srcWidth;
@@ -39,9 +39,9 @@ public unsafe class AtomicDisplayManager : IDisposable
     private readonly LibDrm.DrmEventPageFlipHandler _pageFlipHandler;
     private DrmEventContext _eventContext;
 
-    public AtomicDisplayManager(
-        int drmFd,
-        uint planeId,
+    public AtomicFlipManager(
+        DrmDevice drmDevice,
+        DrmPlane drmPlane,
         uint crtcId,
         AtomicPlaneProperties props,
         uint srcWidth,
@@ -50,8 +50,8 @@ public unsafe class AtomicDisplayManager : IDisposable
         uint dstHeight,
         ILogger logger)
     {
-        _drmFd = drmFd;
-        _planeId = planeId;
+        _drmDevice = drmDevice;
+        _drmPlane = drmPlane;
         _crtcId = crtcId;
         _props = props;
         _srcWidth = srcWidth;
@@ -138,14 +138,14 @@ public unsafe class AtomicDisplayManager : IDisposable
             // Add all required plane properties
             int ret;
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.FbIdPropertyId, fbId);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.FbIdPropertyId, fbId);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add FB_ID property");
                 return;
             }
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.CrtcIdPropertyId, _crtcId);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcIdPropertyId, _crtcId);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add CRTC_ID property");
@@ -153,28 +153,28 @@ public unsafe class AtomicDisplayManager : IDisposable
             }
 
             // Position on CRTC (destination)
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.CrtcXPropertyId, 0);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcXPropertyId, 0);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add CRTC_X property");
                 return;
             }
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.CrtcYPropertyId, 0);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcYPropertyId, 0);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add CRTC_Y property");
                 return;
             }
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.CrtcWPropertyId, _dstWidth);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcWPropertyId, _dstWidth);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add CRTC_W property");
                 return;
             }
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.CrtcHPropertyId, _dstHeight);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcHPropertyId, _dstHeight);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add CRTC_H property");
@@ -182,28 +182,28 @@ public unsafe class AtomicDisplayManager : IDisposable
             }
 
             // Source rectangle in framebuffer (16.16 fixed point)
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.SrcXPropertyId, 0);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcXPropertyId, 0);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add SRC_X property");
                 return;
             }
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.SrcYPropertyId, 0);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcYPropertyId, 0);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add SRC_Y property");
                 return;
             }
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.SrcWPropertyId, _srcWidth << 16);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcWPropertyId, _srcWidth << 16);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add SRC_W property");
                 return;
             }
 
-            ret = LibDrm.drmModeAtomicAddProperty(req, _planeId, _props.SrcHPropertyId, _srcHeight << 16);
+            ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcHPropertyId, _srcHeight << 16);
             if (ret < 0)
             {
                 _logger.LogError("Failed to add SRC_H property");
@@ -214,7 +214,7 @@ public unsafe class AtomicDisplayManager : IDisposable
             var flags = DrmModeAtomicFlags.DRM_MODE_ATOMIC_NONBLOCK |
                        DrmModeAtomicFlags.DRM_MODE_PAGE_FLIP_EVENT;
 
-            ret = LibDrm.drmModeAtomicCommit(_drmFd, req, flags, 0);
+            ret = LibDrm.drmModeAtomicCommit(_drmDevice.DeviceFd, req, flags, 0);
             if (ret == 0)
             {
                 _flipPending = true;
@@ -266,7 +266,7 @@ public unsafe class AtomicDisplayManager : IDisposable
 
         var pollFd = new PollFd
         {
-            fd = _drmFd,
+            fd = _drmDevice.DeviceFd,
             events = PollEvents.POLLIN
         };
 
@@ -278,7 +278,7 @@ public unsafe class AtomicDisplayManager : IDisposable
             {
                 fixed (DrmEventContext* evctxPtr = &_eventContext)
                 {
-                    var handleResult = LibDrm.drmHandleEvent(_drmFd, evctxPtr);
+                    var handleResult = LibDrm.drmHandleEvent(_drmDevice.DeviceFd, evctxPtr);
                     if (handleResult < 0)
                     {
                         _logger.LogWarning("drmHandleEvent failed with error {Error}", handleResult);

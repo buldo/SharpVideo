@@ -130,7 +130,7 @@ public class DrmPresenter
         DumpCapabilities(capabilities, logger);
 #endif
 
-        AtomicDisplayManager? atomicDisplayManager = null;
+        AtomicFlipManager? atomicDisplayManager = null;
         if (!capabilities.AtomicAsyncPageFlip)
         {
             logger.LogInformation(
@@ -144,9 +144,9 @@ public class DrmPresenter
                 return null;
             }
 
-            atomicDisplayManager = new AtomicDisplayManager(
-                drmDevice.DeviceFd,
-                overlayPlane.Id,
+            atomicDisplayManager = new AtomicFlipManager(
+                drmDevice,
+                overlayPlane,
                 crtcId,
                 props,
                 width,
