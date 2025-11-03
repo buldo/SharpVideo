@@ -95,6 +95,27 @@ internal class Program
                 return;
             }
 
+            Logger.LogInformation("ImGui OpenGL3 backend initialized");
+
+            // Render an initial "warmup" frame to initialize the pipeline
+            Logger.LogInformation("Rendering initial warmup frame...");
+            io.DeltaTime = 1.0f / 60.0f;
+            Hexa.NET.ImGui.ImGui.NewFrame();
+            RenderImGuiContent(TimeSpan.Zero, 0);
+            Hexa.NET.ImGui.ImGui.Render();
+            var warmupDrawData = Hexa.NET.ImGui.ImGui.GetDrawData();
+            drmRenderer.RenderToGbmSurface(warmupDrawData);
+
+            // First SwapBuffers will initialize DRM display
+            if (!presenter.PrimaryPlanePresenter.SwapBuffers())
+            {
+                Logger.LogError("Failed to swap buffers on warmup frame");
+                SDL.Quit();
+                return;
+            }
+
+            Logger.LogInformation("Warmup frame completed successfully");
+
             try
             {
                 RunMainLoop(io, presenter, drmRenderer);
@@ -128,59 +149,77 @@ internal class Program
 
         while (!exiting)
         {
-            var currentTime = stopwatch.Elapsed;
-            var deltaTime = (float)(currentTime - lastFrameTime).TotalSeconds;
-            lastFrameTime = currentTime;
-
-            // Poll SDL events for input
-            SDL.PumpEvents();
-
-            // Simple quit handling - just check for quit event
-            // (In real app, you'd want proper keyboard/mouse handling via SDL backends)
-            unsafe
+            try
             {
-                Hexa.NET.SDL3.SDLEvent sdlEvent;
-                while (SDL.PollEvent(&sdlEvent))
+                var currentTime = stopwatch.Elapsed;
+                var deltaTime = (float)(currentTime - lastFrameTime).TotalSeconds;
+                lastFrameTime = currentTime;
+
+                // Poll SDL events for input
+                SDL.PumpEvents();
+
+                // Simple quit handling - just check for quit event
+                // (In real app, you'd want proper keyboard/mouse handling via SDL backends)
+                unsafe
                 {
-                    if (sdlEvent.Type == (uint)SDLEventType.Quit)
+                    Hexa.NET.SDL3.SDLEvent sdlEvent;
+                    while (SDL.PollEvent(&sdlEvent))
                     {
-                        exiting = true;
+                        if (sdlEvent.Type == (uint)SDLEventType.Quit)
+                        {
+                            Logger.LogInformation("Received quit event, exiting");
+                            exiting = true;
+                        }
                     }
                 }
+
+                if (exiting)
+                    break;
+
+                // Start ImGui frame
+                io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
+                Hexa.NET.ImGui.ImGui.NewFrame();
+
+                // Render ImGui demo window and FPS counter
+                RenderImGuiContent(stopwatch.Elapsed, frameCount);
+
+                // End ImGui frame and generate draw data
+                Hexa.NET.ImGui.ImGui.Render();
+                var drawData = Hexa.NET.ImGui.ImGui.GetDrawData();
+
+                // Render ImGui to the GBM surface using OpenGL ES
+                // This happens without vsync limitation - maximum speed!
+                drmRenderer.RenderToGbmSurface(drawData);
+
+                // Swap GBM buffers and present (this is vsync-synchronized via page flip)
+                if (!presenter.PrimaryPlanePresenter.SwapBuffers())
+                {
+                    Logger.LogWarning("Failed to swap buffers on frame {Frame}", frameCount);
+                }
+                else
+                {
+                    Logger.LogTrace("Frame {Frame} presented successfully", frameCount);
+                }
+
+                frameCount++;
+
+                // Log FPS every second
+                if ((currentTime - lastFpsTime).TotalSeconds >= 1.0)
+                {
+                    var fps = frameCount / (currentTime - lastFpsTime).TotalSeconds;
+                    Logger.LogInformation("FPS: {Fps:F2} (rendering without vsync limitation)", fps);
+                    frameCount = 0;
+                    lastFpsTime = currentTime;
+                }
             }
-
-            // Start ImGui frame
-            io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
-            Hexa.NET.ImGui.ImGui.NewFrame();
-
-            // Render ImGui demo window and FPS counter
-            RenderImGuiContent(stopwatch.Elapsed, frameCount);
-
-            // End ImGui frame and generate draw data
-            Hexa.NET.ImGui.ImGui.Render();
-            var drawData = Hexa.NET.ImGui.ImGui.GetDrawData();
-
-            // Render ImGui to the GBM surface using OpenGL ES
-            // This happens without vsync limitation - maximum speed!
-            drmRenderer.RenderToGbmSurface(drawData);
-
-            // Swap GBM buffers and present (this is vsync-synchronized via page flip)
-            if (!presenter.PrimaryPlanePresenter.SwapBuffers())
+            catch (Exception ex)
             {
-                Logger.LogWarning("Failed to swap buffers");
-            }
-
-            frameCount++;
-
-            // Log FPS every second
-            if ((currentTime - lastFpsTime).TotalSeconds >= 1.0)
-            {
-                var fps = frameCount / (currentTime - lastFpsTime).TotalSeconds;
-                Logger.LogInformation("FPS: {Fps:F2} (rendering without vsync limitation)", fps);
-                frameCount = 0;
-                lastFpsTime = currentTime;
+                Logger.LogError(ex, "Exception in main loop on frame {Frame}", frameCount);
+                exiting = true;
             }
         }
+
+        Logger.LogInformation("Main loop exited after {FrameCount} frames", frameCount);
     }
 
     private static void RenderImGuiContent(TimeSpan elapsed, int frameCount)

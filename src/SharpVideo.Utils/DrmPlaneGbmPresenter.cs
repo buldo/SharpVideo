@@ -90,17 +90,17 @@ public nint GetNativeGbmSurfaceHandle()
     public bool SwapBuffers()
     {
         // Lock the new front buffer (the one we just rendered to via EGL)
-   _logger.LogDebug("Locking front buffer from GBM surface...");
+   _logger.LogTrace("Locking front buffer from GBM surface...");
       var newBo = LibGbm.LockFrontBuffer(_gbmSurface.Fd);
-        if (newBo == 0)
+ if (newBo == 0)
       {
-            _logger.LogError("Failed to lock front buffer from GBM surface");
-         return false;
+_logger.LogError("Failed to lock front buffer from GBM surface");
+     return false;
         }
 
-        _logger.LogDebug("Successfully locked front buffer BO: 0x{Bo:X}", newBo);
+        _logger.LogTrace("Successfully locked front buffer BO: 0x{Bo:X}", newBo);
 
-        // Create framebuffer for the new BO
+ // Create framebuffer for the new BO
         var newFbId = CreateFramebufferForBo(newBo);
         if (newFbId == 0)
         {
@@ -109,9 +109,9 @@ public nint GetNativeGbmSurfaceHandle()
   return false;
         }
 
-        _logger.LogDebug("Created framebuffer ID: {FbId}", newFbId);
+        _logger.LogTrace("Created framebuffer ID: {FbId}", newFbId);
 
-        // First time initialization - set CRTC mode
+    // First time initialization - set CRTC mode
         if (!_initialized)
         {
             _logger.LogInformation("First frame - initializing DRM display");
@@ -122,42 +122,48 @@ public nint GetNativeGbmSurfaceHandle()
        LibDrm.drmModeRmFB(_drmDevice.DeviceFd, newFbId);
       LibGbm.ReleaseBuffer(_gbmSurface.Fd, newBo);
      return false;
-            }
+       }
 
             _initialized = true;
         _currentBo = newBo;
 _currentFbId = newFbId;
         
-            _logger.LogInformation("DRM display initialized successfully with first frame");
+      _logger.LogInformation("DRM display initialized successfully with first frame");
        return true;
      }
 
-        // Update the plane to show the new buffer
-        var success = SetPlane(newFbId, _width, _height);
+        // Subsequent frames - update the plane
+   _logger.LogTrace("Updating plane with framebuffer {FbId}", newFbId);
+     var success = SetPlane(newFbId, _width, _height);
  if (!success)
-        {
+{
             _logger.LogError("Failed to update plane with new buffer");
-            LibDrm.drmModeRmFB(_drmDevice.DeviceFd, newFbId);
+LibDrm.drmModeRmFB(_drmDevice.DeviceFd, newFbId);
     LibGbm.ReleaseBuffer(_gbmSurface.Fd, newBo);
             return false;
      }
 
+        _logger.LogTrace("Plane updated successfully");
+
         // Clean up previous buffer (if any)
  if (_previousBo != 0)
         {
+ _logger.LogTrace("Releasing previous BO: 0x{Bo:X}", _previousBo);
        LibGbm.ReleaseBuffer(_gbmSurface.Fd, _previousBo);
  }
  if (_previousFbId != 0)
-        {
-            LibDrm.drmModeRmFB(_drmDevice.DeviceFd, _previousFbId);
+    {
+       _logger.LogTrace("Removing previous framebuffer: {FbId}", _previousFbId);
+         LibDrm.drmModeRmFB(_drmDevice.DeviceFd, _previousFbId);
       }
 
         // Update state
-        _previousBo = _currentBo;
+      _previousBo = _currentBo;
    _previousFbId = _currentFbId;
     _currentBo = newBo;
         _currentFbId = newFbId;
 
+ _logger.LogTrace("SwapBuffers completed successfully");
         return true;
     }
 
