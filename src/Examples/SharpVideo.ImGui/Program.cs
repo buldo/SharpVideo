@@ -64,7 +64,7 @@ internal class Program
             var buffersManager = new DrmBufferManager(
                 drmDevice,
                 allocator,
-                [KnownPixelFormats.DRM_FORMAT_ARGB8888],
+                [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
                 LoggerFactory.CreateLogger<DrmBufferManager>());
 
             // Create DRM presenter for primary plane
@@ -74,7 +74,7 @@ internal class Program
                 Height,
                 buffersManager,
                 KnownPixelFormats.DRM_FORMAT_ARGB8888,
-                null, // No overlay plane needed
+                KnownPixelFormats.DRM_FORMAT_NV12, // No overlay plane needed
                 Logger);
 
             if (presenter == null)
