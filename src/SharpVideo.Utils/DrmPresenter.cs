@@ -1,209 +1,60 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Drm;
-using SharpVideo.Linux.Native;
 
 namespace SharpVideo.Utils;
 
+/// <summary>
+/// Legacy DRM presenter using DMA buffers for both primary and overlay planes.
+/// This is a compatibility wrapper around DrmPresenter&lt;DrmPlaneDoubleBufferPresenter, DrmPlaneLastDmaBufferPresenter&gt;.
+/// For new code, consider using the generic DrmPresenter&lt;TPrimaryPresenter, TOverlayPresenter&gt; directly.
+/// </summary>
 [SupportedOSPlatform("linux")]
 public class DrmPresenter
 {
-    private readonly ILogger _logger;
+    private readonly DrmPresenter<DrmPlaneDoubleBufferPresenter, DrmPlaneLastDmaBufferPresenter> _innerPresenter;
 
     private DrmPresenter(
-        DrmPlane primaryPlane,
-        DrmPlaneDoubleBufferPresenter primaryPlanePresenter,
-        DrmPlane overlayPlane,
-        DrmPlaneLastDmaBufferPresenter overlayPlanePresenter,
-        ILogger logger)
+        DrmPresenter<DrmPlaneDoubleBufferPresenter, DrmPlaneLastDmaBufferPresenter> innerPresenter)
     {
-        PrimaryPlane = primaryPlane;
-        PrimaryPlanePresenter = primaryPlanePresenter;
-        OverlayPlane = overlayPlane;
-        OverlayPlanePresenter = overlayPlanePresenter;
-        _logger = logger;
+        _innerPresenter = innerPresenter;
     }
 
-    public DrmPlane PrimaryPlane { get; }
+    public DrmPlane PrimaryPlane => _innerPresenter.PrimaryPlane;
 
-    public DrmPlaneDoubleBufferPresenter PrimaryPlanePresenter { get; }
+    public DrmPlaneDoubleBufferPresenter PrimaryPlanePresenter => _innerPresenter.PrimaryPlanePresenter;
 
-    public DrmPlane OverlayPlane { get; }
+    public DrmPlane OverlayPlane => _innerPresenter.OverlayPlane ?? throw new InvalidOperationException("No overlay plane configured");
 
-    public DrmPlaneLastDmaBufferPresenter OverlayPlanePresenter { get; }
+    public DrmPlaneLastDmaBufferPresenter OverlayPlanePresenter => _innerPresenter.OverlayPlanePresenter ?? throw new InvalidOperationException("No overlay plane configured");
 
+    /// <summary>
+    /// Creates a DRM presenter with DMA buffers for both primary and overlay planes.
+    /// </summary>
     public static DrmPresenter? Create(
         DrmDevice drmDevice,
         uint width,
         uint height,
         DrmBufferManager bufferManager,
         PixelFormat primaryPlanePixelFormat,
-        PixelFormat overlayPlanePixelFormat,
+        PixelFormat? overlayPlanePixelFormat,
         ILogger logger)
     {
-        var resources = drmDevice.GetResources();
-        if (resources == null)
-        {
-            throw new Exception("Failed to get DRM resources");
-        }
+        var innerPresenter = DrmPresenter<DrmPlaneDoubleBufferPresenter, DrmPlaneLastDmaBufferPresenter>
+   .CreateWithDmaBuffers(
+      drmDevice,
+                width,
+ height,
+       bufferManager,
+      primaryPlanePixelFormat,
+       overlayPlanePixelFormat,
+         logger);
 
-        var connector = resources.Connectors.FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
-        if (connector == null)
-        {
-            throw new Exception("No connected display found");
-        }
-
-        logger.LogInformation("Found connected display: {Type}", connector.ConnectorType);
-
-        var mode = connector.Modes.FirstOrDefault(m => m.HDisplay == width && m.VDisplay == height);
-        if (mode == null)
-        {
-            throw new Exception($"No {width}x{height} mode found");
-        }
-
-        logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{RefreshRate}Hz)",
-            mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
-
-        var encoder = connector.Encoder ?? connector.Encoders.FirstOrDefault();
-        if (encoder == null)
-        {
-            throw new Exception("No encoder found");
-        }
-
-        var crtcId = encoder.CrtcId;
-        if (crtcId == 0)
-        {
-            var availableCrtcs = resources.Crtcs
-                .Where(crtc => (encoder.PossibleCrtcs & (1u << Array.IndexOf(resources.Crtcs.ToArray(), crtc))) != 0);
-            crtcId = availableCrtcs.FirstOrDefault();
-        }
-
-        if (crtcId == 0)
-        {
-            throw new Exception("No available CRTC found");
-        }
-
-        logger.LogInformation("Using CRTC ID: {CrtcId}", crtcId);
-
-        var crtcIndex = resources.Crtcs.ToList().IndexOf(crtcId);
-        var compatiblePlanes = resources.Planes
-            .Where(p => (p.PossibleCrtcs & (1u << crtcIndex)) != 0)
-            .ToList();
-
-        var primaryPlane = compatiblePlanes.FirstOrDefault(p =>
-        {
-            var props = p.GetProperties();
-            var typeProp = props.FirstOrDefault(prop => prop.Name.Equals("type", StringComparison.OrdinalIgnoreCase));
-            return typeProp != null && typeProp.EnumNames != null &&
-                   typeProp.Value < (ulong)typeProp.EnumNames.Count &&
-                   typeProp.EnumNames[(int)typeProp.Value].Equals("Primary", StringComparison.OrdinalIgnoreCase);
-        });
-
-        if (primaryPlane == null)
-        {
-            throw new Exception("No primary plane found");
-        }
-
-        logger.LogInformation("Found primary plane: ID {PlaneId}", primaryPlane.Id);
-
-        var overlayPlane = compatiblePlanes.FirstOrDefault(p =>
-        {
-            var props = p.GetProperties();
-            var typeProp = props.FirstOrDefault(prop => prop.Name.Equals("type", StringComparison.OrdinalIgnoreCase));
-            bool isOverlay = typeProp != null && typeProp.EnumNames != null &&
-                             typeProp.Value < (ulong)typeProp.EnumNames.Count &&
-                             typeProp.EnumNames[(int)typeProp.Value]
-                                 .Equals("Overlay", StringComparison.OrdinalIgnoreCase);
-            return isOverlay && p.Formats.Contains(overlayPlanePixelFormat.Fourcc);
-        });
-
-        if (overlayPlane == null)
-        {
-            throw new Exception($"No overlay plane with {overlayPlanePixelFormat.GetName()} format found");
-        }
-
-        logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}", overlayPlanePixelFormat.GetName(), overlayPlane.Id);
-
-#if DEBUG
-        var capabilities = drmDevice.GetDeviceCapabilities();
-        DumpCapabilities(capabilities, logger);
-#endif
-
-        var overlayPlanePresenter = new DrmPlaneLastDmaBufferPresenter(
-            drmDevice,
-            overlayPlane,
-            crtcId,
-            width,
-            height,
-            bufferManager,
-            logger);
-        var primaryPlanePresenter = new DrmPlaneDoubleBufferPresenter(
-            drmDevice,
-            primaryPlane,
-            crtcId,
-            width,
-            height,
-            logger,
-            bufferManager,
-            primaryPlanePixelFormat,
-            connector.ConnectorId,
-            mode);
-        return new DrmPresenter(
-            primaryPlane,
-            primaryPlanePresenter,
-            overlayPlane,
-            overlayPlanePresenter,
-            logger);
-    }
-
-    private static void DumpCapabilities(DrmCapabilitiesState caps, ILogger logger)
-    {
-        logger.LogInformation(
-            "DRM device capabilities: " +
-            "DumbBuffer: {DumbBuffer}; " +
-            "VblankHighCrtc: {VblankHighCrtc}; " +
-            "DumbPreferredDepth: {DumbPreferredDepth}; " +
-            "DumbPreferShadow: {DumbPreferShadow}; " +
-            "Prime: {Prime}; " +
-            "TimestampMonotonic: {TimestampMonotonic}; " +
-            "AsyncPageFlip: {AsyncPageFlip}; " +
-            "CursorWidth: {CursorWidth}; " +
-            "CursorHeight: {CursorHeight}; " +
-            "AddFB2Modifiers: {AddFB2Modifiers}; " +
-            "PageFlipTarget: {PageFlipTarget}; " +
-            "CrtcInVblankEvent: {CrtcInVblankEvent}; " +
-            "SyncObj: {SyncObj}; " +
-            "SyncObjTimeline: {SyncObjTimeline}; " +
-            "AtomicAsyncPageFlip: {AtomicAsyncPageFlip}",
-            caps.DumbBuffer,
-            caps.VblankHighCrtc,
-            caps.DumbPreferredDepth,
-            caps.DumbPreferShadow,
-            caps.Prime,
-            caps.TimestampMonotonic,
-            caps.AsyncPageFlip,
-            caps.CursorWidth,
-            caps.CursorHeight,
-            caps.AddFB2Modifiers,
-            caps.PageFlipTarget,
-            caps.CrtcInVblankEvent,
-            caps.SyncObj,
-            caps.SyncObjTimeline,
-            caps.AtomicAsyncPageFlip);
+        return innerPresenter != null ? new DrmPresenter(innerPresenter) : null;
     }
 
     public void CleanupDisplay()
     {
-        _logger.LogInformation("Cleaning up display resources");
-
-        try
-        {
-            PrimaryPlanePresenter.Cleanup();
-            OverlayPlanePresenter.Cleanup();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error during display cleanup");
-        }
+        _innerPresenter.CleanupDisplay();
     }
 }
