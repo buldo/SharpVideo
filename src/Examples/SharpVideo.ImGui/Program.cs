@@ -13,22 +13,16 @@ internal class Program
 {
     static void Main(string[] args)
     {
+        SDL.GLSetAttribute(SDLGLAttr.ContextFlags, 0);
+        SDL.GLSetAttribute(SDLGLAttr.ContextProfileMask, SDL.SDL_GL_CONTEXT_PROFILE_ES);
+        SDL.GLSetAttribute(SDLGLAttr.ContextMajorVersion, 3);
+        SDL.GLSetAttribute(SDLGLAttr.ContextMinorVersion, 0);
         SDL.SetHint(SDL.SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
         SDL.Init(SDLInitFlags.Events | SDLInitFlags.Video);
         unsafe
         {
-            //const char* glsl_version = "#version 300 es";
-            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-            // SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-            SDL.GLSetAttribute(SDLGLAttr.ContextFlags, 0);
-            SDL.GLSetAttribute(SDLGLAttr.ContextProfileMask, SDL.SDL_GL_CONTEXT_PROFILE_ES);
-            SDL.GLSetAttribute(SDLGLAttr.ContextMajorVersion, 3);
-            SDL.GLSetAttribute(SDLGLAttr.ContextMinorVersion, 0);
-
             float main_scale = SDL.GetDisplayContentScale(SDL.GetPrimaryDisplay());
-            var window = SDL.CreateWindow("Test Window", 1920, 1080, SDLWindowFlags.Opengl);
+            var window = SDL.CreateWindow("Test Window", 1920, 1080, SDLWindowFlags.Opengl | SDLWindowFlags.Fullscreen);
             var windowId = SDL.GetWindowID(window);
 
             var guiContext = Hexa.NET.ImGui.ImGui.CreateContext();
@@ -42,6 +36,7 @@ internal class Program
             io.ConfigFlags |= ImGuiConfigFlags.ViewportsEnable;       // Enable Multi-Viewport / Platform Windows
             io.ConfigViewportsNoAutoMerge = false;
             io.ConfigViewportsNoTaskBarIcon = false;
+            io.MouseDrawCursor = true;
 
             var style = Hexa.NET.ImGui.ImGui.GetStyle();
             style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
@@ -50,6 +45,7 @@ internal class Program
             io.ConfigDpiScaleViewports = true;
 
             var context = SDL.GLCreateContext(window);
+            SDL.GLSetSwapInterval(0);
 
             ImGuiImplSDL3.SetCurrentContext(guiContext);
             if (!ImGuiImplSDL3.InitForOpenGL(new SDLWindowPtr((Hexa.NET.ImGui.Backends.SDL3.SDLWindow*)window), (void*)context.Handle))
@@ -60,7 +56,7 @@ internal class Program
             }
 
             ImGuiImplOpenGL3.SetCurrentContext(guiContext);
-            if (!ImGuiImplOpenGL3.Init((byte*)null))
+            if (!ImGuiImplOpenGL3.Init("#version 300 es"))
             {
                 Console.WriteLine("Failed to init ImGui Impl OpenGL3");
                 SDL.Quit();
