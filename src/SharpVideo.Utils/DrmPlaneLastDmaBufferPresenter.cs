@@ -8,7 +8,7 @@ namespace SharpVideo.Utils;
 public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
 {
     private readonly DrmBufferManager _bufferManager;
-    private readonly AtomicDisplayManager? _atomicDisplayManager;
+    private readonly AtomicPlaneManager? _atomicDisplayManager;
 
     private readonly List<SharedDmaBuffer> _processedBuffers = new();
 
@@ -22,7 +22,7 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
         uint height,
         DrmCapabilitiesState capabilities,
         DrmBufferManager bufferManager,
-        AtomicDisplayManager? atomicDisplayManager,
+        AtomicPlaneManager? atomicDisplayManager,
         AtomicPlaneUpdater? atomicUpdater,
         ILogger logger)
         : base(drmDevice, plane, crtcId, width, height, capabilities, atomicUpdater, logger)

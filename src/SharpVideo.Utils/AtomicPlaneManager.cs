@@ -15,7 +15,7 @@ namespace SharpVideo.Utils;
 /// Implements a latency-optimized algorithm that always displays the latest available frame.
 /// </summary>
 [SupportedOSPlatform("linux")]
-public unsafe class AtomicDisplayManager : IDisposable
+public unsafe class AtomicPlaneManager : IDisposable
 {
     private readonly int _drmFd;
     private readonly uint _planeId;
@@ -50,7 +50,7 @@ public unsafe class AtomicDisplayManager : IDisposable
     private readonly LibDrm.DrmEventPageFlipHandler _pageFlipHandler;
     private DrmEventContext _eventContext;
 
-    public AtomicDisplayManager(
+    public AtomicPlaneManager(
         int drmFd,
         uint planeId,
         uint crtcId,

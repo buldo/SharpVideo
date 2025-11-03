@@ -119,7 +119,7 @@ public class DrmPresenter
 
         var capabilities = drmDevice.GetDeviceCapabilities();
         AtomicPlaneUpdater? atomicUpdater = null;
-        AtomicDisplayManager? atomicDisplayManager = null;
+        AtomicPlaneManager? atomicDisplayManager = null;
 #if DEBUG
         DumpCapabilities(capabilities, logger);
 #endif
@@ -150,7 +150,7 @@ public class DrmPresenter
                 return null;
             }
 
-            atomicDisplayManager = new AtomicDisplayManager(
+            atomicDisplayManager = new AtomicPlaneManager(
                 drmDevice.DeviceFd,
                 overlayPlane.Id,
                 crtcId,
