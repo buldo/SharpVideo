@@ -138,7 +138,7 @@ public class DrmPresenter
 
             var props = new AtomicPlaneProperties(overlayPlane);
 
-            if (props.IsValid())
+            if (!props.IsValid())
             {
                 logger.LogError("Failed to find required plane properties");
                 return null;
