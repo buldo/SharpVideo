@@ -218,10 +218,6 @@ public unsafe class AtomicFlipManager : IDisposable
             if (ret == 0)
             {
                 _flipPending = true;
-                if (_logger.IsEnabled(LogLevel.Trace))
-                {
-                    _logger.LogTrace("Atomic commit successful for FB {FbId}", fbId);
-                }
             }
             else
             {
@@ -239,11 +235,6 @@ public unsafe class AtomicFlipManager : IDisposable
         lock (_lock)
         {
             _flipPending = false;
-
-            if (_logger.IsEnabled(LogLevel.Trace))
-            {
-                _logger.LogTrace("Page flip completed, sequence: {Sequence}", sequence);
-            }
 
             // Move the currently displayed buffer to completed queue
             if (_latestBuffer != null)

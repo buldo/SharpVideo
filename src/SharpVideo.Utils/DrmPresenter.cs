@@ -122,43 +122,12 @@ public class DrmPresenter
             throw new Exception($"No overlay plane with {overlayPlanePixelFormat.GetName()} format found");
         }
 
-        logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
-            overlayPlanePixelFormat.GetName(), overlayPlane.Id);
+        logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}", overlayPlanePixelFormat.GetName(), overlayPlane.Id);
 
-        var capabilities = drmDevice.GetDeviceCapabilities();
 #if DEBUG
+        var capabilities = drmDevice.GetDeviceCapabilities();
         DumpCapabilities(capabilities, logger);
 #endif
-
-        AtomicFlipManager? atomicDisplayManager = null;
-        if (!capabilities.AtomicAsyncPageFlip)
-        {
-            logger.LogInformation(
-                "Using atomic modesetting with VBlank synchronization (async page flip not supported)");
-
-            var props = new AtomicPlaneProperties(overlayPlane);
-
-            if (!props.IsValid())
-            {
-                logger.LogError("Failed to find required plane properties");
-                return null;
-            }
-
-            atomicDisplayManager = new AtomicFlipManager(
-                drmDevice,
-                overlayPlane,
-                crtcId,
-                props,
-                width,
-                height,
-                width,
-                height,
-                logger);
-        }
-
-        // Create double buffers for primary plane
-        logger.LogInformation("Creating double buffers for primary plane with {Format} format",
-            primaryPlanePixelFormat.GetName());
 
         var overlayPlanePresenter = new DrmPlaneLastDmaBufferPresenter(
             drmDevice,
@@ -166,9 +135,7 @@ public class DrmPresenter
             crtcId,
             width,
             height,
-            capabilities,
             bufferManager,
-            atomicDisplayManager,
             logger);
         var primaryPlanePresenter = new DrmPlaneDoubleBufferPresenter(
             drmDevice,
@@ -176,7 +143,6 @@ public class DrmPresenter
             crtcId,
             width,
             height,
-            capabilities,
             logger,
             bufferManager,
             primaryPlanePixelFormat,

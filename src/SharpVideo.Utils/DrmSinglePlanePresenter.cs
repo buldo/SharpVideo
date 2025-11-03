@@ -11,7 +11,6 @@ public abstract class DrmSinglePlanePresenter
     private readonly uint _crtcId;
     private readonly uint _width;
     private readonly uint _height;
-    private readonly DrmCapabilitiesState _capabilities;
     private readonly ILogger _logger;
 
     protected readonly DrmDevice _drmDevice;
@@ -23,7 +22,6 @@ public abstract class DrmSinglePlanePresenter
         uint crtcId,
         uint width,
         uint height,
-        DrmCapabilitiesState capabilities,
         ILogger logger)
     {
         _drmDevice = drmDevice;
@@ -31,7 +29,6 @@ public abstract class DrmSinglePlanePresenter
         _crtcId = crtcId;
         _width = width;
         _height = height;
-        _capabilities = capabilities;
         _logger = logger;
     }
 

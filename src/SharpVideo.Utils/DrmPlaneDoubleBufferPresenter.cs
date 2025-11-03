@@ -19,13 +19,12 @@ public class DrmPlaneDoubleBufferPresenter : DrmSinglePlanePresenter
         uint crtcId,
         uint width,
         uint height,
-        DrmCapabilitiesState capabilities,
         ILogger logger,
         DrmBufferManager bufferManager,
         PixelFormat primaryPlanePixelFormat,
         uint connectorId,
         DrmModeInfo mode)
-        : base(drmDevice, plane, crtcId, width, height, capabilities, logger)
+        : base(drmDevice, plane, crtcId, width, height, logger)
     {
         _bufferManager = bufferManager;
 
