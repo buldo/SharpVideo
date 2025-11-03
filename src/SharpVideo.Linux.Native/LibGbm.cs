@@ -67,19 +67,19 @@ public static unsafe class LibGbm
     public static extern uint GetFormat(nint bo);
 
     /// <summary>
-    /// Get the handle of a buffer object (for use with DRM).
+    /// Get the handle union of a buffer object.
+    /// The union contains different handle types - we need the u32 field for DRM.
     /// </summary>
     [DllImport(LibraryName, EntryPoint = "gbm_bo_get_handle")]
-    public static extern nint GetHandleNative(nint bo);
+    private static extern GbmBoHandle GetHandleUnion(nint bo);
 
     /// <summary>
-    /// Get the handle of a buffer object as a uint32.
+    /// Get the DRM handle (u32) of a buffer object.
     /// </summary>
     public static uint GetHandle(nint bo)
     {
-        var handleUnion = GetHandleNative(bo);
-        // The handle union's u32 field is the first field, so we can cast directly
-        return (uint)(long)handleUnion;
+        var handleUnion = GetHandleUnion(bo);
+        return handleUnion.u32;
     }
 
     /// <summary>
@@ -87,4 +87,27 @@ public static unsafe class LibGbm
     /// </summary>
     [DllImport(LibraryName, EntryPoint = "gbm_bo_get_fd")]
     public static extern int GetFd(nint bo);
+
+    /// <summary>
+    /// GBM buffer object handle union.
+    /// This matches the gbm_bo_handle union in gbm.h
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit)]
+    public struct GbmBoHandle
+    {
+        [FieldOffset(0)]
+        public nint ptr;
+
+        [FieldOffset(0)]
+        public int s32;
+
+        [FieldOffset(0)]
+        public uint u32;
+
+        [FieldOffset(0)]
+        public long s64;
+
+        [FieldOffset(0)]
+        public ulong u64;
+    }
 }

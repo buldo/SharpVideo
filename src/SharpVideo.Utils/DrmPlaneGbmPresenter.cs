@@ -29,62 +29,76 @@ public class DrmPlaneGbmPresenter : DrmSinglePlanePresenter
     public DrmPlaneGbmPresenter(
         DrmDevice drmDevice,
   DrmPlane plane,
-        uint crtcId,
-        uint width,
-        uint height,
+      uint crtcId,
+     uint width,
+  uint height,
  ILogger logger,
     GbmDevice gbmDevice,
     PixelFormat format,
         uint connectorId,
-        DrmModeInfo mode)
+   DrmModeInfo mode)
     : base(drmDevice, plane, crtcId, width, height, logger)
     {
    _gbmDevice = gbmDevice;
         _width = width;
   _height = height;
-     _format = format;
+  _format = format;
      _logger = logger;
 
-        // Create GBM surface for scanout and rendering
-        _gbmSurface = _gbmDevice.CreateSurface(
-            width,
-            height,
-        format,
-            GbmBoUse.GBM_BO_USE_SCANOUT | GbmBoUse.GBM_BO_USE_RENDERING);
-
-        _logger.LogInformation("Created GBM surface for primary plane: {Width}x{Height} {Format}",
+ _logger.LogInformation("Creating GBM surface for primary plane: {Width}x{Height} {Format}",
          width, height, format.GetName());
 
+ // Create GBM surface for scanout and rendering
+  _gbmSurface = _gbmDevice.CreateSurface(
+width,
+            height,
+     format,
+            GbmBoUse.GBM_BO_USE_SCANOUT | GbmBoUse.GBM_BO_USE_RENDERING);
+
+      _logger.LogInformation("GBM surface created successfully, pointer: 0x{Ptr:X}", _gbmSurface.Fd);
+
       // Lock front buffer to get initial BO
+        _logger.LogDebug("Attempting to lock front buffer from GBM surface...");
         _currentBo = LibGbm.LockFrontBuffer(_gbmSurface.Fd);
         if (_currentBo == 0)
         {
-            _gbmSurface.Dispose();
+       _logger.LogError("Failed to lock front buffer from GBM surface - returned NULL");
+      _gbmSurface.Dispose();
  throw new Exception("Failed to lock front buffer from GBM surface");
         }
 
+        _logger.LogInformation("Successfully locked front buffer BO: 0x{Bo:X}", _currentBo);
+
     // Create framebuffer for initial BO
-        _currentFbId = CreateFramebufferForBo(_currentBo);
-        if (_currentFbId == 0)
+        _logger.LogDebug("Creating framebuffer for initial BO...");
+    _currentFbId = CreateFramebufferForBo(_currentBo);
+  if (_currentFbId == 0)
         {
-          LibGbm.ReleaseBuffer(_gbmSurface.Fd, _currentBo);
-            _gbmSurface.Dispose();
+         _logger.LogError("Failed to create framebuffer for initial BO");
+      LibGbm.ReleaseBuffer(_gbmSurface.Fd, _currentBo);
+     _gbmSurface.Dispose();
      throw new Exception("Failed to create framebuffer for initial BO");
-        }
+    }
+
+        _logger.LogInformation("Created framebuffer ID: {FbId} for initial BO", _currentFbId);
 
    // Set CRTC mode with primary plane
-        if (!SetCrtcMode(drmDevice, crtcId, connectorId, _currentFbId, mode, width, height, logger))
+        _logger.LogDebug("Setting CRTC mode...");
+    if (!SetCrtcMode(drmDevice, crtcId, connectorId, _currentFbId, mode, width, height, logger))
   {
+     _logger.LogError("Failed to set CRTC mode");
             Cleanup();
 throw new Exception("Failed to set CRTC mode");
         }
 
   // Set primary plane with initial buffer
+        _logger.LogDebug("Setting primary plane...");
  if (!SetPlane(_currentFbId, width, height))
         {
+ _logger.LogError("Failed to set primary plane");
         Cleanup();
           throw new Exception("Failed to set plane");
-        }
+    }
 
         _logger.LogInformation("GBM primary plane presenter initialized successfully");
     }
