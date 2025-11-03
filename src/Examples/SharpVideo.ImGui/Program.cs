@@ -169,7 +169,9 @@ internal class Program
                 Logger.LogDebug("Frame {Frame}: deltaTime={DeltaTime}s", frameCount, deltaTime);
 
                 // Poll SDL events for input
+                Logger.LogDebug("Frame {Frame}: Polling SDL events...", frameCount);
                 SDL.PumpEvents();
+                Logger.LogDebug("Frame {Frame}: SDL events polled", frameCount);
 
                 // Simple quit handling - just check for quit event
                 // (In real app, you'd want proper keyboard/mouse handling via SDL backends)
@@ -186,25 +188,37 @@ internal class Program
                     }
                 }
 
+                Logger.LogDebug("Frame {Frame}: Checked for quit events", frameCount);
+
                 if (exiting)
                     break;
 
                 // Start ImGui frame
+                Logger.LogDebug("Frame {Frame}: Setting deltaTime and calling NewFrame...", frameCount);
                 io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
                 Hexa.NET.ImGui.ImGui.NewFrame();
+                Logger.LogDebug("Frame {Frame}: ImGui NewFrame completed", frameCount);
 
                 // Render ImGui demo window and FPS counter
+                Logger.LogDebug("Frame {Frame}: Rendering ImGui content...", frameCount);
                 RenderImGuiContent(stopwatch.Elapsed, frameCount);
+                Logger.LogDebug("Frame {Frame}: ImGui content rendered", frameCount);
 
                 // End ImGui frame and generate draw data
+                Logger.LogDebug("Frame {Frame}: Calling ImGui Render...", frameCount);
                 Hexa.NET.ImGui.ImGui.Render();
+                Logger.LogDebug("Frame {Frame}: ImGui Render completed", frameCount);
                 var drawData = Hexa.NET.ImGui.ImGui.GetDrawData();
+                Logger.LogDebug("Frame {Frame}: Got draw data", frameCount);
 
                 // Render ImGui to the GBM surface using OpenGL ES
                 // This happens without vsync limitation - maximum speed!
+                Logger.LogDebug("Frame {Frame}: Rendering to GBM surface...", frameCount);
                 drmRenderer.RenderToGbmSurface(drawData);
+                Logger.LogDebug("Frame {Frame}: GBM surface render completed", frameCount);
 
                 // Swap GBM buffers and present (this is vsync-synchronized via page flip)
+                Logger.LogDebug("Frame {Frame}: Swapping buffers...", frameCount);
                 if (!presenter.PrimaryPlanePresenter.SwapBuffers())
                 {
                     Logger.LogWarning("Failed to swap buffers on frame {Frame}", frameCount);
@@ -224,6 +238,8 @@ internal class Program
                     frameCount = 0;
                     lastFpsTime = currentTime;
                 }
+
+                Logger.LogDebug("=== Frame {Frame} END ===", frameCount - 1);
             }
             catch (Exception ex)
             {
