@@ -254,18 +254,18 @@ _logger?.LogError("Failed to get EGL display from GBM device");
 
     /// <summary>
     /// Renders ImGui draw data to the GBM surface using OpenGL ES.
-    /// After calling this, call presenter.SubmitFrame() to queue for display.
-    /// This method does NOT swap buffers - caller must handle buffer submission.
+    /// This only performs rendering to the back buffer WITHOUT swapping.
+    /// Call SwapBuffersAndLock() after to commit the frame.
     /// </summary>
     public void RenderDrawData(Hexa.NET.ImGui.ImDrawDataPtr drawData)
     {
         // Make sure we're rendering to the correct surface
-        if (!NativeEgl.MakeCurrent(_eglDisplay, _eglSurface, _eglSurface, _eglContext))
+    if (!NativeEgl.MakeCurrent(_eglDisplay, _eglSurface, _eglSurface, _eglContext))
         {
-         var error = NativeEgl.GetError();
+    var error = NativeEgl.GetError();
         _logger?.LogError("Failed to make EGL context current: {Error}", NativeEgl.GetErrorString(error));
- return;
-        }
+          return;
+    }
 
         _gl.Viewport(0, 0, (uint)_width, (uint)_height);
 
@@ -276,21 +276,31 @@ _logger?.LogError("Failed to get EGL display from GBM device");
       // Enable blending for ImGui
         _gl.Enable(EnableCap.Blend);
    _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
-        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-        _gl.Disable(EnableCap.CullFace);
-    _gl.Disable(EnableCap.DepthTest);
-        _gl.Enable(EnableCap.ScissorTest);
+_gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+ _gl.Disable(EnableCap.CullFace);
+        _gl.Disable(EnableCap.DepthTest);
+      _gl.Enable(EnableCap.ScissorTest);
 
     // Render ImGui draw data using ImGui OpenGL3 backend
         Hexa.NET.ImGui.Backends.OpenGL3.ImGuiImplOpenGL3.RenderDrawData(drawData);
+    }
 
-      // Swap EGL buffers to mark this frame as complete
-  // The next gbm_surface_lock_front_buffer() will get this rendered frame
-   if (!NativeEgl.SwapBuffers(_eglDisplay, _eglSurface))
+    /// <summary>
+    /// Swaps EGL buffers to commit the rendered frame.
+    /// Returns true if successful, false if swap failed (e.g., EGL_BAD_ALLOC).
+    /// Should only be called if the frame will actually be submitted to display.
+    /// </summary>
+    public bool SwapBuffers()
+    {
+        // Swap EGL buffers to mark this frame as complete
+        // The next gbm_surface_lock_front_buffer() will get this rendered frame
+     if (!NativeEgl.SwapBuffers(_eglDisplay, _eglSurface))
         {
-    var error = NativeEgl.GetError();
-          _logger?.LogWarning("eglSwapBuffers failed: {Error}", NativeEgl.GetErrorString(error));
-        }
+         var error = NativeEgl.GetError();
+       _logger?.LogDebug("eglSwapBuffers failed: {Error}", NativeEgl.GetErrorString(error));
+            return false;
+  }
+      return true;
     }
 
     public void Dispose()

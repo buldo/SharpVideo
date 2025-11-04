@@ -136,49 +136,63 @@ _mode = mode;
     /// Submits a rendered frame for display. Non-blocking call that returns immediately.
     /// The frame will be displayed at the next vblank by the page flip thread.
     /// Called from render thread after eglSwapBuffers().
+    /// 
+    /// Returns false if a frame is already queued (frame should be dropped to maintain max FPS).
     /// </summary>
     public bool SubmitFrame()
     {
-        // Lock the front buffer that was just rendered by EGL
+        // Check if there's already a frame in the queue (latest-frame-only strategy)
+     // This prevents buffer exhaustion when rendering faster than display refresh
+      lock (_stateLock)
+        {
+        // If queue is not empty or flip is in progress, drop this frame
+     if (!_renderQueue.IsEmpty || _flipInProgress)
+            {
+         // Frame dropped - render thread can continue at max FPS
+          return false;
+        }
+        }
+
+    // Lock the front buffer that was just rendered by EGL
         var newBo = LibGbm.LockFrontBuffer(_gbmSurface.Handle);
-    if (newBo == 0)
+        if (newBo == 0)
         {
             _logger.LogError("Failed to lock front buffer from GBM surface");
-       return false;
-        }
+        return false;
+      }
 
         // Get or create framebuffer for this BO
         var fbId = GetOrCreateFramebuffer(newBo);
         if (fbId == 0)
-      {
-    _logger.LogError("Failed to get framebuffer for BO");
-          LibGbm.ReleaseBuffer(_gbmSurface.Handle, newBo);
-    return false;
+ {
+            _logger.LogError("Failed to get framebuffer for BO");
+    LibGbm.ReleaseBuffer(_gbmSurface.Handle, newBo);
+            return false;
         }
 
         // Queue for display (producer side)
-        var queuedBuffer = new QueuedBuffer
-   {
-     Bo = newBo,
-            FbId = fbId,
-       Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-        };
+     var queuedBuffer = new QueuedBuffer
+{
+  Bo = newBo,
+      FbId = fbId,
+ Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+      };
 
-     _renderQueue.Enqueue(queuedBuffer);
+      _renderQueue.Enqueue(queuedBuffer);
 
-      // If this is the first frame, trigger initialization
+// If this is the first frame, trigger initialization
         if (!_initialized)
-        {
-    lock (_stateLock)
-  {
-        if (!_initialized)
+    {
+        lock (_stateLock)
+         {
+       if (!_initialized)
           {
-_logger.LogInformation("First frame submitted, will initialize DRM display in page flip thread");
-     }
-            }
-        }
+           _logger.LogInformation("First frame submitted, will initialize DRM display in page flip thread");
+    }
+       }
+   }
 
-        return true;
+   return true;
     }
 
     private AtomicPlaneProperties GetAtomicProperties()

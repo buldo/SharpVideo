@@ -99,24 +99,28 @@ internal class Program
 
       // Warmup frame
  Logger.LogInformation("Rendering initial warmup frame...");
-       io.DeltaTime = 1.0f / 60.0f;
-         ImGuiImplOpenGL3.NewFrame();
-      Hexa.NET.ImGui.ImGui.NewFrame();
-            RenderImGuiContent(TimeSpan.Zero, 0);
+     io.DeltaTime = 1.0f / 60.0f;
+  ImGuiImplOpenGL3.NewFrame();
+  Hexa.NET.ImGui.ImGui.NewFrame();
+       RenderImGuiContent(TimeSpan.Zero, 0, 0);
     Hexa.NET.ImGui.ImGui.Render();
-            var warmupDrawData = Hexa.NET.ImGui.ImGui.GetDrawData();
+         var warmupDrawData = Hexa.NET.ImGui.ImGui.GetDrawData();
             drmRenderer.RenderDrawData(warmupDrawData);
 
             // Submit first frame to initialize display
-   if (!presenter.PrimaryPlanePresenter.SubmitFrame())
+   if (drmRenderer.SwapBuffers() && presenter.PrimaryPlanePresenter.SubmitFrame())
    {
-           Logger.LogError("Failed to submit warmup frame");
+    Logger.LogInformation("Warmup frame submitted successfully");
+      }
+   else
+      {
+   Logger.LogError("Failed to submit warmup frame");
       return;
      }
 
      Logger.LogInformation("Warmup frame submitted - waiting for display initialization...");
      Thread.Sleep(100);
-       Logger.LogInformation("Display initialization completed");
+Logger.LogInformation("Display initialization completed");
 
      // Main loop
       try
@@ -154,6 +158,7 @@ finally
 
   var stopwatch = Stopwatch.StartNew();
    var frameCount = 0;
+   var droppedFrames = 0;
         var lastFpsTime = stopwatch.Elapsed;
       var lastFrameTime = stopwatch.Elapsed;
         var exiting = false;
@@ -164,25 +169,25 @@ finally
    // Setup poll for input events
    var inputFd = inputManager.GetFileDescriptor();
 
-  while (!exiting)
+while (!exiting)
  {
    try
-            {
+   {
       var currentTime = stopwatch.Elapsed;
-   var deltaTime = (float)(currentTime - lastFrameTime).TotalSeconds;
+var deltaTime = (float)(currentTime - lastFrameTime).TotalSeconds;
    lastFrameTime = currentTime;
 
       // Poll input events (non-blocking)
      var pollFd = new PollFd
      {
-         fd = inputFd,
+      fd = inputFd,
     events = PollEvents.POLLIN
      };
 
   var pollResult = Libc.poll(ref pollFd, 1, 0); // 0 timeout = non-blocking
           if (pollResult > 0)
        {
-           inputManager.ProcessEvents();
+     inputManager.ProcessEvents();
    }
 
    // Check for ESC key to exit
@@ -200,61 +205,85 @@ finally
        // ImGui frame preparation
  io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
     ImGuiImplOpenGL3.NewFrame();
-        Hexa.NET.ImGui.ImGui.NewFrame();
+ Hexa.NET.ImGui.ImGui.NewFrame();
 
-      RenderImGuiContent(stopwatch.Elapsed, frameCount);
+      RenderImGuiContent(stopwatch.Elapsed, frameCount, droppedFrames);
 
      Hexa.NET.ImGui.ImGui.Render();
-         var drawData = Hexa.NET.ImGui.ImGui.GetDrawData();
+     var drawData = Hexa.NET.ImGui.ImGui.GetDrawData();
 
-   // Render ImGui (GPU work, no blocking)
+   // Always render ImGui (GPU work, no blocking)
    drmRenderer.RenderDrawData(drawData);
 
-     // Submit frame to page flip thread (non-blocking, returns immediately)
-    if (!presenter.PrimaryPlanePresenter.SubmitFrame())
-  {
-  Logger.LogWarning("Failed to submit frame {Frame}", frameCount);
+      // Try to swap and submit frame (may be dropped if queue is full)
+       if (drmRenderer.SwapBuffers())
+    {
+      // eglSwapBuffers succeeded, now try to submit to page flip thread
+          if (presenter.PrimaryPlanePresenter.SubmitFrame())
+       {
+  // Frame submitted successfully
+     frameCount++;
+      }
+        else
+    {
+           // Frame dropped - queue already full (rendering faster than display)
+   droppedFrames++;
+   }
+        }
+        else
+     {
+       // eglSwapBuffers failed (shouldn't happen with frame dropping, but handle it)
+    Logger.LogWarning("eglSwapBuffers failed on frame {Frame}", frameCount + droppedFrames);
+   droppedFrames++;
   }
-
-frameCount++;
 
        // Log FPS
   if ((currentTime - lastFpsTime).TotalSeconds >= 1.0)
    {
-      var fps = frameCount / (currentTime - lastFpsTime).TotalSeconds;
- Logger.LogInformation("Render FPS: {Fps:F2} (actual display limited by vblank)", fps);
+       var totalFrames = frameCount + droppedFrames;
+      var renderFps = totalFrames / (currentTime - lastFpsTime).TotalSeconds;
+   var displayFps = frameCount / (currentTime - lastFpsTime).TotalSeconds;
+        var dropRate = droppedFrames / (double)totalFrames * 100.0;
+   
+     Logger.LogInformation(
+     "Render FPS: {RenderFps:F1} | Display FPS: {DisplayFps:F1} | Dropped: {Dropped} ({DropRate:F1}%)",
+   renderFps, displayFps, droppedFrames, dropRate);
+       
         frameCount = 0;
+    droppedFrames = 0;
       lastFpsTime = currentTime;
-     }
+   }
     }
-            catch (Exception ex)
+   catch (Exception ex)
  {
           Logger.LogError(ex, "Exception in main loop on frame {Frame}", frameCount);
      exiting = true;
   }
-        }
+}
 
         Logger.LogInformation("Main loop exited after {FrameCount} frames", frameCount);
     }
 
-    private static void RenderImGuiContent(TimeSpan elapsed, int frameCount)
+    private static void RenderImGuiContent(TimeSpan elapsed, int displayedFrames, int droppedFrames)
     {
    Hexa.NET.ImGui.ImGui.ShowDemoWindow();
 
         Hexa.NET.ImGui.ImGui.Begin("Performance Info");
-     Hexa.NET.ImGui.ImGui.Text($"Frame: {frameCount}");
-        Hexa.NET.ImGui.ImGui.Text($"Time: {elapsed.TotalSeconds:F2}s");
-   Hexa.NET.ImGui.ImGui.Text($"Render FPS: {Hexa.NET.ImGui.ImGui.GetIO().Framerate:F1}");
+Hexa.NET.ImGui.ImGui.Text($"Displayed Frames: {displayedFrames}");
+     Hexa.NET.ImGui.ImGui.Text($"Dropped Frames: {droppedFrames}");
+   Hexa.NET.ImGui.ImGui.Text($"Total Rendered: {displayedFrames + droppedFrames}");
+  Hexa.NET.ImGui.ImGui.Text($"Time: {elapsed.TotalSeconds:F2}s");
+   Hexa.NET.ImGui.ImGui.Text($"ImGui FPS: {Hexa.NET.ImGui.ImGui.GetIO().Framerate:F1}");
     Hexa.NET.ImGui.ImGui.Separator();
         Hexa.NET.ImGui.ImGui.Text("Pure DRM/GBM + libinput Architecture:");
-      Hexa.NET.ImGui.ImGui.BulletText("Render Thread: Max FPS OpenGL ES rendering");
-        Hexa.NET.ImGui.ImGui.BulletText("Page Flip Thread: VBlank-synced display updates");
-  Hexa.NET.ImGui.ImGui.BulletText("DRM Atomic: Non-blocking page flips with events");
-  Hexa.NET.ImGui.ImGui.BulletText("libinput: Native Linux input (mouse/keyboard/gamepad)");
-        Hexa.NET.ImGui.ImGui.BulletText("No SDL - direct KMS/DRM control");
+      Hexa.NET.ImGui.ImGui.BulletText("Render Thread: Max FPS with frame dropping");
+   Hexa.NET.ImGui.ImGui.BulletText("Page Flip Thread: VBlank-synced (60Hz)");
+  Hexa.NET.ImGui.ImGui.BulletText("DRM Atomic: Non-blocking page flips");
+  Hexa.NET.ImGui.ImGui.BulletText("libinput: Native Linux input");
+        Hexa.NET.ImGui.ImGui.BulletText("Latest Frame Only: drops if queue full");
       Hexa.NET.ImGui.ImGui.Separator();
         Hexa.NET.ImGui.ImGui.TextColored(new System.Numerics.Vector4(0, 1, 0, 1),
-    "Rendering WITHOUT vsync blocking!");
+    "Max FPS rendering with smart frame dropping!");
       Hexa.NET.ImGui.ImGui.TextColored(new System.Numerics.Vector4(0, 1, 1, 1),
    "Full native input support via libinput!");
         Hexa.NET.ImGui.ImGui.Text("Press ESC or send SIGTERM/SIGINT to exit");
