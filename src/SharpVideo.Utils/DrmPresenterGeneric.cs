@@ -175,7 +175,8 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
     /// <summary>
     /// Creates a DRM presenter with atomic GBM-based primary plane and DMA buffer overlay plane.
     /// Primary plane uses atomic modesetting for high-performance OpenGL ES rendering (ImGui, UI).
-    /// Overlay plane uses DMA buffers for zero-copy video display.
+    /// Overlay plane uses DMA buffers with legacy SetPlane for zero-copy video display.
+    /// Note: Overlay uses legacy mode to avoid event loop conflicts with GBM atomic presenter.
     /// This combination is ideal for applications that need both GPU-rendered UI and hardware-decoded video.
     /// </summary>
     public static DrmPresenter<DrmPlaneGbmAtomicPresenter, DrmPlaneLastDmaBufferPresenter>? CreateWithGbmAtomicAndDmaOverlay(
@@ -214,6 +215,8 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
             overlayPlanePixelFormat.GetName(), overlayPlane.Id);
 
+        // IMPORTANT: Disable atomic mode for overlay to avoid dual event loop conflict
+        // The GBM atomic presenter already has an event loop thread
         var overlayPlanePresenter = new DrmPlaneLastDmaBufferPresenter(
             drmDevice,
             overlayPlane,
@@ -221,7 +224,8 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             width,
             height,
             bufferManager,
-            logger);
+            logger,
+            useAtomicMode: false);  // Use legacy SetPlane to avoid event loop conflicts
 
         return new DrmPresenter<DrmPlaneGbmAtomicPresenter, DrmPlaneLastDmaBufferPresenter>(
             primaryPlane,

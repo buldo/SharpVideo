@@ -21,24 +21,39 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
         uint width,
         uint height,
         DrmBufferManager bufferManager,
-        ILogger logger)
+        ILogger logger,
+        bool useAtomicMode = true)
         : base(drmDevice, plane, crtcId, width, height, logger)
     {
         _bufferManager = bufferManager;
 
-        var props = new AtomicPlaneProperties(plane);
-        if (props.IsValid())
+        // Only use atomic mode if explicitly requested AND properties are available
+        if (useAtomicMode)
         {
-            _atomicDisplayManager = new AtomicFlipManager(
-                drmDevice,
-                plane,
-                crtcId,
-                props,
-                width,
-                height,
-                width,
-                height,
-                logger);
+            var props = new AtomicPlaneProperties(plane);
+            if (props.IsValid())
+            {
+                _atomicDisplayManager = new AtomicFlipManager(
+                    drmDevice,
+                    plane,
+                    crtcId,
+                    props,
+                    width,
+                    height,
+                    width,
+                    height,
+                    logger);
+                
+                logger.LogInformation("Overlay plane using atomic mode with dedicated event loop");
+            }
+            else
+            {
+                logger.LogWarning("Atomic properties not available for overlay plane, using legacy mode");
+            }
+        }
+        else
+        {
+            logger.LogInformation("Overlay plane configured to use legacy SetPlane mode (no atomic/event loop)");
         }
     }
 
