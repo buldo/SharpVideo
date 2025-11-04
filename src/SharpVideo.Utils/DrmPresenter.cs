@@ -6,21 +6,34 @@ using SharpVideo.Gbm;
 namespace SharpVideo.Utils;
 
 /// <summary>
-/// Universal DRM presenter wrapper that can work with different primary plane presenter types.
-/// Provides a simplified API for common DRM presentation scenarios while supporting flexibility.
+/// Universal DRM presenter wrapper that provides a simplified, type-erased API 
+/// for common DRM presentation scenarios.
 /// </summary>
+/// <remarks>
+/// This wrapper provides convenience factory methods that return a common interface,
+/// hiding the generic type complexity of the underlying DrmPresenter&lt;TPrimary, TOverlay&gt;.
+/// 
+/// For PoC scenarios: Use this class when you need a simple API and don't need compile-time
+/// type safety for the specific presenter types.
+/// 
+/// For production: Consider using DrmPresenter&lt;TPrimary, TOverlay&gt; directly for better
+/// type safety and compile-time checking.
+/// 
+/// Thread Safety: Same as underlying DrmPresenter&lt;T, T&gt; - not thread-safe except for disposal.
+/// </remarks>
 [SupportedOSPlatform("linux")]
-public class DrmPresenter
+public sealed class DrmPresenter : IDisposable
 {
-    private readonly object _innerPresenter;
+    private readonly IDisposable _innerPresenter;
     private readonly DrmSinglePlanePresenter _primaryPlanePresenter;
     private readonly DrmPlaneLastDmaBufferPresenter? _overlayPlanePresenter;
-    private readonly DrmPlane? _primaryPlane;
+    private readonly DrmPlane _primaryPlane;
     private readonly DrmPlane? _overlayPlane;
     private readonly ILogger _logger;
+    private bool _disposed;
 
     private DrmPresenter(
-        object innerPresenter,
+        IDisposable innerPresenter,
         DrmPlane primaryPlane,
         DrmSinglePlanePresenter primaryPlanePresenter,
         DrmPlane? overlayPlane,
@@ -36,49 +49,96 @@ public class DrmPresenter
     }
 
     /// <summary>
-    /// Gets the primary DRM plane
+    /// Gets the primary DRM plane.
     /// </summary>
-    public DrmPlane PrimaryPlane => _primaryPlane ?? throw new InvalidOperationException("Primary plane not available");
+    public DrmPlane PrimaryPlane 
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _primaryPlane;
+        }
+    }
 
     /// <summary>
-    /// Gets the overlay DRM plane (if configured)
+    /// Gets the overlay DRM plane.
     /// </summary>
-    public DrmPlane OverlayPlane => _overlayPlane ?? throw new InvalidOperationException("No overlay plane configured");
+    /// <exception cref="InvalidOperationException">No overlay plane configured</exception>
+    public DrmPlane OverlayPlane 
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _overlayPlane ?? throw new InvalidOperationException("No overlay plane configured");
+        }
+    }
 
     /// <summary>
-    /// Gets the primary plane presenter (works with any presenter type: DMA, GBM, GBM Atomic)
+    /// Gets the primary plane presenter.
+    /// Works with any presenter type: DMA, GBM, or GBM Atomic.
     /// </summary>
-    public DrmSinglePlanePresenter PrimaryPlanePresenter => _primaryPlanePresenter;
+    public DrmSinglePlanePresenter PrimaryPlanePresenter
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _primaryPlanePresenter;
+        }
+    }
 
     /// <summary>
-    /// Gets the overlay plane presenter (if configured)
+    /// Gets the overlay plane presenter.
     /// </summary>
-    public DrmPlaneLastDmaBufferPresenter OverlayPlanePresenter =>
-        _overlayPlanePresenter ?? throw new InvalidOperationException("No overlay plane configured");
+    /// <exception cref="InvalidOperationException">No overlay plane configured</exception>
+    public DrmPlaneLastDmaBufferPresenter OverlayPlanePresenter
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            return _overlayPlanePresenter ?? throw new InvalidOperationException("No overlay plane configured");
+        }
+    }
 
     /// <summary>
-    /// Gets the primary plane presenter as DMA buffer presenter (if that's the type)
+    /// Attempts to get the primary plane presenter as a DMA buffer presenter.
     /// </summary>
-    public DrmPlaneDoubleBufferPresenter? AsDmaBufferPresenter =>
-        _primaryPlanePresenter as DrmPlaneDoubleBufferPresenter;
+    /// <returns>The presenter if it's a DMA buffer presenter, null otherwise</returns>
+    public DrmPlaneDoubleBufferPresenter? AsDmaBufferPresenter()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _primaryPlanePresenter as DrmPlaneDoubleBufferPresenter;
+    }
 
     /// <summary>
-    /// Gets the primary plane presenter as GBM presenter (if that's the type)
+    /// Attempts to get the primary plane presenter as a GBM presenter.
     /// </summary>
-    public DrmPlaneGbmPresenter? AsGbmPresenter =>
-        _primaryPlanePresenter as DrmPlaneGbmPresenter;
+    /// <returns>The presenter if it's a GBM presenter, null otherwise</returns>
+    public DrmPlaneGbmPresenter? AsGbmPresenter()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _primaryPlanePresenter as DrmPlaneGbmPresenter;
+    }
 
     /// <summary>
-    /// Gets the primary plane presenter as GBM Atomic presenter (if that's the type)
+    /// Attempts to get the primary plane presenter as a GBM Atomic presenter.
     /// </summary>
-    public DrmPlaneGbmAtomicPresenter? AsGbmAtomicPresenter =>
-        _primaryPlanePresenter as DrmPlaneGbmAtomicPresenter;
+    /// <returns>The presenter if it's a GBM Atomic presenter, null otherwise</returns>
+    public DrmPlaneGbmAtomicPresenter? AsGbmAtomicPresenter()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _primaryPlanePresenter as DrmPlaneGbmAtomicPresenter;
+    }
 
     /// <summary>
     /// Creates a DRM presenter with DMA buffers for both primary and overlay planes.
-    /// This is the legacy method for backward compatibility.
     /// </summary>
-    public static DrmPresenter? Create(
+    /// <remarks>
+    /// This is the legacy method for backward compatibility with existing demos.
+    /// Use case: CPU-rendered content on both planes.
+    /// </remarks>
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter Create(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -97,9 +157,6 @@ public class DrmPresenter
                 overlayPlanePixelFormat,
                 logger);
 
-        if (innerPresenter == null)
-            return null;
-
         return new DrmPresenter(
             innerPresenter,
             innerPresenter.PrimaryPlane,
@@ -111,9 +168,15 @@ public class DrmPresenter
 
     /// <summary>
     /// Creates a DRM presenter with GBM-based primary plane for OpenGL ES rendering.
+    /// Uses legacy API with blocking page flips.
     /// No overlay plane configured.
     /// </summary>
-    public static DrmPresenter? CreateWithGbm(
+    /// <remarks>
+    /// Use case: OpenGL ES rendering with blocking vsync for simple applications.
+    /// </remarks>
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter CreateWithGbm(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -130,9 +193,6 @@ public class DrmPresenter
                 primaryPlanePixelFormat,
                 logger);
 
-        if (innerPresenter == null)
-            return null;
-
         return new DrmPresenter(
             innerPresenter,
             innerPresenter.PrimaryPlane,
@@ -144,9 +204,16 @@ public class DrmPresenter
 
     /// <summary>
     /// Creates a DRM presenter with atomic GBM-based primary plane for high-performance OpenGL ES rendering.
+    /// Uses atomic modesetting with non-blocking page flips and separate page flip thread.
     /// No overlay plane configured.
     /// </summary>
-    public static DrmPresenter? CreateWithGbmAtomic(
+    /// <remarks>
+    /// Use case: High-performance OpenGL ES rendering at maximum FPS without vsync blocking.
+    /// Ideal for: ImGui-only applications, UI rendering, games.
+    /// </remarks>
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter CreateWithGbmAtomic(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -163,9 +230,6 @@ public class DrmPresenter
                 primaryPlanePixelFormat,
                 logger);
 
-        if (innerPresenter == null)
-            return null;
-
         return new DrmPresenter(
             innerPresenter,
             innerPresenter.PrimaryPlane,
@@ -177,11 +241,28 @@ public class DrmPresenter
 
     /// <summary>
     /// Creates a DRM presenter with atomic GBM primary plane and DMA buffer overlay plane.
-    /// Ideal for applications with GPU-rendered UI (ImGui) and hardware-decoded video.
-    /// Primary plane: GBM atomic for OpenGL ES rendering
-    /// Overlay plane: DMA buffers for zero-copy video
     /// </summary>
-    public static DrmPresenter? CreateWithGbmAtomicAndDmaOverlay(
+    /// <remarks>
+    /// <para>
+    /// Ideal combination for applications with GPU-rendered UI and hardware-decoded video:
+    /// - Primary plane: GBM atomic for high-performance OpenGL ES rendering (ImGui, UI)
+    /// - Overlay plane: DMA buffers for zero-copy hardware-decoded video
+    /// </para>
+    /// <para>
+    /// Architecture:
+    /// - Overlay uses legacy SetPlane (not atomic) to avoid dual event loop conflict
+    /// - GBM atomic presenter has dedicated event loop thread for page flip events
+    /// - Primary and overlay rendering can occur in separate threads
+    /// </para>
+    /// <para>
+    /// Thread Safety:
+    /// - Primary plane: OpenGL ES context must be used from single render thread
+    /// - Overlay plane: Can be updated from video decoder thread (different thread)
+    /// </para>
+    /// </remarks>
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter CreateWithGbmAtomicAndDmaOverlay(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -202,9 +283,6 @@ public class DrmPresenter
                 overlayPlanePixelFormat,
                 logger);
 
-        if (innerPresenter == null)
-            return null;
-
         return new DrmPresenter(
             innerPresenter,
             innerPresenter.PrimaryPlane,
@@ -214,18 +292,24 @@ public class DrmPresenter
             logger);
     }
 
-    public void CleanupDisplay()
+    public void Dispose()
     {
-        _logger.LogInformation("Cleaning up DRM presenter");
+        if (_disposed)
+            return;
+
+        _logger.LogInformation("Disposing DRM presenter wrapper");
 
         try
         {
-            _primaryPlanePresenter.Cleanup();
-            _overlayPlanePresenter?.Cleanup();
+            _innerPresenter.Dispose();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error during display cleanup");
+            _logger.LogError(ex, "Error during DRM presenter wrapper disposal");
+        }
+        finally
+        {
+            _disposed = true;
         }
     }
 }

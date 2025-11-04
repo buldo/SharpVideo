@@ -118,7 +118,12 @@ internal class Program
             LoggerFactory.CreateLogger<InputManager>());
 
         // Configure ImGui - get GBM surface from atomic presenter
-        var gbmAtomicPresenter = presenter.AsGbmAtomicPresenter!;
+        var gbmAtomicPresenter = presenter.AsGbmAtomicPresenter();
+        if (gbmAtomicPresenter == null)
+        {
+            throw new Exception("Failed to get GBM atomic presenter");
+        }
+
         var imguiConfig = new ImGuiDrmConfiguration
         {
             Width = (uint)Width,
@@ -203,7 +208,7 @@ internal class Program
 
         // Cleanup
         await pipeline.StopAsync();
-        presenter.CleanupDisplay();
+        presenter.Dispose();
         gbmDevice.Dispose();
         drmDevice.Dispose();
 

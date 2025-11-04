@@ -103,7 +103,7 @@ internal class Program
         Logger.LogWarning("Displayed {FrameCount} frames, average present FPS: {Fps:F2}", player.Statistics.PresentedFrames, player.Statistics.PresentedFrames / player.Statistics.PresentElapsed.TotalSeconds);
         Logger.LogWarning("Processing completed successfully!");
 
-        presenter.CleanupDisplay();
+        presenter.Dispose();
 
     }
 

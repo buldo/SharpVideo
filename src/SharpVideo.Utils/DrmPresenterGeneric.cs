@@ -8,27 +8,38 @@ namespace SharpVideo.Utils;
 
 /// <summary>
 /// DRM presenter with configurable primary and overlay plane presenters.
+/// Implements thread-safe disposal pattern for proper resource cleanup.
 /// </summary>
 /// <typeparam name="TPrimaryPresenter">Type of primary plane presenter</typeparam>
 /// <typeparam name="TOverlayPresenter">Type of overlay plane presenter (use object if no overlay)</typeparam>
+/// <remarks>
+/// Thread Safety: 
+/// - Factory methods are thread-safe
+/// - Instance methods are NOT thread-safe - use from single thread
+/// - Disposal is thread-safe and idempotent
+/// </remarks>
 [SupportedOSPlatform("linux")]
-public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
+public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDisposable
     where TPrimaryPresenter : DrmSinglePlanePresenter
     where TOverlayPresenter : class
 {
     private readonly ILogger _logger;
+    private readonly int _drmDeviceFd;
+    private bool _disposed;
 
     private DrmPresenter(
         DrmPlane primaryPlane,
         TPrimaryPresenter primaryPlanePresenter,
         DrmPlane? overlayPlane,
         TOverlayPresenter? overlayPlanePresenter,
+        int drmDeviceFd,
         ILogger logger)
     {
         PrimaryPlane = primaryPlane;
         PrimaryPlanePresenter = primaryPlanePresenter;
         OverlayPlane = overlayPlane;
         OverlayPlanePresenter = overlayPlanePresenter;
+        _drmDeviceFd = drmDeviceFd;
         _logger = logger;
     }
 
@@ -43,7 +54,9 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
     /// <summary>
     /// Creates a DRM presenter with double-buffered DMA primary plane and optional overlay.
     /// </summary>
-    public static DrmPresenter<DrmPlaneDoubleBufferPresenter, DrmPlaneLastDmaBufferPresenter>? CreateWithDmaBuffers(
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter<DrmPlaneDoubleBufferPresenter, DrmPlaneLastDmaBufferPresenter> CreateWithDmaBuffers(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -52,19 +65,21 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         PixelFormat? overlayPlanePixelFormat,
         ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(drmDevice);
+        ArgumentNullException.ThrowIfNull(bufferManager);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var resources = GetResourcesOrThrow(drmDevice, logger);
         var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
-            drmDevice, width, height, logger);
+            drmDevice, resources, width, height, logger);
 
         DrmPlane? overlayPlane = null;
         DrmPlaneLastDmaBufferPresenter? overlayPlanePresenter = null;
 
         if (overlayPlanePixelFormat != null)
         {
-            overlayPlane = FindOverlayPlane(drmDevice, crtcId, overlayPlanePixelFormat, logger);
-            if (overlayPlane == null)
-            {
-                throw new Exception($"No overlay plane with {overlayPlanePixelFormat.GetName()} format found");
-            }
+            overlayPlane = FindOverlayPlaneOrThrow(
+                drmDevice, resources, crtcId, overlayPlanePixelFormat, logger);
 
             logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
                 overlayPlanePixelFormat.GetName(), overlayPlane.Id);
@@ -96,6 +111,7 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             primaryPlanePresenter,
             overlayPlane,
             overlayPlanePresenter,
+            drmDevice.DeviceFd,
             logger);
     }
 
@@ -103,7 +119,9 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
     /// Creates a DRM presenter with GBM-based primary plane for OpenGL ES rendering.
     /// Uses legacy API with blocking page flips.
     /// </summary>
-    public static DrmPresenter<DrmPlaneGbmPresenter, TOverlay>? CreateWithGbmBuffers<TOverlay>(
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter<DrmPlaneGbmPresenter, TOverlay> CreateWithGbmBuffers<TOverlay>(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -112,8 +130,13 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         ILogger logger)
         where TOverlay : class
     {
+        ArgumentNullException.ThrowIfNull(drmDevice);
+        ArgumentNullException.ThrowIfNull(gbmDevice);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var resources = GetResourcesOrThrow(drmDevice, logger);
         var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
-            drmDevice, width, height, logger);
+            drmDevice, resources, width, height, logger);
 
         var primaryPlanePresenter = new DrmPlaneGbmPresenter(
             drmDevice,
@@ -132,6 +155,7 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             primaryPlanePresenter,
             null,
             null,
+            drmDevice.DeviceFd,
             logger);
     }
 
@@ -140,7 +164,9 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
     /// Uses atomic modesetting with non-blocking page flips and separate page flip thread.
     /// Allows rendering at maximum FPS without vsync blocking.
     /// </summary>
-    public static DrmPresenter<DrmPlaneGbmAtomicPresenter, TOverlay>? CreateWithGbmBuffersAtomic<TOverlay>(
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter<DrmPlaneGbmAtomicPresenter, TOverlay> CreateWithGbmBuffersAtomic<TOverlay>(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -149,8 +175,13 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         ILogger logger)
         where TOverlay : class
     {
+        ArgumentNullException.ThrowIfNull(drmDevice);
+        ArgumentNullException.ThrowIfNull(gbmDevice);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var resources = GetResourcesOrThrow(drmDevice, logger);
         var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
-            drmDevice, width, height, logger);
+            drmDevice, resources, width, height, logger);
 
         var primaryPlanePresenter = new DrmPlaneGbmAtomicPresenter(
             drmDevice,
@@ -169,6 +200,7 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             primaryPlanePresenter,
             null,
             null,
+            drmDevice.DeviceFd,
             logger);
     }
 
@@ -176,10 +208,19 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
     /// Creates a DRM presenter with atomic GBM-based primary plane and DMA buffer overlay plane.
     /// Primary plane uses atomic modesetting for high-performance OpenGL ES rendering (ImGui, UI).
     /// Overlay plane uses DMA buffers with legacy SetPlane for zero-copy video display.
-    /// Note: Overlay uses legacy mode to avoid event loop conflicts with GBM atomic presenter.
-    /// This combination is ideal for applications that need both GPU-rendered UI and hardware-decoded video.
     /// </summary>
-    public static DrmPresenter<DrmPlaneGbmAtomicPresenter, DrmPlaneLastDmaBufferPresenter>? CreateWithGbmAtomicAndDmaOverlay(
+    /// <remarks>
+    /// IMPORTANT: Overlay uses legacy mode (useAtomicMode: false) to avoid dual event loop conflict.
+    /// The GBM atomic presenter already has an event loop thread for page flip events.
+    /// This combination is ideal for applications that need both GPU-rendered UI and hardware-decoded video.
+    /// 
+    /// Thread Safety:
+    /// - Primary plane rendering: OpenGL ES context must be used from a single render thread
+    /// - Overlay plane updates: Can be called from video decoder thread (different from render thread)
+    /// </remarks>
+    /// <exception cref="DrmResourceNotFoundException">Required DRM resources not found</exception>
+    /// <exception cref="DrmPlaneNotFoundException">Required plane not found</exception>
+    public static DrmPresenter<DrmPlaneGbmAtomicPresenter, DrmPlaneLastDmaBufferPresenter> CreateWithGbmAtomicAndDmaOverlay(
         DrmDevice drmDevice,
         uint width,
         uint height,
@@ -189,8 +230,14 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         PixelFormat overlayPlanePixelFormat,
         ILogger logger)
     {
+        ArgumentNullException.ThrowIfNull(drmDevice);
+        ArgumentNullException.ThrowIfNull(gbmDevice);
+        ArgumentNullException.ThrowIfNull(bufferManager);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var resources = GetResourcesOrThrow(drmDevice, logger);
         var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
-            drmDevice, width, height, logger);
+            drmDevice, resources, width, height, logger);
 
         // Create atomic GBM primary plane presenter
         var primaryPlanePresenter = new DrmPlaneGbmAtomicPresenter(
@@ -206,11 +253,8 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             mode);
 
         // Find and create overlay plane presenter
-        var overlayPlane = FindOverlayPlane(drmDevice, crtcId, overlayPlanePixelFormat, logger);
-        if (overlayPlane == null)
-        {
-            throw new Exception($"No overlay plane with {overlayPlanePixelFormat.GetName()} format found");
-        }
+        var overlayPlane = FindOverlayPlaneOrThrow(
+            drmDevice, resources, crtcId, overlayPlanePixelFormat, logger);
 
         logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
             overlayPlanePixelFormat.GetName(), overlayPlane.Id);
@@ -232,25 +276,39 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             primaryPlanePresenter,
             overlayPlane,
             overlayPlanePresenter,
+            drmDevice.DeviceFd,
             logger);
     }
 
-    private static (DrmPlane primaryPlane, uint crtcId, DrmConnector connector, DrmModeInfo mode) SetupPrimaryPlane(
-        DrmDevice drmDevice,
-        uint width,
-        uint height,
-        ILogger logger)
+    private static DrmDeviceResources GetResourcesOrThrow(DrmDevice drmDevice, ILogger logger)
     {
         var resources = drmDevice.GetResources();
         if (resources == null)
         {
-            throw new Exception("Failed to get DRM resources");
+            logger.LogError("Failed to get DRM resources from device FD {DeviceFd}", drmDevice.DeviceFd);
+            throw new DrmResourceNotFoundException(
+                "Resources",
+                "Failed to get DRM resources",
+                drmDevice.DeviceFd);
         }
+        return resources;
+    }
 
+    private static (DrmPlane primaryPlane, uint crtcId, DrmConnector connector, DrmModeInfo mode) SetupPrimaryPlane(
+        DrmDevice drmDevice,
+        DrmDeviceResources resources,
+        uint width,
+        uint height,
+        ILogger logger)
+    {
         var connector = resources.Connectors.FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
         if (connector == null)
         {
-            throw new Exception("No connected display found");
+            logger.LogError("No connected display found on device FD {DeviceFd}", drmDevice.DeviceFd);
+            throw new DrmResourceNotFoundException(
+                "Connector",
+                "No connected display found",
+                drmDevice.DeviceFd);
         }
 
         logger.LogInformation("Found connected display: {Type}", connector.ConnectorType);
@@ -258,7 +316,12 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         var mode = connector.Modes.FirstOrDefault(m => m.HDisplay == width && m.VDisplay == height);
         if (mode == null)
         {
-            throw new Exception($"No {width}x{height} mode found");
+            logger.LogError(
+                "No {Width}x{Height} display mode found on device FD {DeviceFd}. Available modes: {Modes}",
+                width, height, drmDevice.DeviceFd,
+                string.Join(", ", connector.Modes.Select(m => $"{m.HDisplay}x{m.VDisplay}@{m.VRefresh}Hz")));
+            
+            throw new DrmModeNotFoundException(width, height, drmDevice.DeviceFd);
         }
 
         logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{RefreshRate}Hz)",
@@ -267,20 +330,29 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         var encoder = connector.Encoder ?? connector.Encoders.FirstOrDefault();
         if (encoder == null)
         {
-            throw new Exception("No encoder found");
+            logger.LogError("No encoder found for connector on device FD {DeviceFd}", drmDevice.DeviceFd);
+            throw new DrmResourceNotFoundException(
+                "Encoder",
+                "No encoder found",
+                drmDevice.DeviceFd);
         }
 
         var crtcId = encoder.CrtcId;
         if (crtcId == 0)
         {
+            var crtcsArray = resources.Crtcs.ToArray();
             var availableCrtcs = resources.Crtcs
-                .Where(crtc => (encoder.PossibleCrtcs & (1u << Array.IndexOf(resources.Crtcs.ToArray(), crtc))) != 0);
+                .Where(crtc => (encoder.PossibleCrtcs & (1u << Array.IndexOf(crtcsArray, crtc))) != 0);
             crtcId = availableCrtcs.FirstOrDefault();
         }
 
         if (crtcId == 0)
         {
-            throw new Exception("No available CRTC found");
+            logger.LogError("No available CRTC found on device FD {DeviceFd}", drmDevice.DeviceFd);
+            throw new DrmResourceNotFoundException(
+                "CRTC",
+                "No available CRTC found",
+                drmDevice.DeviceFd);
         }
 
         logger.LogInformation("Using CRTC ID: {CrtcId}", crtcId);
@@ -301,7 +373,8 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
 
         if (primaryPlane == null)
         {
-            throw new Exception("No primary plane found");
+            logger.LogError("No primary plane found on device FD {DeviceFd}", drmDevice.DeviceFd);
+            throw new DrmPlaneNotFoundException("primary", null, drmDevice.DeviceFd);
         }
 
         logger.LogInformation("Found primary plane: ID {PlaneId}", primaryPlane.Id);
@@ -315,17 +388,10 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
     }
 
     private static DrmPlane? FindOverlayPlane(
-        DrmDevice drmDevice,
+        DrmDeviceResources resources,
         uint crtcId,
-        PixelFormat pixelFormat,
-        ILogger logger)
+        PixelFormat pixelFormat)
     {
-        var resources = drmDevice.GetResources();
-        if (resources == null)
-        {
-            return null;
-        }
-
         var crtcIndex = resources.Crtcs.ToList().IndexOf(crtcId);
         var compatiblePlanes = resources.Planes
             .Where(p => (p.PossibleCrtcs & (1u << crtcIndex)) != 0)
@@ -341,6 +407,25 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
                                  .Equals("Overlay", StringComparison.OrdinalIgnoreCase);
             return isOverlay && p.Formats.Contains(pixelFormat.Fourcc);
         });
+    }
+
+    private static DrmPlane FindOverlayPlaneOrThrow(
+        DrmDevice drmDevice,
+        DrmDeviceResources resources,
+        uint crtcId,
+        PixelFormat pixelFormat,
+        ILogger logger)
+    {
+        var plane = FindOverlayPlane(resources, crtcId, pixelFormat);
+        if (plane == null)
+        {
+            logger.LogError(
+                "No overlay plane with {Format} format found on CRTC {CrtcId}, device FD {DeviceFd}",
+                pixelFormat.GetName(), crtcId, drmDevice.DeviceFd);
+            
+            throw new DrmPlaneNotFoundException("overlay", pixelFormat, drmDevice.DeviceFd);
+        }
+        return plane;
     }
 
     private static void DumpCapabilities(DrmCapabilitiesState caps, ILogger logger)
@@ -379,13 +464,17 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             caps.AtomicAsyncPageFlip);
     }
 
-    public void CleanupDisplay()
+    public void Dispose()
     {
-        _logger.LogInformation("Cleaning up display resources");
+        if (_disposed)
+            return;
+
+        _logger.LogInformation("Disposing DRM presenter for device FD {DeviceFd}", _drmDeviceFd);
 
         try
         {
             PrimaryPlanePresenter.Cleanup();
+            
             if (OverlayPlanePresenter is DrmSinglePlanePresenter overlayPresenter)
             {
                 overlayPresenter.Cleanup();
@@ -393,7 +482,11 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error during display cleanup");
+            _logger.LogError(ex, "Error during DRM presenter cleanup for device FD {DeviceFd}", _drmDeviceFd);
+        }
+        finally
+        {
+            _disposed = true;
         }
     }
 }

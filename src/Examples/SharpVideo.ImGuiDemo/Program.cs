@@ -116,7 +116,7 @@ internal class Program
             }
             finally
             {
-                presenter.CleanupDisplay();
+                presenter.Dispose();
                 gbmDevice.Dispose();
                 drmDevice.Dispose();
             }
