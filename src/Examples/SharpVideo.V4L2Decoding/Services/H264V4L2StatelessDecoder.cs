@@ -226,8 +226,13 @@ public class H264V4L2StatelessDecoder
             case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT: // Non-IDR slice
             case NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT: // IDR slice
                 _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
-                HandleSliceNalu(naluData, naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp, naluType,
-                    streamState);
+                var sliceData = naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp;
+                if (sliceData == null)
+                {
+                    _logger.LogWarning("Failed to parse slice data for NALU type {NaluType}, skipping", naluType);
+                    break;
+                }
+                HandleSliceNalu(naluData, sliceData, naluType, streamState);
                 break;
 
             default:
@@ -245,6 +250,12 @@ public class H264V4L2StatelessDecoder
         NalUnitType naluType,
         H264BitstreamParserState streamState)
     {
+        if (sliceLayerWithoutPartitioningRbsp == null)
+        {
+            _logger.LogWarning("Slice layer data is null for NALU type {NaluType}, skipping frame", naluType);
+            return;
+        }
+
         var header = sliceLayerWithoutPartitioningRbsp.slice_header;
         if (header.first_mb_in_slice != 0)
         {
