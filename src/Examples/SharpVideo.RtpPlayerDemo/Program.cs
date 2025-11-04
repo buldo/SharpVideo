@@ -116,7 +116,7 @@ internal class Program
             Width,
             Height,
             drmBufferManager,
-            KnownPixelFormats.DRM_FORMAT_XRGB8888,  // Primary (not used for video)
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary (not used for video)
             KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane for video
             Logger);
 
@@ -224,11 +224,11 @@ internal class Program
         Logger.LogInformation("=== Final Statistics ===");
         Logger.LogInformation("RTP Received: {Count} frames", rtpReceiver.ReceivedFramesCount);
         Logger.LogInformation("RTP Dropped: {Count} frames", rtpReceiver.DroppedFramesCount);
-        Logger.LogInformation("Decoded: {Count} frames @ {Fps:F2} FPS", 
+        Logger.LogInformation("Decoded: {Count} frames @ {Fps:F2} FPS",
             pipeline.Statistics.DecodedFrames, pipeline.Statistics.AverageDecodeFps);
-        Logger.LogInformation("Presented: {Count} frames @ {Fps:F2} FPS", 
+        Logger.LogInformation("Presented: {Count} frames @ {Fps:F2} FPS",
             pipeline.Statistics.PresentedFrames, pipeline.Statistics.AveragePresentFps);
-        Logger.LogInformation("Avg decode time: {Time:F2} ms/frame", 
+        Logger.LogInformation("Avg decode time: {Time:F2} ms/frame",
             pipeline.Statistics.AverageDecodeTimeMs);
     }
 
@@ -342,7 +342,7 @@ internal class Program
         }
 
         var selectedDevice = h264Devices.First();
-        logger.LogInformation("Using V4L2 device: {Driver} - {Card}", 
+        logger.LogInformation("Using V4L2 device: {Driver} - {Card}",
             selectedDevice.DriverName, selectedDevice.CardName);
 
         var v4L2Device = V4L2DeviceFactory.Open(selectedDevice.DevicePath);
