@@ -47,23 +47,26 @@ internal class Program
   }
         Logger.LogInformation("SDL3 initialized successfully");
 
-        // Create hidden window for mouse input
-  Logger.LogDebug("Creating hidden SDL window for input handling...");
-        var hiddenWindow = SDL.CreateWindow(
-   "SharpVideo ImGui (Hidden)"u8,
-            Width,
-            Height,
-            SDLWindowFlags.Hidden | SDLWindowFlags.Borderless);
+        // Create window for mouse input (shown for proper event handling)
+  Logger.LogDebug("Creating SDL window for input handling...");
+     var hiddenWindow = SDL.CreateWindow(
+   "SharpVideo ImGui Input"u8,
+      Width,
+          Height,
+   SDLWindowFlags.Borderless | SDLWindowFlags.AlwaysOnTop);
 
  if (hiddenWindow == null)
       {
-       var errorPtr = SDL.GetError();
-            var error = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)errorPtr) ?? "Unknown error";
-     Logger.LogError("Failed to create hidden SDL window: {Error}", error);
-            SDL.Quit();
-            return;
-        }
- Logger.LogInformation("Created hidden SDL window for input handling");
+    var errorPtr = SDL.GetError();
+   var error = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)errorPtr) ?? "Unknown error";
+     Logger.LogError("Failed to create SDL window: {Error}", error);
+      SDL.Quit();
+     return;
+  }
+
+        // Show window for proper mouse input handling
+        SDL.ShowWindow(hiddenWindow);
+      Logger.LogInformation("Created SDL window for input handling (shown for mouse capture)");
 
         try
         {
@@ -118,23 +121,23 @@ Logger.LogDebug("Opening DRM device...");
       var gbmDevice = GbmDevice.CreateFromDrmDevice(drmDevice);
             Logger.LogInformation("Created GBM device for OpenGL ES rendering");
 
-            // Create DRM presenter
-        var presenter = DrmPresenter<DrmPlaneGbmPresenter, object>.CreateWithGbmBuffers<object>(
-     drmDevice, Width, Height, gbmDevice,
-                KnownPixelFormats.DRM_FORMAT_ARGB8888, Logger);
+            // Create DRM presenter with atomic GBM buffers (high-performance, non-blocking)
+        var presenter = DrmPresenter<DrmPlaneGbmAtomicPresenter, object>.CreateWithGbmBuffersAtomic<object>(
+    drmDevice, Width, Height, gbmDevice,
+        KnownPixelFormats.DRM_FORMAT_ARGB8888, Logger);
 
-    if (presenter == null)
-      {
-  Logger.LogError("Failed to create DRM presenter");
-                return;
-    }
+        if (presenter == null)
+        {
+    Logger.LogError("Failed to create DRM presenter");
+     return;
+   }
 
-     // Create DRM ImGui renderer
-            using var drmRenderer = new DrmImGuiRenderer(
+        // Create DRM ImGui renderer
+ using var drmRenderer = new DrmImGuiRenderer(
          gbmDevice,
- presenter.PrimaryPlanePresenter.GetNativeGbmSurfaceHandle(),
+          presenter.PrimaryPlanePresenter.GetNativeGbmSurfaceHandle(),
    Width, Height,
-       LoggerFactory.CreateLogger<DrmImGuiRenderer>());
+    LoggerFactory.CreateLogger<DrmImGuiRenderer>());
 
     // Initialize ImGui OpenGL3 backend
           ImGuiImplOpenGL3.SetCurrentContext(guiContext);
@@ -148,22 +151,26 @@ Logger.LogDebug("Opening DRM device...");
 
             // Warmup frame
        Logger.LogInformation("Rendering initial warmup frame...");
-    io.DeltaTime = 1.0f / 60.0f;
-            if (sdl3InitSuccess) ImGuiImplSDL3.NewFrame();
-  ImGuiImplOpenGL3.NewFrame();
-     Hexa.NET.ImGui.ImGui.NewFrame();
-  RenderImGuiContent(TimeSpan.Zero, 0);
+   io.DeltaTime = 1.0f / 60.0f;
+      if (sdl3InitSuccess) ImGuiImplSDL3.NewFrame();
+     ImGuiImplOpenGL3.NewFrame();
+      Hexa.NET.ImGui.ImGui.NewFrame();
+RenderImGuiContent(TimeSpan.Zero, 0);
             Hexa.NET.ImGui.ImGui.Render();
-  var warmupDrawData = Hexa.NET.ImGui.ImGui.GetDrawData();
-      drmRenderer.RenderToGbmSurface(warmupDrawData);
+   var warmupDrawData = Hexa.NET.ImGui.ImGui.GetDrawData();
+            drmRenderer.RenderDrawData(warmupDrawData);
 
-         if (!presenter.PrimaryPlanePresenter.SwapBuffers())
-       {
-    Logger.LogError("Failed to swap buffers on warmup frame");
- return;
+         // Submit first frame to initialize display
+       if (!presenter.PrimaryPlanePresenter.SubmitFrame())
+            {
+        Logger.LogError("Failed to submit warmup frame");
+       return;
             }
 
-            Logger.LogInformation("Warmup frame completed successfully");
+            Logger.LogInformation("Warmup frame submitted - waiting for display initialization...");
+     // Give page flip thread time to initialize display
+      Thread.Sleep(100);
+            Logger.LogInformation("Display initialization completed");
 
        // Main loop
       try
@@ -194,107 +201,109 @@ Logger.LogDebug("Opening DRM device...");
 
     private static unsafe void RunMainLoop(
         ImGuiIOPtr io,
-  DrmPresenter<DrmPlaneGbmPresenter, object> presenter,
+     DrmPresenter<DrmPlaneGbmAtomicPresenter, object> presenter,
         DrmImGuiRenderer drmRenderer,
         bool sdl3BackendEnabled)
     {
-        Logger.LogInformation("=== RunMainLoop STARTED ===");
+   Logger.LogInformation("=== RunMainLoop STARTED ===");
         Logger.LogDebug("SDL3 backend enabled: {Enabled}", sdl3BackendEnabled);
 
-    var stopwatch = Stopwatch.StartNew();
-        var frameCount = 0;
-   var lastFpsTime = stopwatch.Elapsed;
+  var stopwatch = Stopwatch.StartNew();
+    var frameCount = 0;
+ var lastFpsTime = stopwatch.Elapsed;
         var lastFrameTime = stopwatch.Elapsed;
-     var exiting = false;
+      var exiting = false;
 
-        Logger.LogInformation("Starting main loop - rendering at maximum speed without vsync");
+     Logger.LogInformation("Starting main loop - rendering at maximum FPS without vsync blocking");
 
-        while (!exiting)
+ while (!exiting)
         {
-        try
-            {
-   var currentTime = stopwatch.Elapsed;
-          var deltaTime = (float)(currentTime - lastFrameTime).TotalSeconds;
-         lastFrameTime = currentTime;
+      try
+        {
+     var currentTime = stopwatch.Elapsed;
+    var deltaTime = (float)(currentTime - lastFrameTime).TotalSeconds;
+            lastFrameTime = currentTime;
 
-   // Poll SDL events
+    // Poll SDL events
       SDL.PumpEvents();
-      Hexa.NET.SDL3.SDLEvent sdlEvent;
-         while (SDL.PollEvent(&sdlEvent))
-         {
-     if (sdl3BackendEnabled)
-          {
-        var imgui_sdlEvent = (Hexa.NET.ImGui.Backends.SDL3.SDLEvent*)(&sdlEvent);
- var eventPtr = new Hexa.NET.ImGui.Backends.SDL3.SDLEventPtr(imgui_sdlEvent);
-           ImGuiImplSDL3.ProcessEvent(eventPtr);
-      }
+        Hexa.NET.SDL3.SDLEvent sdlEvent;
+     while (SDL.PollEvent(&sdlEvent))
+ {
+            if (sdl3BackendEnabled)
+    {
+      var imgui_sdlEvent = (Hexa.NET.ImGui.Backends.SDL3.SDLEvent*)(&sdlEvent);
+var eventPtr = new Hexa.NET.ImGui.Backends.SDL3.SDLEventPtr(imgui_sdlEvent);
+   ImGuiImplSDL3.ProcessEvent(eventPtr);
+       }
 
-       if (sdlEvent.Type == (uint)SDLEventType.Quit)
-            {
-             Logger.LogInformation("Received quit event, exiting");
-               exiting = true;
-           }
-      }
+   if (sdlEvent.Type == (uint)SDLEventType.Quit)
+      {
+           Logger.LogInformation("Received quit event, exiting");
+     exiting = true;
+               }
+            }
 
-        if (exiting) break;
+    if (exiting) break;
 
-           // ImGui frame
-        io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
-        if (sdl3BackendEnabled) ImGuiImplSDL3.NewFrame();
-      ImGuiImplOpenGL3.NewFrame();
-             Hexa.NET.ImGui.ImGui.NewFrame();
+     // ImGui frame preparation
+    io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
+      if (sdl3BackendEnabled) ImGuiImplSDL3.NewFrame();
+         ImGuiImplOpenGL3.NewFrame();
+     Hexa.NET.ImGui.ImGui.NewFrame();
 
          RenderImGuiContent(stopwatch.Elapsed, frameCount);
 
-        Hexa.NET.ImGui.ImGui.Render();
+    Hexa.NET.ImGui.ImGui.Render();
    var drawData = Hexa.NET.ImGui.ImGui.GetDrawData();
 
-         drmRenderer.RenderToGbmSurface(drawData);
+          // Render ImGui (GPU work, no blocking)
+       drmRenderer.RenderDrawData(drawData);
 
-            if (!presenter.PrimaryPlanePresenter.SwapBuffers())
-              {
-             Logger.LogWarning("Failed to swap buffers on frame {Frame}", frameCount);
-                }
-
-frameCount++;
-
-     // Log FPS
-                if ((currentTime - lastFpsTime).TotalSeconds >= 1.0)
-        {
-   var fps = frameCount / (currentTime - lastFpsTime).TotalSeconds;
-      Logger.LogInformation("FPS: {Fps:F2}", fps);
-    frameCount = 0;
-     lastFpsTime = currentTime;
-      }
-      }
-            catch (Exception ex)
+       // Submit frame to page flip thread (non-blocking, returns immediately)
+         if (!presenter.PrimaryPlanePresenter.SubmitFrame())
  {
-                Logger.LogError(ex, "Exception in main loop on frame {Frame}", frameCount);
-      exiting = true;
+    Logger.LogWarning("Failed to submit frame {Frame}", frameCount);
  }
+
+          frameCount++;
+
+ // Log FPS
+ if ((currentTime - lastFpsTime).TotalSeconds >= 1.0)
+        {
+          var fps = frameCount / (currentTime - lastFpsTime).TotalSeconds;
+       Logger.LogInformation("Render FPS: {Fps:F2} (actual display limited by vblank)", fps);
+       frameCount = 0;
+            lastFpsTime = currentTime;
+           }
+      }
+   catch (Exception ex)
+     {
+       Logger.LogError(ex, "Exception in main loop on frame {Frame}", frameCount);
+       exiting = true;
+   }
         }
 
      Logger.LogInformation("Main loop exited after {FrameCount} frames", frameCount);
-    }
+ }
 
     private static void RenderImGuiContent(TimeSpan elapsed, int frameCount)
     {
-        Hexa.NET.ImGui.ImGui.ShowDemoWindow();
+   Hexa.NET.ImGui.ImGui.ShowDemoWindow();
 
-        Hexa.NET.ImGui.ImGui.Begin("Performance Info");
-        Hexa.NET.ImGui.ImGui.Text($"Frame: {frameCount}");
-   Hexa.NET.ImGui.ImGui.Text($"Time: {elapsed.TotalSeconds:F2}s");
-    Hexa.NET.ImGui.ImGui.Text($"FPS: {Hexa.NET.ImGui.ImGui.GetIO().Framerate:F1}");
-        Hexa.NET.ImGui.ImGui.Separator();
-   Hexa.NET.ImGui.ImGui.Text("Hybrid Rendering:");
-        Hexa.NET.ImGui.ImGui.BulletText("SDL3: Input & ImGui infrastructure");
-        Hexa.NET.ImGui.ImGui.BulletText("DRM/GBM: Direct rendering with GPU buffers");
-        Hexa.NET.ImGui.ImGui.BulletText("OpenGL ES: GPU-accelerated ImGui rendering");
-        Hexa.NET.ImGui.ImGui.BulletText("Page Flip: VSync-synced display update");
-        Hexa.NET.ImGui.ImGui.Separator();
+Hexa.NET.ImGui.ImGui.Begin("Performance Info");
+  Hexa.NET.ImGui.ImGui.Text($"Frame: {frameCount}");
+      Hexa.NET.ImGui.ImGui.Text($"Time: {elapsed.TotalSeconds:F2}s");
+    Hexa.NET.ImGui.ImGui.Text($"Render FPS: {Hexa.NET.ImGui.ImGui.GetIO().Framerate:F1}");
+     Hexa.NET.ImGui.ImGui.Separator();
+        Hexa.NET.ImGui.ImGui.Text("Two-Threaded Architecture:");
+   Hexa.NET.ImGui.ImGui.BulletText("Render Thread: Max FPS OpenGL ES rendering (this thread)");
+      Hexa.NET.ImGui.ImGui.BulletText("Page Flip Thread: VBlank-synced display updates");
+     Hexa.NET.ImGui.ImGui.BulletText("SDL3: Input & ImGui infrastructure");
+Hexa.NET.ImGui.ImGui.BulletText("DRM Atomic: Non-blocking page flips with events");
+ Hexa.NET.ImGui.ImGui.Separator();
       Hexa.NET.ImGui.ImGui.TextColored(new System.Numerics.Vector4(0, 1, 0, 1),
-         "Rendering at MAX FPS without vsync limitation!");
+    "Rendering WITHOUT vsync blocking!");
         Hexa.NET.ImGui.ImGui.Text("Send SIGTERM/SIGINT to exit");
-    Hexa.NET.ImGui.ImGui.End();
+        Hexa.NET.ImGui.ImGui.End();
     }
 }

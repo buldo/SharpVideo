@@ -101,6 +101,7 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
 
     /// <summary>
     /// Creates a DRM presenter with GBM-based primary plane for OpenGL ES rendering.
+    /// Uses legacy API with blocking page flips.
     /// </summary>
     public static DrmPresenter<DrmPlaneGbmPresenter, TOverlay>? CreateWithGbmBuffers<TOverlay>(
         DrmDevice drmDevice,
@@ -127,6 +128,43 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             mode);
 
         return new DrmPresenter<DrmPlaneGbmPresenter, TOverlay>(
+            primaryPlane,
+            primaryPlanePresenter,
+            null,
+            null,
+            logger);
+    }
+
+    /// <summary>
+    /// Creates a DRM presenter with atomic GBM-based primary plane for high-performance OpenGL ES rendering.
+    /// Uses atomic modesetting with non-blocking page flips and separate page flip thread.
+    /// Allows rendering at maximum FPS without vsync blocking.
+    /// </summary>
+    public static DrmPresenter<DrmPlaneGbmAtomicPresenter, TOverlay>? CreateWithGbmBuffersAtomic<TOverlay>(
+        DrmDevice drmDevice,
+        uint width,
+        uint height,
+        GbmDevice gbmDevice,
+        PixelFormat primaryPlanePixelFormat,
+        ILogger logger)
+        where TOverlay : class
+    {
+        var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
+            drmDevice, width, height, logger);
+
+        var primaryPlanePresenter = new DrmPlaneGbmAtomicPresenter(
+            drmDevice,
+            primaryPlane,
+            crtcId,
+            width,
+            height,
+            logger,
+            gbmDevice,
+            primaryPlanePixelFormat,
+            connector.ConnectorId,
+            mode);
+
+        return new DrmPresenter<DrmPlaneGbmAtomicPresenter, TOverlay>(
             primaryPlane,
             primaryPlanePresenter,
             null,

@@ -18,6 +18,12 @@ public class GbmSurface : IDisposable
     /// Gets the native GBM surface pointer (not a file descriptor).
     /// This pointer can be used with LibGbm functions and EGL.
     /// </summary>
+    public nint Handle => _gbmSurfacePtr;
+
+    /// <summary>
+    /// [Obsolete] Use Handle instead. This property name is misleading as it's a pointer, not a file descriptor.
+    /// </summary>
+    [Obsolete("Use Handle property instead. This is a pointer to GBM surface structure, not a file descriptor.")]
     public nint Fd => _gbmSurfacePtr;
 
     protected virtual void Dispose(bool disposing)

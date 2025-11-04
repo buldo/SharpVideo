@@ -254,57 +254,44 @@ _logger?.LogError("Failed to get EGL display from GBM device");
 
     /// <summary>
     /// Renders ImGui draw data to the GBM surface using OpenGL ES.
-    /// After calling this, you need to call eglSwapBuffers or handle the GBM buffer swap.
+    /// After calling this, call presenter.SubmitFrame() to queue for display.
+    /// This method does NOT swap buffers - caller must handle buffer submission.
     /// </summary>
-public void RenderToGbmSurface(Hexa.NET.ImGui.ImDrawDataPtr drawData)
+    public void RenderDrawData(Hexa.NET.ImGui.ImDrawDataPtr drawData)
     {
-   _logger?.LogDebug("RenderToGbmSurface: START");
-   
-      // Make sure we're rendering to the correct surface
-        _logger?.LogDebug("RenderToGbmSurface: Making EGL context current...");
+        // Make sure we're rendering to the correct surface
         if (!NativeEgl.MakeCurrent(_eglDisplay, _eglSurface, _eglSurface, _eglContext))
-{
-            var error = NativeEgl.GetError();
-    _logger?.LogError("Failed to make EGL context current: {Error}", NativeEgl.GetErrorString(error));
-  return;
- }
- _logger?.LogDebug("RenderToGbmSurface: EGL context is current");
+        {
+         var error = NativeEgl.GetError();
+        _logger?.LogError("Failed to make EGL context current: {Error}", NativeEgl.GetErrorString(error));
+ return;
+        }
 
-        _logger?.LogDebug("RenderToGbmSurface: Setting viewport...");
-     _gl.Viewport(0, 0, (uint)_width, (uint)_height);
-   _logger?.LogDebug("RenderToGbmSurface: Viewport set");
+        _gl.Viewport(0, 0, (uint)_width, (uint)_height);
 
-// Clear with transparent black background
-        _logger?.LogDebug("RenderToGbmSurface: Clearing...");
+   // Clear with black background
         _gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-_gl.Clear(ClearBufferMask.ColorBufferBit);
-        _logger?.LogDebug("RenderToGbmSurface: Cleared");
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
 
- // Enable blending for ImGui
-      _logger?.LogDebug("RenderToGbmSurface: Setting up blending...");
- _gl.Enable(EnableCap.Blend);
-        _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
-   _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+      // Enable blending for ImGui
+        _gl.Enable(EnableCap.Blend);
+   _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+        _gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         _gl.Disable(EnableCap.CullFace);
     _gl.Disable(EnableCap.DepthTest);
         _gl.Enable(EnableCap.ScissorTest);
-        _logger?.LogDebug("RenderToGbmSurface: Blending setup complete");
 
-        // Render ImGui draw data using ImGui OpenGL3 backend
-        _logger?.LogDebug("RenderToGbmSurface: Calling ImGuiImplOpenGL3.RenderDrawData...");
+    // Render ImGui draw data using ImGui OpenGL3 backend
         Hexa.NET.ImGui.Backends.OpenGL3.ImGuiImplOpenGL3.RenderDrawData(drawData);
-        _logger?.LogDebug("RenderToGbmSurface: ImGui render complete");
 
-        // Swap EGL buffers (this will prepare the next GBM BO)
-        _logger?.LogDebug("RenderToGbmSurface: Swapping EGL buffers...");
-        if (!NativeEgl.SwapBuffers(_eglDisplay, _eglSurface))
-    {
-      var error = NativeEgl.GetError();
-_logger?.LogWarning("eglSwapBuffers failed: {Error}", NativeEgl.GetErrorString(error));
+      // Swap EGL buffers to mark this frame as complete
+  // The next gbm_surface_lock_front_buffer() will get this rendered frame
+   if (!NativeEgl.SwapBuffers(_eglDisplay, _eglSurface))
+        {
+    var error = NativeEgl.GetError();
+          _logger?.LogWarning("eglSwapBuffers failed: {Error}", NativeEgl.GetErrorString(error));
         }
-        _logger?.LogDebug("RenderToGbmSurface: EGL buffers swapped");
-_logger?.LogDebug("RenderToGbmSurface: COMPLETE");
-  }
+    }
 
     public void Dispose()
     {
