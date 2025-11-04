@@ -96,33 +96,19 @@ internal class Program
             [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_ARGB8888],
             drmBufferManagerLogger);
 
-        // Create DRM presenter with GBM atomic for ImGui primary plane
-        var presenterPrimary = DrmPresenter<DrmPlaneGbmAtomicPresenter, object>.CreateWithGbmBuffersAtomic<object>(
+        // Create unified DRM presenter with GBM primary (ImGui) and DMA overlay (video)
+        // This approach combines both presenters to avoid EGL context conflicts
+        var presenter = CreateDualPlanePresenter(
             drmDevice,
-            Width,
-            Height,
             gbmDevice,
-            KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary plane for ImGui
-            Logger);
-
-        if (presenterPrimary == null)
-        {
-            throw new Exception("Failed to create primary DRM presenter");
-        }
-
-        // Create video overlay presenter for V4L2 decoder
-        var videoPresenter = DrmPresenter.Create(
-            drmDevice,
+            drmBufferManager,
             Width,
             Height,
-            drmBufferManager,
-            KnownPixelFormats.DRM_FORMAT_XRGB8888,  // Primary (not used for video)
-            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane for video
             Logger);
 
-        if (videoPresenter == null)
+        if (presenter == null)
         {
-            throw new Exception("Failed to create video DRM presenter");
+            throw new Exception("Failed to create unified DRM presenter");
         }
 
         // Setup input manager
@@ -137,7 +123,7 @@ internal class Program
             Height = (uint)Height,
             DrmDevice = drmDevice,
             GbmDevice = gbmDevice,
-            GbmSurfaceHandle = presenterPrimary.PrimaryPlanePresenter.GetNativeGbmSurfaceHandle(),
+            GbmSurfaceHandle = presenter.PrimaryPresenter.GetNativeGbmSurfaceHandle(),
             PixelFormat = KnownPixelFormats.DRM_FORMAT_ARGB8888,
             ConfigFlags = ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable,
             DrawCursor = true,
@@ -179,12 +165,12 @@ internal class Program
             new IPEndPoint(IPAddress.Parse(BindAddress), BindPort),
             LoggerFactory);
 
-        // Create decoder pipeline using video presenter
+        // Create decoder pipeline using overlay presenter from unified presenter
         var pipelineLogger = LoggerFactory.CreateLogger<DecoderPipeline>();
         await using var pipeline = new DecoderPipeline(
             rtpReceiver,
             decoder,
-            videoPresenter,
+            presenter.OverlayPresenter,
             pipelineLogger);
 
         pipeline.Initialize();
@@ -202,7 +188,7 @@ internal class Program
         Logger.LogInformation("Rendering initial warmup frame...");
         if (imguiManager.WarmupFrame(dt => osdRenderer.Render()))
         {
-            if (presenterPrimary.PrimaryPlanePresenter.SubmitFrame())
+            if (presenter.PrimaryPresenter.SubmitFrame())
             {
                 Logger.LogInformation("Warmup frame submitted successfully");
             }
@@ -211,12 +197,11 @@ internal class Program
         Thread.Sleep(100);
 
         // Main loop
-        await RunMainLoopAsync(imguiManager, presenterPrimary, inputManager, osdRenderer, pipeline.Statistics, cancellationToken);
+        await RunMainLoopAsync(imguiManager, presenter.PrimaryPresenter, inputManager, osdRenderer, pipeline.Statistics, cancellationToken);
 
         // Cleanup
         await pipeline.StopAsync();
-        presenterPrimary.CleanupDisplay();
-        videoPresenter.CleanupDisplay();
+        presenter.Cleanup();
         gbmDevice.Dispose();
         drmDevice.Dispose();
 
@@ -232,9 +217,171 @@ internal class Program
             pipeline.Statistics.AverageDecodeTimeMs);
     }
 
+    /// <summary>
+    /// Creates a unified dual-plane presenter with GBM primary (ImGui) and DMA overlay (video)
+    /// </summary>
+    private static UnifiedDualPlanePresenter CreateDualPlanePresenter(
+        DrmDevice drmDevice,
+        GbmDevice gbmDevice,
+        DrmBufferManager bufferManager,
+        int width,
+        int height,
+        ILogger logger)
+    {
+        // Get DRM resources
+        var resources = drmDevice.GetResources();
+        if (resources == null)
+        {
+            throw new Exception("Failed to get DRM resources");
+        }
+
+        // Find connected display
+        var connector = resources.Connectors.FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
+        if (connector == null)
+        {
+            throw new Exception("No connected display found");
+        }
+
+        logger.LogInformation("Found connected display: {Type}", connector.ConnectorType);
+
+        // Find matching mode
+        var mode = connector.Modes.FirstOrDefault(m => m.HDisplay == width && m.VDisplay == height);
+        if (mode == null)
+        {
+            throw new Exception($"No {width}x{height} mode found");
+        }
+
+        logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{RefreshRate}Hz)",
+            mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
+
+        // Get CRTC
+        var encoder = connector.Encoder ?? connector.Encoders.FirstOrDefault();
+        if (encoder == null)
+        {
+            throw new Exception("No encoder found");
+        }
+
+        var crtcId = encoder.CrtcId;
+        if (crtcId == 0)
+        {
+            var availableCrtcs = resources.Crtcs
+                .Where(crtc => (encoder.PossibleCrtcs & (1u << Array.IndexOf(resources.Crtcs.ToArray(), crtc))) != 0);
+            crtcId = availableCrtcs.FirstOrDefault();
+        }
+
+        if (crtcId == 0)
+        {
+            throw new Exception("No available CRTC found");
+        }
+
+        logger.LogInformation("Using CRTC ID: {CrtcId}", crtcId);
+
+        // Find planes
+        var crtcIndex = resources.Crtcs.ToList().IndexOf(crtcId);
+        var compatiblePlanes = resources.Planes
+            .Where(p => (p.PossibleCrtcs & (1u << crtcIndex)) != 0)
+            .ToList();
+
+        var primaryPlane = compatiblePlanes.FirstOrDefault(p =>
+        {
+            var props = p.GetProperties();
+            var typeProp = props.FirstOrDefault(prop => prop.Name.Equals("type", StringComparison.OrdinalIgnoreCase));
+            return typeProp != null && typeProp.EnumNames != null &&
+                   typeProp.Value < (ulong)typeProp.EnumNames.Count &&
+                   typeProp.EnumNames[(int)typeProp.Value].Equals("Primary", StringComparison.OrdinalIgnoreCase);
+        });
+
+        if (primaryPlane == null)
+        {
+            throw new Exception("No primary plane found");
+        }
+
+        var overlayPlane = compatiblePlanes.FirstOrDefault(p =>
+        {
+            var props = p.GetProperties();
+            var typeProp = props.FirstOrDefault(prop => prop.Name.Equals("type", StringComparison.OrdinalIgnoreCase));
+            bool isOverlay = typeProp != null && typeProp.EnumNames != null &&
+                             typeProp.Value < (ulong)typeProp.EnumNames.Count &&
+                             typeProp.EnumNames[(int)typeProp.Value].Equals("Overlay", StringComparison.OrdinalIgnoreCase);
+            return isOverlay && p.Formats.Contains(KnownPixelFormats.DRM_FORMAT_NV12.Fourcc);
+        });
+
+        if (overlayPlane == null)
+        {
+            throw new Exception("No NV12-capable overlay plane found");
+        }
+
+        logger.LogInformation("Found primary plane: ID {PlaneId}", primaryPlane.Id);
+        logger.LogInformation("Found overlay plane: ID {PlaneId}", overlayPlane.Id);
+
+        // Create presenters
+        var primaryPresenter = new DrmPlaneGbmAtomicPresenter(
+            drmDevice,
+            primaryPlane,
+            crtcId,
+            (uint)width,
+            (uint)height,
+            logger,
+            gbmDevice,
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,
+            connector.ConnectorId,
+            mode);
+
+        var overlayPresenter = DrmPresenter.Create(
+            drmDevice,
+            (uint)width,
+            (uint)height,
+            bufferManager,
+            KnownPixelFormats.DRM_FORMAT_XRGB8888,  // Primary (unused)
+            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay for video
+            logger);
+
+        if (overlayPresenter == null)
+        {
+            throw new Exception("Failed to create overlay presenter");
+        }
+
+        return new UnifiedDualPlanePresenter(primaryPresenter, overlayPresenter, logger);
+    }
+
+    /// <summary>
+    /// Unified presenter managing both GBM primary and DMA overlay planes
+    /// </summary>
+    private class UnifiedDualPlanePresenter
+    {
+        private readonly ILogger _logger;
+
+        public UnifiedDualPlanePresenter(
+            DrmPlaneGbmAtomicPresenter primaryPresenter,
+            DrmPresenter overlayPresenter,
+            ILogger logger)
+        {
+            PrimaryPresenter = primaryPresenter;
+            OverlayPresenter = overlayPresenter;
+            _logger = logger;
+        }
+
+        public DrmPlaneGbmAtomicPresenter PrimaryPresenter { get; }
+        public DrmPresenter OverlayPresenter { get; }
+
+        public void Cleanup()
+        {
+            _logger.LogInformation("Cleaning up unified dual-plane presenter");
+            try
+            {
+                PrimaryPresenter.Cleanup();
+                OverlayPresenter.CleanupDisplay();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during presenter cleanup");
+            }
+        }
+    }
+
     private static async Task RunMainLoopAsync(
         ImGuiManager imguiManager,
-        DrmPresenter<DrmPlaneGbmAtomicPresenter, object> presenter,
+        DrmPlaneGbmAtomicPresenter primaryPresenter,
         InputManager inputManager,
         OsdRenderer osdRenderer,
         PlayerStatistics statistics,
@@ -290,7 +437,7 @@ internal class Program
 
                 if (frameRendered)
                 {
-                    if (presenter.PrimaryPlanePresenter.SubmitFrame())
+                    if (primaryPresenter.SubmitFrame())
                     {
                         frameCount++;
                     }
