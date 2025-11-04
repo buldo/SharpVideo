@@ -34,7 +34,7 @@ internal static unsafe class NativeEgl
     public const int EGL_NO_SURFACE = 0;
     public const int EGL_NO_DISPLAY = 0;
 
-// Query string names
+    // Query string names
     public const int EGL_EXTENSIONS = 0x3055;
     public const int EGL_VENDOR = 0x3053;
     public const int EGL_VERSION = 0x3054;

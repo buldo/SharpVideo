@@ -4,6 +4,24 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenGL ES for ImGui rendering -->
+    <PackageReference Include="Silk.NET.OpenGLES" Version="2.22.0" />
+
+    <!-- ImGui for UI -->
+    <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
+    <PackageReference Include="Hexa.NET.ImGui.Backends" Version="1.0.18" />
+
+    <!-- Logging -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0-rc.2.25502.107" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SharpVideo\SharpVideo.csproj" />
+    <ProjectReference Include="..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
+  </ItemGroup>
 
 </Project>
