@@ -2,6 +2,7 @@
 using System.Runtime.Versioning;
 using Hexa.NET.ImGui;
 using Hexa.NET.ImGui.Backends.OpenGL3;
+using Hexa.NET.ImGui.Backends.SDL3;
 using Hexa.NET.SDL3;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Drm;
@@ -48,14 +49,28 @@ internal class Program
             var io = Hexa.NET.ImGui.ImGui.GetIO();
             io.ConfigFlags |= ImGuiConfigFlags.NavEnableKeyboard;
             io.ConfigFlags |= ImGuiConfigFlags.DockingEnable;
-            io.MouseDrawCursor = true;
+            
+   // We're rendering to DRM directly, but we still need mouse input
+     // Use SDL3 backend for input handling only (no window)
+    io.MouseDrawCursor = true;
 
             // Setup ImGui style
             var style = Hexa.NET.ImGui.ImGui.GetStyle();
             style.ScaleAllSizes(1.0f);
             io.DisplaySize = new System.Numerics.Vector2(Width, Height);
 
-            // Open DRM device
+            // Initialize SDL3 backend for ImGui (for input handling)
+  // We pass null window since we're rendering to DRM without SDL window
+ ImGuiImplSDL3.SetCurrentContext(guiContext);
+if (!ImGuiImplSDL3.InitForOther(default))
+  {
+   Logger.LogError("Failed to init ImGui SDL3 backend");
+ SDL.Quit();
+ return;
+ }
+   Logger.LogInformation("ImGui SDL3 backend initialized (input only)");
+
+       // Open DRM device
             var drmDevice = DrmUtils.OpenDrmDevice(Logger);
             drmDevice.EnableDrmCapabilities(Logger);
 
@@ -95,20 +110,23 @@ internal class Program
                 return;
             }
 
-            Logger.LogInformation("ImGui OpenGL3 backend initialized");
+
+
+            Logger.LogInformation("ImGui OpenGL3 and SDL3 backends initialized");
 
             // Render an initial "warmup" frame to initialize the pipeline
             Logger.LogInformation("Rendering initial warmup frame...");
             io.DeltaTime = 1.0f / 60.0f;
 
-            // ImGui backends require NewFrame calls in correct order:
-            // 1. Renderer backend NewFrame (OpenGL3)
-            // 2. Platform backend NewFrame (if using SDL backend - we're not)
-            // 3. ImGui core NewFrame
-            ImGuiImplOpenGL3.NewFrame();
-            Hexa.NET.ImGui.ImGui.NewFrame();
-            RenderImGuiContent(TimeSpan.Zero, 0);
-            Hexa.NET.ImGui.ImGui.Render();
+  // ImGui backends require NewFrame calls in correct order:
+            // 1. Platform backend NewFrame (SDL3) - processes input
+ // 2. Renderer backend NewFrame (OpenGL3) - prepares GPU resources
+   // 3. ImGui core NewFrame - starts frame
+   ImGuiImplSDL3.NewFrame();
+ ImGuiImplOpenGL3.NewFrame();
+    Hexa.NET.ImGui.ImGui.NewFrame();
+    RenderImGuiContent(TimeSpan.Zero, 0);
+    Hexa.NET.ImGui.ImGui.Render();
             var warmupDrawData = Hexa.NET.ImGui.ImGui.GetDrawData();
             drmRenderer.RenderToGbmSurface(warmupDrawData);
 
@@ -134,12 +152,13 @@ internal class Program
             }
             finally
             {
-                ImGuiImplOpenGL3.Shutdown();
-                Hexa.NET.ImGui.ImGui.DestroyContext();
-                presenter.CleanupDisplay();
-                gbmDevice.Dispose();
-                drmDevice.Dispose();
-            }
+     ImGuiImplOpenGL3.Shutdown();
+            ImGuiImplSDL3.Shutdown();
+       Hexa.NET.ImGui.ImGui.DestroyContext();
+         presenter.CleanupDisplay();
+    gbmDevice.Dispose();
+         drmDevice.Dispose();
+        }
         }
 
         SDL.Quit();
@@ -179,22 +198,28 @@ internal class Program
                 SDL.PumpEvents();
                 Logger.LogDebug("Frame {Frame}: SDL events polled", frameCount);
 
-                // Simple quit handling - just check for quit event
-                // (In real app, you'd want proper keyboard/mouse handling via SDL backends)
-                unsafe
-                {
-                    Hexa.NET.SDL3.SDLEvent sdlEvent;
-                    while (SDL.PollEvent(&sdlEvent))
-                    {
-                        if (sdlEvent.Type == (uint)SDLEventType.Quit)
-                        {
-                            Logger.LogInformation("Received quit event, exiting");
-                            exiting = true;
-                        }
-                    }
-                }
+   // Process SDL events through ImGui backend
+  unsafe
+  {
+  Hexa.NET.SDL3.SDLEvent sdlEvent;
+    while (SDL.PollEvent(&sdlEvent))
+    {
+   // Let ImGui process the event (for mouse/keyboard/quit)
+   // Cast to Hexa.NET ImGui backend's SDLEvent type
+      var imgui_sdlEvent = (Hexa.NET.ImGui.Backends.SDL3.SDLEvent*)(&sdlEvent);
+var eventPtr = new Hexa.NET.ImGui.Backends.SDL3.SDLEventPtr(imgui_sdlEvent);
+       ImGuiImplSDL3.ProcessEvent(eventPtr);
+       
+ // Check for quit event to exit main loop
+     if (sdlEvent.Type == (uint)SDLEventType.Quit)
+   {
+       Logger.LogInformation("Received quit event, exiting");
+ exiting = true;
+         }
+   }
+       }
 
-                Logger.LogDebug("Frame {Frame}: Checked for quit events", frameCount);
+  Logger.LogDebug("Frame {Frame}: Processed SDL events", frameCount);
 
                 if (exiting)
                     break;
@@ -204,9 +229,10 @@ internal class Program
                 io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
 
                 // ImGui backends require NewFrame calls in correct order:
-                // 1. Renderer backend NewFrame (OpenGL3)
-                // 2. Platform backend NewFrame (if using SDL backend - we're not)
-                // 3. ImGui core NewFrame
+                // 1. Platform backend NewFrame (SDL3) - processes input
+                // 2. Renderer backend NewFrame (OpenGL3) - prepares GPU resources
+                // 3. ImGui core NewFrame - starts frame
+                ImGuiImplSDL3.NewFrame();
                 ImGuiImplOpenGL3.NewFrame();
                 Hexa.NET.ImGui.ImGui.NewFrame();
                 Logger.LogDebug("Frame {Frame}: ImGui NewFrame completed", frameCount);
