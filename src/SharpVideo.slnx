@@ -8,7 +8,7 @@
     <Project Path="Examples/SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
     <Project Path="Examples/SharpVideo.DrmDemo/SharpVideo.DrmDemo.csproj" />
     <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
-    <Project Path="Examples/SharpVideo.ImGui/SharpVideo.ImGui.csproj" Id="ee5cdfbc-015b-44f4-9c3a-76e8c7ff64c0" />
+    <Project Path="Examples/SharpVideo.ImGuiDemo/SharpVideo.ImGuiDemo.csproj" Id="ee5cdfbc-015b-44f4-9c3a-76e8c7ff64c0" />
     <Project Path="Examples/SharpVideo.MultiPlaneExample/SharpVideo.MultiPlaneExample.csproj" Id="53b0ddba-a5a4-48ce-be74-c840e3722322" />
     <Project Path="Examples/SharpVideo.MultiPlaneGlExample/SharpVideo.MultiPlaneGlExample.csproj" />
     <Project Path="Examples/SharpVideo.ParseH264Demo/SharpVideo.ParseH264Demo.csproj" />
@@ -16,13 +16,14 @@
     <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
     <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
     <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
-    <Project Path="SharpVideo.Utils/SharpVideo.Utils.csproj" Id="6e04e87c-aa49-4d50-bb15-dd6a884fe1fc" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path="../README.md" />
   </Folder>
+  <Project Path="SharpVideo.ImGui/SharpVideo.ImGui.csproj" Id="560ee6bc-5eb1-42ca-8b18-b0e4b668c5fc" />
   <Project Path="SharpVideo.Linux.Native.Tests/SharpVideo.Linux.Native.Tests.csproj" />
   <Project Path="SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
   <Project Path="SharpVideo.Tests/SharpVideo.Tests.csproj" />
+  <Project Path="SharpVideo.Utils/SharpVideo.Utils.csproj" Id="6e04e87c-aa49-4d50-bb15-dd6a884fe1fc" />
   <Project Path="SharpVideo/SharpVideo.csproj" />
 </Solution>
