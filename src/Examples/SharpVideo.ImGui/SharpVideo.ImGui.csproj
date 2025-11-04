@@ -13,19 +13,36 @@
   </ItemGroup>
 
   <ItemGroup>
-	  <PackageReference Include="Hexa.NET.SDL3" Version="1.2.11" />
-	  <PackageReference Include="Hexa.NET.Utilities" Version="2.2.1" />
-	  <PackageReference Include="Hexa.NET.OpenGL3" Version="1.1.0" />
+    <!-- OpenGL ES for ImGui rendering -->
+    <PackageReference Include="Hexa.NET.OpenGL3" Version="1.1.0" />
+    <PackageReference Include="Silk.NET.OpenGLES" Version="2.22.0" />
 
-
+    <!-- ImGui for UI -->
     <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
     <PackageReference Include="Hexa.NET.ImGui.Backends" Version="1.0.18" />
-    <PackageReference Include="Hexa.NET.ImGui.Backends.SDL3" Version="1.0.18" />
+    <!-- Note: SDL3 backend removed - using libinput directly -->
 
+    <!-- Utilities -->
+    <PackageReference Include="Hexa.NET.Utilities" Version="2.2.1" />
 
+    <!-- Logging -->
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0-rc.2.25502.107" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0-rc.2.25502.107" />
-    <PackageReference Include="Silk.NET.OpenGLES" Version="2.22.0" />
   </ItemGroup>
+
+  <!-- 
+    System Dependencies (installed via package manager):
+    - libinput: Input device handling (mouse, keyboard, touch, gamepad)
+    - libudev: Device enumeration for libinput
+    - libdrm: Direct Rendering Manager
+    - libgbm: Generic Buffer Manager
+    - libegl: EGL for OpenGL ES context
+    
+    Ubuntu/Debian:
+      sudo apt install libinput-dev libudev-dev libdrm-dev libgbm-dev libegl1-mesa-dev
+    
+    Arch Linux:
+      sudo pacman -S libinput systemd-libs libdrm mesa
+  -->
 
 </Project>
