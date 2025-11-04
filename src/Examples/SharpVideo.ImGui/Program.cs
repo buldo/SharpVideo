@@ -100,6 +100,12 @@ internal class Program
             // Render an initial "warmup" frame to initialize the pipeline
             Logger.LogInformation("Rendering initial warmup frame...");
             io.DeltaTime = 1.0f / 60.0f;
+
+            // ImGui backends require NewFrame calls in correct order:
+            // 1. Renderer backend NewFrame (OpenGL3)
+            // 2. Platform backend NewFrame (if using SDL backend - we're not)
+            // 3. ImGui core NewFrame
+            ImGuiImplOpenGL3.NewFrame();
             Hexa.NET.ImGui.ImGui.NewFrame();
             RenderImGuiContent(TimeSpan.Zero, 0);
             Hexa.NET.ImGui.ImGui.Render();
@@ -196,6 +202,12 @@ internal class Program
                 // Start ImGui frame
                 Logger.LogDebug("Frame {Frame}: Setting deltaTime and calling NewFrame...", frameCount);
                 io.DeltaTime = deltaTime > 0 ? deltaTime : 1.0f / 60.0f;
+
+                // ImGui backends require NewFrame calls in correct order:
+                // 1. Renderer backend NewFrame (OpenGL3)
+                // 2. Platform backend NewFrame (if using SDL backend - we're not)
+                // 3. ImGui core NewFrame
+                ImGuiImplOpenGL3.NewFrame();
                 Hexa.NET.ImGui.ImGui.NewFrame();
                 Logger.LogDebug("Frame {Frame}: ImGui NewFrame completed", frameCount);
 
