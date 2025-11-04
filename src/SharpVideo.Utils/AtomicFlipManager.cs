@@ -11,6 +11,13 @@ namespace SharpVideo.Utils;
 /// <summary>
 /// Manages atomic modesetting with VBlank-synchronized display.
 /// Implements a latency-optimized algorithm that always displays the latest available frame.
+/// 
+/// IMPORTANT: The DRM device MUST have DRM_CLIENT_CAP_ATOMIC capability enabled before 
+/// creating this manager. Caller is responsible for verifying:
+///   if (!drmDevice.TrySetClientCapability(DRM_CLIENT_CAP_ATOMIC, true, out _))
+///       throw or fallback to legacy mode
+/// 
+/// This class assumes atomic mode is available and will fail fast if operations fail.
 /// </summary>
 [SupportedOSPlatform("linux")]
 public unsafe class AtomicFlipManager : IDisposable
@@ -44,6 +51,15 @@ public unsafe class AtomicFlipManager : IDisposable
     private readonly LibDrm.DrmEventPageFlipHandler _pageFlipHandler;
     private DrmEventContext _eventContext;
 
+    /// <summary>
+    /// Creates a new atomic flip manager for the specified plane.
+    /// 
+    /// PRECONDITION: Caller MUST have verified DRM_CLIENT_CAP_ATOMIC is enabled:
+    ///   drmDevice.TrySetClientCapability(DRM_CLIENT_CAP_ATOMIC, true, out _) == true
+    /// 
+    /// This constructor will validate atomic properties but assumes atomic mode is available.
+    /// </summary>
+    /// <exception cref="ArgumentException">If atomic properties are invalid or incomplete</exception>
     public AtomicFlipManager(
         DrmDevice drmDevice,
         DrmPlane drmPlane,
@@ -56,6 +72,20 @@ public unsafe class AtomicFlipManager : IDisposable
         ILogger logger,
         PlaneBlendConfig? blendConfig = null)
     {
+        ArgumentNullException.ThrowIfNull(drmDevice);
+        ArgumentNullException.ThrowIfNull(drmPlane);
+        ArgumentNullException.ThrowIfNull(props);
+        ArgumentNullException.ThrowIfNull(logger);
+        
+        // Validate atomic properties are complete (fail-fast)
+        if (!props.IsValid())
+        {
+            throw new ArgumentException(
+                $"Atomic plane properties are incomplete for plane {drmPlane.Id}. " +
+                "Ensure DRM_CLIENT_CAP_ATOMIC is enabled and plane supports atomic modesetting.",
+                nameof(props));
+        }
+
         _drmDevice = drmDevice;
         _drmPlane = drmPlane;
         _crtcId = crtcId;
@@ -267,10 +297,9 @@ error:
             // Immediately schedule next flip with the latest frame if available
             if (_latestFbId != 0)
             {
-                // Set pending BEFORE commit to prevent race with SubmitFrame
-                _flipPending = true;
+                // CommitFrame will set _flipPending = true on successful commit
+                // If commit fails, _flipPending stays false (no deadlock)
                 CommitFrame(_latestFbId);
-                // Note: CommitFrame will set _flipPending = false if it fails
             }
         }
     }

@@ -17,7 +17,7 @@ namespace SharpVideo.Utils;
 /// - Page flip thread: handles vblank-synchronized display updates
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class DrmPlaneGbmAtomicPresenter : DrmSinglePlanePresenter
+public class DrmPlaneGbmAtomicPresenter : DrmSinglePlanePresenter, IDisposable
 {
     private readonly GbmDevice _gbmDevice;
     private readonly GbmSurface _gbmSurface;
@@ -152,6 +152,7 @@ public class DrmPlaneGbmAtomicPresenter : DrmSinglePlanePresenter
     public bool SubmitFrame()
     {
         nint newBo = 0;
+        bool shouldRelease = false;
         
         try
         {
@@ -168,6 +169,7 @@ public class DrmPlaneGbmAtomicPresenter : DrmSinglePlanePresenter
             if (fbId == 0)
             {
                 _logger.LogError("Failed to get framebuffer for BO");
+                shouldRelease = true; // Mark for cleanup
                 return false;
             }
 
@@ -179,20 +181,21 @@ public class DrmPlaneGbmAtomicPresenter : DrmSinglePlanePresenter
                 Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
             };
 
-            // Atomically check state and enqueue
+            // Atomically check state and enqueue - ALL operations under single lock
             lock (_stateLock)
             {
                 // If queue is not empty or flip is in progress, drop this frame
                 // This prevents buffer exhaustion when rendering faster than display refresh
                 if (!_renderQueue.IsEmpty || _flipInProgress)
                 {
-                    // Frame dropped - render thread can continue at max FPS
+                    // Frame dropped - need to release buffer before returning
+                    shouldRelease = true;
                     return false;
                 }
 
-                // Safe to enqueue - we're still under lock
+                // Safe to enqueue - transfer ownership to queue
                 _renderQueue.Enqueue(queuedBuffer);
-                newBo = 0; // Transfer ownership to queue
+                newBo = 0; // Clear to indicate ownership transferred
             }
 
             // If this is the first frame, trigger initialization
@@ -211,8 +214,9 @@ public class DrmPlaneGbmAtomicPresenter : DrmSinglePlanePresenter
         }
         finally
         {
-            // Clean up buffer if we still own it (failed to enqueue)
-            if (newBo != 0)
+            // Clean up buffer if we still own it (failed to enqueue or error occurred)
+            // This check is safe because we cleared newBo=0 after successful enqueue
+            if (shouldRelease && newBo != 0)
             {
                 LibGbm.ReleaseBuffer(_gbmSurface.Handle, newBo);
             }
@@ -316,33 +320,15 @@ throw new Exception("Failed to get required plane properties for atomic modesett
                     continue;
                 }
 
-                // Check if we can start a new flip (minimize lock scope)
-                QueuedBuffer? nextBuffer = null;
+                // Check if we can start a new flip and commit atomically under single lock
                 lock (_stateLock)
                 {
                     if (_initialized && !_flipInProgress)
                     {
-                        if (_renderQueue.TryDequeue(out var buffer))
+                        if (_renderQueue.TryDequeue(out var nextBuffer))
                         {
-                            nextBuffer = buffer;
-                        }
-                    }
-                }
-
-                // Commit outside of lock to avoid blocking SubmitFrame
-                if (nextBuffer.HasValue)
-                {
-                    lock (_stateLock)
-                    {
-                        // Double-check state before commit
-                        if (!_flipInProgress)
-                        {
-                            CommitAtomicFlip(nextBuffer.Value);
-                        }
-                        else
-                        {
-                            // Race condition - another flip started, release buffer
-                            ReleaseBuffer(nextBuffer.Value);
+                            // Commit inside the same lock to ensure atomicity
+                            CommitAtomicFlip(nextBuffer);
                         }
                     }
                 }
@@ -509,82 +495,125 @@ error:
 
     public override void Cleanup()
     {
-        base.Cleanup();
+        Dispose();
+    }
 
-        _logger.LogInformation("Cleaning up atomic GBM presenter");
+    private bool _disposed;
 
-        // Step 1: Disable the plane first to stop any pending page flips
+    protected virtual void Dispose(bool disposing)
+    {
+        if (_disposed)
+            return;
+
+        _logger.LogInformation("Disposing atomic GBM presenter");
+
         try
         {
-            LibDrm.drmModeSetPlane(_drmDevice.DeviceFd, _plane.Id, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-            _logger.LogDebug("Plane disabled successfully");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to disable plane during cleanup");
-        }
-
-        // Step 2: Stop page flip thread
-        _cts.Cancel();
-        if (!_pageFlipThread.Join(TimeSpan.FromSeconds(2)))
-        {
-            _logger.LogWarning("Page flip thread did not stop gracefully");
-        }
-
-        // Step 3: Clean up buffers under lock
-        lock (_stateLock)
-        {
-            if (_currentDisplayed.HasValue)
+            // Step 1: Stop event loop thread FIRST to prevent race with page flip events
+            _cts.Cancel();
+            
+            if (!_pageFlipThread.Join(TimeSpan.FromSeconds(2)))
             {
-                ReleaseBuffer(_currentDisplayed.Value);
-                _currentDisplayed = null;
-            }
-
-            if (_pendingFlip.HasValue)
-            {
-                ReleaseBuffer(_pendingFlip.Value);
-                _pendingFlip = null;
-            }
-
-            while (_renderQueue.TryDequeue(out var buffer))
-            {
-                ReleaseBuffer(buffer);
-            }
-
-            // Step 4: Clean up framebuffers
-            foreach (var bufferInfo in _bufferCache.Values)
-            {
+                _logger.LogWarning("Page flip thread did not stop gracefully within 2 seconds, aborting");
+#pragma warning disable SYSLIB0006 // Thread.Abort is obsolete but needed for cleanup
                 try
                 {
-                    LibDrm.drmModeRmFB(_drmDevice.DeviceFd, bufferInfo.FbId);
+                    _pageFlipThread.Interrupt();
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "Failed to remove framebuffer ID {FbId}", bufferInfo.FbId);
+                    _logger.LogWarning(ex, "Failed to abort page flip thread");
+                }
+#pragma warning restore SYSLIB0006
+            }
+
+            // Step 2: Now safe to disable plane (no more events can arrive)
+            try
+            {
+                LibDrm.drmModeSetPlane(_drmDevice.DeviceFd, _plane.Id, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                _logger.LogDebug("Plane disabled successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to disable plane during cleanup");
+            }
+
+            // Step 3: Clean up buffers under lock (thread is stopped, safe to access)
+            lock (_stateLock)
+            {
+                if (_currentDisplayed.HasValue)
+                {
+                    ReleaseBuffer(_currentDisplayed.Value);
+                    _currentDisplayed = null;
+                }
+
+                if (_pendingFlip.HasValue)
+                {
+                    ReleaseBuffer(_pendingFlip.Value);
+                    _pendingFlip = null;
+                }
+
+                while (_renderQueue.TryDequeue(out var buffer))
+                {
+                    ReleaseBuffer(buffer);
+                }
+
+                // Step 4: Clean up framebuffers
+                foreach (var bufferInfo in _bufferCache.Values)
+                {
+                    try
+                    {
+                        LibDrm.drmModeRmFB(_drmDevice.DeviceFd, bufferInfo.FbId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to remove framebuffer ID {FbId}", bufferInfo.FbId);
+                    }
+                }
+                _bufferCache.Clear();
+            }
+
+            // Step 5: Dispose GBM surface
+            if (disposing)
+            {
+                try
+                {
+                    _gbmSurface.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to dispose GBM surface");
                 }
             }
-            _bufferCache.Clear();
-        }
 
-        // Step 5: Dispose GBM surface
-        try
+            // Step 6: Clean up GC handle
+            if (_gcHandle.IsAllocated)
+            {
+                _gcHandle.Free();
+            }
+
+            // Step 7: Dispose cancellation token source
+            if (disposing)
+            {
+                _cts.Dispose();
+            }
+
+            _logger.LogInformation("Atomic GBM presenter cleanup complete");
+        }
+        finally
         {
-            _gbmSurface.Dispose();
+            _disposed = true;
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to dispose GBM surface");
-        }
+    }
 
-        // Step 6: Clean up GC handle
-        if (_gcHandle.IsAllocated)
-        {
-            _gcHandle.Free();
-        }
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
 
-        // Step 7: Dispose cancellation token source
-        _cts.Dispose();
-
-        _logger.LogInformation("Atomic GBM presenter cleanup complete");
+    ~DrmPlaneGbmAtomicPresenter()
+    {
+        Dispose(false);
     }
 }
