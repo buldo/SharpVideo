@@ -38,20 +38,33 @@ public class AtomicPlaneProperties
     public uint SrcYPropertyId { get; }
     public uint SrcWPropertyId { get; }
     public uint SrcHPropertyId { get; }
+
+    /// <summary>
+    /// Optional property for configuring alpha blending mode.
+    /// Not all hardware supports this property.
+    /// </summary>
     public uint PixelBlendModePropertyId { get; }
 
+    /// <summary>
+    /// Checks if all mandatory atomic properties are available.
+    /// </summary>
     public bool IsValid()
     {
+        // Pixel blend mode is optional, so not checked here
         if (FbIdPropertyId == 0 || CrtcIdPropertyId == 0 ||
             CrtcXPropertyId == 0 || CrtcYPropertyId == 0 ||
             CrtcWPropertyId == 0 || CrtcHPropertyId == 0 ||
             SrcXPropertyId == 0 || SrcYPropertyId == 0 ||
-            SrcWPropertyId == 0 || SrcHPropertyId == 0 ||
-            PixelBlendModePropertyId == 0)
+            SrcWPropertyId == 0 || SrcHPropertyId == 0)
         {
             return false;
         }
 
         return true;
     }
+
+    /// <summary>
+    /// Checks if pixel blend mode property is available for configuring transparency.
+    /// </summary>
+    public bool HasPixelBlendMode() => PixelBlendModePropertyId != 0;
 }

@@ -225,7 +225,7 @@ _currentBo = newBo;
         }
     }
 
-  public override void Cleanup()
+    public override void Cleanup()
     {
         base.Cleanup();
 
@@ -256,50 +256,5 @@ _previousBo = 0;
  }
 
       _logger.LogInformation("GBM presenter cleanup complete");
-    }
-
-    private static unsafe bool SetCrtcMode(
-        DrmDevice drmDevice,
-        uint crtcId,
-        uint connectorId,
-        uint fbId,
-        DrmModeInfo mode,
-        uint width,
-     uint height,
-      ILogger logger)
-    {
-  var nativeMode = new DrmModeModeInfo
-        {
-            Clock = mode.Clock,
-      HDisplay = mode.HDisplay,
-    HSyncStart = mode.HSyncStart,
-       HSyncEnd = mode.HSyncEnd,
-        HTotal = mode.HTotal,
-       HSkew = mode.HSkew,
-            VDisplay = mode.VDisplay,
-       VSyncStart = mode.VSyncStart,
-            VSyncEnd = mode.VSyncEnd,
-  VTotal = mode.VTotal,
-      VScan = mode.VScan,
-        VRefresh = mode.VRefresh,
-   Flags = mode.Flags,
-            Type = mode.Type
-        };
-
-        var nameBytes = System.Text.Encoding.UTF8.GetBytes(mode.Name);
-   for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
-   {
-            nativeMode.Name[i] = nameBytes[i];
-  }
-
-        var result = LibDrm.drmModeSetCrtc(drmDevice.DeviceFd, crtcId, fbId, 0, 0, &connectorId, 1, &nativeMode);
-        if (result != 0)
-        {
-      logger.LogError("Failed to set CRTC mode: {Result}", result);
-   return false;
-      }
-
-        logger.LogInformation("Successfully set CRTC to mode {Name}", mode.Name);
-        return true;
     }
 }

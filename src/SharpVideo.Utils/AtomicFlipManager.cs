@@ -35,6 +35,11 @@ public unsafe class AtomicFlipManager : IDisposable
     private bool _flipPending;
     private readonly Queue<SharedDmaBuffer> _completedBuffers = new();
 
+    // Blend configuration
+    private PlaneBlendConfig? _blendConfig;
+    private uint _alphaPropertyId;
+    private uint _zposPropertyId;
+
     // Event handling
     private readonly LibDrm.DrmEventPageFlipHandler _pageFlipHandler;
     private DrmEventContext _eventContext;
@@ -48,7 +53,8 @@ public unsafe class AtomicFlipManager : IDisposable
         uint srcHeight,
         uint dstWidth,
         uint dstHeight,
-        ILogger logger)
+        ILogger logger,
+        PlaneBlendConfig? blendConfig = null)
     {
         _drmDevice = drmDevice;
         _drmPlane = drmPlane;
@@ -59,6 +65,11 @@ public unsafe class AtomicFlipManager : IDisposable
         _dstWidth = dstWidth;
         _dstHeight = dstHeight;
         _logger = logger;
+        _blendConfig = blendConfig;
+
+        // Get optional properties for blending
+        _alphaPropertyId = drmPlane.GetPlanePropertyId("alpha");
+        _zposPropertyId = drmPlane.GetPlanePropertyId("zpos");
 
         // Create delegate and pin it
         _pageFlipHandler = PageFlipHandler;
@@ -80,6 +91,12 @@ public unsafe class AtomicFlipManager : IDisposable
         _eventThread.Start();
 
         _logger.LogInformation("Atomic display manager initialized with VBlank synchronization");
+        
+        if (blendConfig != null)
+        {
+            _logger.LogInformation("Blend configuration: Mode={Mode}, Alpha={Alpha}, ZPos={ZPos}",
+                blendConfig.BlendMode, blendConfig.GlobalAlpha, blendConfig.ZPosition);
+        }
     }
 
     /// <summary>
@@ -130,6 +147,7 @@ public unsafe class AtomicFlipManager : IDisposable
         if (req == null)
         {
             _logger.LogError("Failed to allocate atomic request");
+            _flipPending = false;
             return;
         }
 
@@ -139,75 +157,70 @@ public unsafe class AtomicFlipManager : IDisposable
             int ret;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.FbIdPropertyId, fbId);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add FB_ID property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcIdPropertyId, _crtcId);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add CRTC_ID property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             // Position on CRTC (destination)
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcXPropertyId, 0);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add CRTC_X property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcYPropertyId, 0);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add CRTC_Y property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcWPropertyId, _dstWidth);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add CRTC_W property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.CrtcHPropertyId, _dstHeight);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add CRTC_H property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             // Source rectangle in framebuffer (16.16 fixed point)
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcXPropertyId, 0);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add SRC_X property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcYPropertyId, 0);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add SRC_Y property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcWPropertyId, _srcWidth << 16);
-            if (ret < 0)
-            {
-                _logger.LogError("Failed to add SRC_W property");
-                return;
-            }
+            if (ret < 0) goto error;
 
             ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.SrcHPropertyId, _srcHeight << 16);
-            if (ret < 0)
+            if (ret < 0) goto error;
+
+            // Apply blend configuration if provided
+            if (_blendConfig != null)
             {
-                _logger.LogError("Failed to add SRC_H property");
-                return;
+                // Set pixel blend mode
+                if (_props.HasPixelBlendMode())
+                {
+                    ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _props.PixelBlendModePropertyId, (ulong)_blendConfig.BlendMode);
+                    if (ret < 0)
+                    {
+                        _logger.LogWarning("Failed to set pixel blend mode property");
+                    }
+                }
+
+                // Set global alpha (0-65535 range, scale from 0-255)
+                if (_alphaPropertyId != 0)
+                {
+                    ulong alphaValue = (ulong)_blendConfig.GlobalAlpha * 257; // Scale 0-255 to 0-65535
+                    ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _alphaPropertyId, alphaValue);
+                    if (ret < 0)
+                    {
+                        _logger.LogWarning("Failed to set alpha property");
+                    }
+                }
+
+                // Set z-position
+                if (_zposPropertyId != 0)
+                {
+                    ret = LibDrm.drmModeAtomicAddProperty(req, _drmPlane.Id, _zposPropertyId, _blendConfig.ZPosition);
+                    if (ret < 0)
+                    {
+                        _logger.LogWarning("Failed to set zpos property");
+                    }
+                }
             }
 
             // Commit with NONBLOCK and PAGE_FLIP_EVENT
@@ -221,8 +234,16 @@ public unsafe class AtomicFlipManager : IDisposable
             }
             else
             {
-                _logger.LogWarning("Atomic commit failed with error {Error}", ret);
+                var errno = Marshal.GetLastPInvokeError();
+                _logger.LogWarning("Atomic commit failed with error {Error}, errno {Errno}", ret, errno);
+                _flipPending = false;
             }
+            return;
+
+error:
+            var err = Marshal.GetLastPInvokeError();
+            _logger.LogError("Failed to add atomic property, errno {Errno}", err);
+            _flipPending = false;
         }
         finally
         {
@@ -246,7 +267,10 @@ public unsafe class AtomicFlipManager : IDisposable
             // Immediately schedule next flip with the latest frame if available
             if (_latestFbId != 0)
             {
+                // Set pending BEFORE commit to prevent race with SubmitFrame
+                _flipPending = true;
                 CommitFrame(_latestFbId);
+                // Note: CommitFrame will set _flipPending = false if it fails
             }
         }
     }

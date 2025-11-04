@@ -70,7 +70,7 @@ public class DrmPlaneGbmAtomicPresenter : DrmSinglePlanePresenter
         DrmPlane plane,
         uint crtcId,
         uint width,
-uint height,
+        uint height,
         ILogger logger,
         GbmDevice gbmDevice,
         PixelFormat format,
@@ -78,48 +78,58 @@ uint height,
         DrmModeInfo mode)
     : base(drmDevice, plane, crtcId, width, height, logger)
     {
+        // Verify atomic mode is supported - fail fast if not
+        if (!drmDevice.TrySetClientCapability(DrmClientCapability.DRM_CLIENT_CAP_ATOMIC, true, out var result))
+        {
+            var errno = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
+            throw new NotSupportedException(
+                $"Atomic modesetting is not supported by this DRM device. " +
+                $"Error code: {result}, errno: {errno}. " +
+                $"Use DrmPlaneGbmPresenter (legacy mode) instead.");
+        }
+
         _gbmDevice = gbmDevice;
- _width = width;
+        _width = width;
         _height = height;
         _format = format;
         _logger = logger;
         _crtcId = crtcId;
         _connectorId = connectorId;
-_mode = mode;
+        _mode = mode;
 
         _logger.LogInformation("Creating GBM surface for atomic presenter: {Width}x{Height} {Format}",
           width, height, format.GetName());
 
-  // Create GBM surface for scanout and rendering
+        // Create GBM surface for scanout and rendering
         _gbmSurface = _gbmDevice.CreateSurface(
- width,
+            width,
             height,
             format,
-   GbmBoUse.GBM_BO_USE_SCANOUT | GbmBoUse.GBM_BO_USE_RENDERING);
+            GbmBoUse.GBM_BO_USE_SCANOUT | GbmBoUse.GBM_BO_USE_RENDERING);
 
         _logger.LogInformation("GBM surface created successfully");
 
         // Get atomic properties
         _props = GetAtomicProperties();
 
-      // Setup page flip event handling
-     _pageFlipHandler = OnPageFlipComplete;
-    _gcHandle = GCHandle.Alloc(_pageFlipHandler);
+        // Setup page flip event handling
+        _pageFlipHandler = OnPageFlipComplete;
+        _gcHandle = GCHandle.Alloc(_pageFlipHandler);
 
- _eventContext = new DrmEventContext
+        _eventContext = new DrmEventContext
         {
-      version = LibDrm.DRM_EVENT_CONTEXT_VERSION,
+            version = LibDrm.DRM_EVENT_CONTEXT_VERSION,
             page_flip_handler = Marshal.GetFunctionPointerForDelegate(_pageFlipHandler)
         };
 
-     // Start page flip thread
+        // Start page flip thread
         _pageFlipThread = new Thread(PageFlipThreadLoop)
         {
             Name = "DRM Page Flip Thread",
-   IsBackground = true,
- Priority = ThreadPriority.AboveNormal
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal
         };
-     _pageFlipThread.Start();
+        _pageFlipThread.Start();
 
         _logger.LogInformation("Atomic GBM presenter initialized with two-threaded architecture");
     }
@@ -141,58 +151,72 @@ _mode = mode;
     /// </summary>
     public bool SubmitFrame()
     {
-        // Check if there's already a frame in the queue (latest-frame-only strategy)
-     // This prevents buffer exhaustion when rendering faster than display refresh
-      lock (_stateLock)
+        nint newBo = 0;
+        
+        try
         {
-        // If queue is not empty or flip is in progress, drop this frame
-     if (!_renderQueue.IsEmpty || _flipInProgress)
+            // Lock the front buffer that was just rendered by EGL
+            newBo = LibGbm.LockFrontBuffer(_gbmSurface.Handle);
+            if (newBo == 0)
             {
-         // Frame dropped - render thread can continue at max FPS
-          return false;
-        }
-        }
+                _logger.LogError("Failed to lock front buffer from GBM surface");
+                return false;
+            }
 
-    // Lock the front buffer that was just rendered by EGL
-        var newBo = LibGbm.LockFrontBuffer(_gbmSurface.Handle);
-        if (newBo == 0)
+            // Get or create framebuffer for this BO
+            var fbId = GetOrCreateFramebuffer(newBo);
+            if (fbId == 0)
+            {
+                _logger.LogError("Failed to get framebuffer for BO");
+                return false;
+            }
+
+            // Queue for display (producer side)
+            var queuedBuffer = new QueuedBuffer
+            {
+                Bo = newBo,
+                FbId = fbId,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            };
+
+            // Atomically check state and enqueue
+            lock (_stateLock)
+            {
+                // If queue is not empty or flip is in progress, drop this frame
+                // This prevents buffer exhaustion when rendering faster than display refresh
+                if (!_renderQueue.IsEmpty || _flipInProgress)
+                {
+                    // Frame dropped - render thread can continue at max FPS
+                    return false;
+                }
+
+                // Safe to enqueue - we're still under lock
+                _renderQueue.Enqueue(queuedBuffer);
+                newBo = 0; // Transfer ownership to queue
+            }
+
+            // If this is the first frame, trigger initialization
+            if (!_initialized)
+            {
+                lock (_stateLock)
+                {
+                    if (!_initialized)
+                    {
+                        _logger.LogInformation("First frame submitted, will initialize DRM display in page flip thread");
+                    }
+                }
+            }
+
+            return true;
+        }
+        finally
         {
-            _logger.LogError("Failed to lock front buffer from GBM surface");
-        return false;
-      }
-
-        // Get or create framebuffer for this BO
-        var fbId = GetOrCreateFramebuffer(newBo);
-        if (fbId == 0)
- {
-            _logger.LogError("Failed to get framebuffer for BO");
-    LibGbm.ReleaseBuffer(_gbmSurface.Handle, newBo);
-            return false;
+            // Clean up buffer if we still own it (failed to enqueue)
+            if (newBo != 0)
+            {
+                LibGbm.ReleaseBuffer(_gbmSurface.Handle, newBo);
+            }
         }
-
-        // Queue for display (producer side)
-     var queuedBuffer = new QueuedBuffer
-{
-  Bo = newBo,
-      FbId = fbId,
- Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-      };
-
-      _renderQueue.Enqueue(queuedBuffer);
-
-// If this is the first frame, trigger initialization
-        if (!_initialized)
-    {
-        lock (_stateLock)
-         {
-       if (!_initialized)
-          {
-           _logger.LogInformation("First frame submitted, will initialize DRM display in page flip thread");
-    }
-       }
-   }
-
-   return true;
     }
 
     private AtomicPlaneProperties GetAtomicProperties()
@@ -276,64 +300,89 @@ throw new Exception("Failed to get required plane properties for atomic modesett
 
         var pollFd = new PollFd
         {
-        fd = _drmDevice.DeviceFd,
+            fd = _drmDevice.DeviceFd,
             events = PollEvents.POLLIN
-  };
+        };
 
         while (!_cts.Token.IsCancellationRequested)
         {
-          try
- {
-              // Check if we have a new frame to display
-            if (!_initialized && _renderQueue.TryDequeue(out var firstBuffer))
-                {
-   // Initialize display with first frame
-  InitializeDisplay(firstBuffer);
-            continue;
-        }
-
-         // If no flip in progress and we have a queued frame, start flip
-  lock (_stateLock)
-       {
-   if (_initialized && !_flipInProgress && _renderQueue.TryDequeue(out var nextBuffer))
-     {
-       CommitAtomicFlip(nextBuffer);
-   }
-   }
-
-  // Wait for page flip events
- var ret = Libc.poll(ref pollFd, 1, 16); // 16ms timeout (~60Hz)
-
-       if (ret > 0 && (pollFd.revents & PollEvents.POLLIN) != 0)
-     {
-    unsafe
-    {
-              fixed (DrmEventContext* evctxPtr = &_eventContext)
-     {
-      var handleResult = LibDrm.drmHandleEvent(_drmDevice.DeviceFd, evctxPtr);
-    if (handleResult < 0)
-     {
-        _logger.LogWarning("drmHandleEvent failed with error {Error}", handleResult);
-        }
-        }
-          }
-  }
-     else if (ret < 0)
-   {
-      var errno = Marshal.GetLastPInvokeError();
-        if (errno != 4) // EINTR
-    {
-    _logger.LogWarning("poll() failed with errno {Errno}", errno);
-    }
-      }
-      }
-        catch (Exception ex)
+            try
             {
-_logger.LogError(ex, "Error in page flip thread");
-          }
-    }
+                // Check if we have a new frame to display
+                if (!_initialized && _renderQueue.TryDequeue(out var firstBuffer))
+                {
+                    // Initialize display with first frame
+                    InitializeDisplay(firstBuffer);
+                    continue;
+                }
 
-      _logger.LogInformation("Page flip thread stopped");
+                // Check if we can start a new flip (minimize lock scope)
+                QueuedBuffer? nextBuffer = null;
+                lock (_stateLock)
+                {
+                    if (_initialized && !_flipInProgress)
+                    {
+                        if (_renderQueue.TryDequeue(out var buffer))
+                        {
+                            nextBuffer = buffer;
+                        }
+                    }
+                }
+
+                // Commit outside of lock to avoid blocking SubmitFrame
+                if (nextBuffer.HasValue)
+                {
+                    lock (_stateLock)
+                    {
+                        // Double-check state before commit
+                        if (!_flipInProgress)
+                        {
+                            CommitAtomicFlip(nextBuffer.Value);
+                        }
+                        else
+                        {
+                            // Race condition - another flip started, release buffer
+                            ReleaseBuffer(nextBuffer.Value);
+                        }
+                    }
+                }
+
+                // Wait for page flip events
+                var timeout = Math.Max(5, (int)(1000.0 / _mode.VRefresh * 0.9)); // Dynamic timeout based on refresh rate
+                var ret = Libc.poll(ref pollFd, 1, timeout);
+
+                if (ret > 0 && (pollFd.revents & PollEvents.POLLIN) != 0)
+                {
+                    unsafe
+                    {
+                        fixed (DrmEventContext* evctxPtr = &_eventContext)
+                        {
+                            var handleResult = LibDrm.drmHandleEvent(_drmDevice.DeviceFd, evctxPtr);
+                            if (handleResult < 0)
+                            {
+                                var errno = Marshal.GetLastPInvokeError();
+                                _logger.LogWarning("drmHandleEvent failed with error {Error}, errno {Errno}", 
+                                    handleResult, errno);
+                            }
+                        }
+                    }
+                }
+                else if (ret < 0)
+                {
+                    var errno = Marshal.GetLastPInvokeError();
+                    if (errno != 4) // EINTR
+                    {
+                        _logger.LogWarning("poll() failed with errno {Errno}", errno);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in page flip thread");
+            }
+        }
+
+        _logger.LogInformation("Page flip thread stopped");
     }
 
     private void InitializeDisplay(QueuedBuffer buffer)
@@ -458,101 +507,84 @@ error:
         LibGbm.ReleaseBuffer(_gbmSurface.Handle, buffer.Bo);
     }
 
-    private static unsafe bool SetCrtcMode(
-        DrmDevice drmDevice,
-        uint crtcId,
-        uint connectorId,
-uint fbId,
-    DrmModeInfo mode,
-        uint width,
-  uint height,
-    ILogger logger)
-    {
-   var nativeMode = new DrmModeModeInfo
-        {
-            Clock = mode.Clock,
-            HDisplay = mode.HDisplay,
-   HSyncStart = mode.HSyncStart,
-            HSyncEnd = mode.HSyncEnd,
-          HTotal = mode.HTotal,
-     HSkew = mode.HSkew,
-            VDisplay = mode.VDisplay,
-    VSyncStart = mode.VSyncStart,
-            VSyncEnd = mode.VSyncEnd,
-         VTotal = mode.VTotal,
-          VScan = mode.VScan,
-       VRefresh = mode.VRefresh,
-    Flags = mode.Flags,
-            Type = mode.Type
-        };
-
-        var nameBytes = System.Text.Encoding.UTF8.GetBytes(mode.Name);
-        for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
-        {
-      nativeMode.Name[i] = nameBytes[i];
-      }
-
- var result = LibDrm.drmModeSetCrtc(drmDevice.DeviceFd, crtcId, fbId, 0, 0, &connectorId, 1, &nativeMode);
-        if (result != 0)
-        {
-            logger.LogError("Failed to set CRTC mode: {Result}", result);
-         return false;
-   }
-
-        logger.LogInformation("Successfully set CRTC to mode {Name}", mode.Name);
-  return true;
-    }
-
-  public override void Cleanup()
+    public override void Cleanup()
     {
         base.Cleanup();
 
         _logger.LogInformation("Cleaning up atomic GBM presenter");
 
-// Stop page flip thread
- _cts.Cancel();
- if (!_pageFlipThread.Join(TimeSpan.FromSeconds(2)))
+        // Step 1: Disable the plane first to stop any pending page flips
+        try
         {
-          _logger.LogWarning("Page flip thread did not stop gracefully");
+            LibDrm.drmModeSetPlane(_drmDevice.DeviceFd, _plane.Id, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            _logger.LogDebug("Plane disabled successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to disable plane during cleanup");
         }
 
-        // Clean up buffers
+        // Step 2: Stop page flip thread
+        _cts.Cancel();
+        if (!_pageFlipThread.Join(TimeSpan.FromSeconds(2)))
+        {
+            _logger.LogWarning("Page flip thread did not stop gracefully");
+        }
+
+        // Step 3: Clean up buffers under lock
         lock (_stateLock)
         {
             if (_currentDisplayed.HasValue)
-         {
-   ReleaseBuffer(_currentDisplayed.Value);
-    }
+            {
+                ReleaseBuffer(_currentDisplayed.Value);
+                _currentDisplayed = null;
+            }
 
             if (_pendingFlip.HasValue)
             {
-       ReleaseBuffer(_pendingFlip.Value);
-      }
-
-        while (_renderQueue.TryDequeue(out var buffer))
-    {
-        ReleaseBuffer(buffer);
+                ReleaseBuffer(_pendingFlip.Value);
+                _pendingFlip = null;
             }
 
-   // Clean up framebuffers
-     foreach (var bufferInfo in _bufferCache.Values)
-      {
- LibDrm.drmModeRmFB(_drmDevice.DeviceFd, bufferInfo.FbId);
- }
-         _bufferCache.Clear();
-    }
+            while (_renderQueue.TryDequeue(out var buffer))
+            {
+                ReleaseBuffer(buffer);
+            }
 
-        // Dispose GBM surface
-        _gbmSurface.Dispose();
-
-        // Clean up GC handle
-        if (_gcHandle.IsAllocated)
-        {
- _gcHandle.Free();
+            // Step 4: Clean up framebuffers
+            foreach (var bufferInfo in _bufferCache.Values)
+            {
+                try
+                {
+                    LibDrm.drmModeRmFB(_drmDevice.DeviceFd, bufferInfo.FbId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to remove framebuffer ID {FbId}", bufferInfo.FbId);
+                }
+            }
+            _bufferCache.Clear();
         }
 
+        // Step 5: Dispose GBM surface
+        try
+        {
+            _gbmSurface.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to dispose GBM surface");
+        }
+
+        // Step 6: Clean up GC handle
+        if (_gcHandle.IsAllocated)
+        {
+            _gcHandle.Free();
+        }
+
+        // Step 7: Dispose cancellation token source
         _cts.Dispose();
 
-     _logger.LogInformation("Atomic GBM presenter cleanup complete");
+        _logger.LogInformation("Atomic GBM presenter cleanup complete");
     }
 }
