@@ -139,11 +139,12 @@ namespace SharpVideo.MultiPlaneExample
             }
 
             // Fill primary plane with ARGB8888 test pattern (semi-transparent)
-            var primaryBuffer = presenter.PrimaryPlanePresenter.GetPrimaryPlaneBackBuffer();
+            var dmaPresenter = presenter.AsDmaBufferPresenter!;
+            var primaryBuffer = dmaPresenter.GetPrimaryPlaneBackBuffer();
             TestPattern.FillARGB8888(primaryBuffer, Width, Height);
 
             // Present the primary plane
-            if (!presenter.PrimaryPlanePresenter.SwapPrimaryPlaneBuffers())
+            if (!dmaPresenter.SwapPrimaryPlaneBuffers())
             {
                 Logger.LogError("Failed to present primary plane");
                 return;

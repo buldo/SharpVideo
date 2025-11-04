@@ -172,6 +172,65 @@ public class DrmPresenter<TPrimaryPresenter, TOverlayPresenter>
             logger);
     }
 
+    /// <summary>
+    /// Creates a DRM presenter with atomic GBM-based primary plane and DMA buffer overlay plane.
+    /// Primary plane uses atomic modesetting for high-performance OpenGL ES rendering (ImGui, UI).
+    /// Overlay plane uses DMA buffers for zero-copy video display.
+    /// This combination is ideal for applications that need both GPU-rendered UI and hardware-decoded video.
+    /// </summary>
+    public static DrmPresenter<DrmPlaneGbmAtomicPresenter, DrmPlaneLastDmaBufferPresenter>? CreateWithGbmAtomicAndDmaOverlay(
+        DrmDevice drmDevice,
+        uint width,
+        uint height,
+        GbmDevice gbmDevice,
+        DrmBufferManager bufferManager,
+        PixelFormat primaryPlanePixelFormat,
+        PixelFormat overlayPlanePixelFormat,
+        ILogger logger)
+    {
+        var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
+            drmDevice, width, height, logger);
+
+        // Create atomic GBM primary plane presenter
+        var primaryPlanePresenter = new DrmPlaneGbmAtomicPresenter(
+            drmDevice,
+            primaryPlane,
+            crtcId,
+            width,
+            height,
+            logger,
+            gbmDevice,
+            primaryPlanePixelFormat,
+            connector.ConnectorId,
+            mode);
+
+        // Find and create overlay plane presenter
+        var overlayPlane = FindOverlayPlane(drmDevice, crtcId, overlayPlanePixelFormat, logger);
+        if (overlayPlane == null)
+        {
+            throw new Exception($"No overlay plane with {overlayPlanePixelFormat.GetName()} format found");
+        }
+
+        logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
+            overlayPlanePixelFormat.GetName(), overlayPlane.Id);
+
+        var overlayPlanePresenter = new DrmPlaneLastDmaBufferPresenter(
+            drmDevice,
+            overlayPlane,
+            crtcId,
+            width,
+            height,
+            bufferManager,
+            logger);
+
+        return new DrmPresenter<DrmPlaneGbmAtomicPresenter, DrmPlaneLastDmaBufferPresenter>(
+            primaryPlane,
+            primaryPlanePresenter,
+            overlayPlane,
+            overlayPlanePresenter,
+            logger);
+    }
+
     private static (DrmPlane primaryPlane, uint crtcId, DrmConnector connector, DrmModeInfo mode) SetupPrimaryPlane(
         DrmDevice drmDevice,
         uint width,

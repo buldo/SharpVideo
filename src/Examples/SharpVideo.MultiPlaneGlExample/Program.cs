@@ -151,15 +151,16 @@ internal class Program
         for (int frame = 0; frame < FrameCount; frame++)
         {
             // Get the current back buffer DMA-BUF for GPU rendering
-            var primaryDmaBuffer = presenter.PrimaryPlanePresenter.GetPrimaryPlaneBackBufferDma();
+            var dmaPresenter = presenter.AsDmaBufferPresenter!;
+            var primaryDmaBuffer = dmaPresenter.GetPrimaryPlaneBackBufferDma();
 
-// Render OpenGL ES content directly to the DMA buffer (ZERO-COPY!)
+            // Render OpenGL ES content directly to the DMA buffer (ZERO-COPY!)
             // The GPU writes directly to the buffer that the display hardware will scan out
             glRenderer.RenderToDmaBuffer(primaryDmaBuffer);
 
             // Present the primary plane (swap buffers)
             // This just tells the display hardware to switch to the newly rendered buffer
-            if (!presenter.PrimaryPlanePresenter.SwapPrimaryPlaneBuffers())
+            if (!dmaPresenter.SwapPrimaryPlaneBuffers())
             {
                 Logger.LogError("Failed to present primary plane at frame {Frame}", frame);
                 break;
