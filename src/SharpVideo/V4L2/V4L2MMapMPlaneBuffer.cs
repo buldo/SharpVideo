@@ -38,9 +38,14 @@ public class V4L2MMapMPlaneBuffer
 
     public void CopyDataToPlane(ReadOnlySpan<byte> frameData, int planeNum)
     {
+        // IMPORTANT: Preserve the Memory union field (MemOffset) when updating plane metadata
+        // Only update BytesUsed and DataOffset for OUTPUT buffers
+        var preservedMemory = _planes[planeNum].Memory;
+
         frameData.CopyTo(_mappedPlanes[planeNum].AsSpan());
         _planes[planeNum].DataOffset = 0;
         _planes[planeNum].BytesUsed = (uint)frameData.Length;
+        _planes[planeNum].Memory = preservedMemory; // Restore the memory field
     }
 
     public void MapToMemory()
@@ -52,6 +57,7 @@ public class V4L2MMapMPlaneBuffer
 
         var mappedPlanes = new List<V4L2MappedPlane>();
         // 3.1 We are mapping each plane
+        int planeIdx = 0;
         foreach (var plane in _planes)
         {
             var mapped = Libc.mmap(
@@ -64,6 +70,7 @@ public class V4L2MMapMPlaneBuffer
                 throw new Exception("Failed to map buffer plane");
             }
             mappedPlanes.Add(new V4L2MappedPlane(mapped, plane.Length));
+            planeIdx++;
         }
 
         _mappedPlanes = mappedPlanes;
