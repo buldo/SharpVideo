@@ -67,9 +67,9 @@ public class RtpReceiverService : IDisposable
     {
         ReceivedFramesCount++;
 
-        if (_logger.IsEnabled(LogLevel.Trace))
+        if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logger.LogTrace("Received NAL unit: stream={Stream}, remote={Remote}, timestamp={Timestamp}, size={Size}",
+            _logger.LogDebug("Received RTP frame: stream={Stream}, remote={Remote}, timestamp={Timestamp}, size={Size}",
                 streamIndex, remoteEndPoint, timestamp, nalUnit.Length);
         }
 
@@ -80,6 +80,13 @@ public class RtpReceiverService : IDisposable
             if (_logger.IsEnabled(LogLevel.Warning))
             {
                 _logger.LogWarning("NAL unit queue full, dropping frame (total dropped: {Count})", DroppedFramesCount);
+            }
+        }
+        else
+        {
+            if (_logger.IsEnabled(LogLevel.Trace))
+            {
+                _logger.LogTrace("Frame queued successfully, queue size: {Size}", _nalUnitsQueue.Count);
             }
         }
     }

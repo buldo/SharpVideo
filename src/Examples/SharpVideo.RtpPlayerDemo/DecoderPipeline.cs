@@ -39,8 +39,8 @@ public class DecoderPipeline : IAsyncDisposable
         _presenter = presenter;
         _logger = loggerFactory.CreateLogger<DecoderPipeline>();
 
-        // Create RTP NALU source with bounded channel for low latency
-        _naluSource = new RtpNaluSource(loggerFactory.CreateLogger<RtpNaluSource>(), channelCapacity: 30);
+        // Create RTP NALU source with bounded queue for low latency
+        _naluSource = new RtpNaluSource(loggerFactory.CreateLogger<RtpNaluSource>(), queueCapacity: 30);
 
         Statistics = new PlayerStatistics();
     }
@@ -142,11 +142,12 @@ public class DecoderPipeline : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (_rtpReceiver.TryGetNalUnit(out var nalUnit, cancellationToken))
+                if (_rtpReceiver.TryGetNalUnit(out var frameData, cancellationToken))
                 {
-                    // Push NAL unit directly to source (thread-safe, non-blocking)
-                    // NAL units from RTP already have Annex-B start codes
-                    _naluSource.PushNalu(nalUnit, ensureStartCode: false);
+                    // RTP receiver returns a complete frame with multiple NALUs,
+                    // each prefixed with Annex-B start code (00 00 00 01)
+                    // Split frame into individual NALUs and push each one
+                    SplitAndPushNalus(frameData);
                 }
             }
         }
@@ -160,6 +161,100 @@ public class DecoderPipeline : IAsyncDisposable
         }
 
         _logger.LogInformation("RTP feed thread stopped");
+    }
+
+    /// <summary>
+    /// Split Annex-B formatted frame into individual NALUs and push to source
+    /// </summary>
+    private void SplitAndPushNalus(byte[] frameData)
+    {
+        if (frameData == null || frameData.Length == 0)
+        {
+            return;
+        }
+
+        int nalusFound = 0;
+        int pos = 0;
+
+        if (_logger.IsEnabled(LogLevel.Trace))
+        {
+            _logger.LogTrace("Splitting frame data: {Size} bytes", frameData.Length);
+        }
+
+        while (pos < frameData.Length)
+        {
+            // Find start code
+            int startCodeLength = 0;
+            if (pos + 4 <= frameData.Length &&
+                frameData[pos] == 0 && frameData[pos + 1] == 0 && 
+                frameData[pos + 2] == 0 && frameData[pos + 3] == 1)
+            {
+                startCodeLength = 4;
+            }
+            else if (pos + 3 <= frameData.Length &&
+                     frameData[pos] == 0 && frameData[pos + 1] == 0 && frameData[pos + 2] == 1)
+            {
+                startCodeLength = 3;
+            }
+            else
+            {
+                // No start code found, skip this byte
+                pos++;
+                continue;
+            }
+
+            // Find next start code to determine NALU length
+            int nextPos = pos + startCodeLength;
+            int naluEnd = frameData.Length;
+
+            for (int i = nextPos; i < frameData.Length - 2; i++)
+            {
+                if ((i + 3 < frameData.Length && 
+                     frameData[i] == 0 && frameData[i + 1] == 0 && frameData[i + 2] == 0 && frameData[i + 3] == 1) ||
+                    (i + 2 < frameData.Length && 
+                     frameData[i] == 0 && frameData[i + 1] == 0 && frameData[i + 2] == 1))
+                {
+                    naluEnd = i;
+                    break;
+                }
+            }
+
+            // Extract NALU (including start code)
+            int naluLength = naluEnd - pos;
+            if (naluLength > startCodeLength)
+            {
+                var nalu = frameData.AsSpan(pos, naluLength);
+                
+                // Get NALU type for logging (skip start code to read NAL header)
+                byte nalHeader = frameData[pos + startCodeLength];
+                int nalType = nalHeader & 0x1F;
+
+                if (_logger.IsEnabled(LogLevel.Trace))
+                {
+                    _logger.LogTrace("Found NALU: type={Type}, size={Size} bytes", nalType, naluLength);
+                }
+                
+                // Push NALU with existing start code
+                if (_naluSource.PushNalu(nalu, ensureStartCode: false))
+                {
+                    nalusFound++;
+                }
+                else
+                {
+                    if (_logger.IsEnabled(LogLevel.Warning))
+                    {
+                        _logger.LogWarning("Failed to push NALU type {Type}, queue full", nalType);
+                    }
+                }
+            }
+
+            pos = naluEnd;
+        }
+
+        if (_logger.IsEnabled(LogLevel.Debug) && nalusFound > 0)
+        {
+            _logger.LogDebug("Split frame into {Count} NALUs", nalusFound);
+        }
     }
 
     private void DisplayRoutine(CancellationToken cancellationToken)

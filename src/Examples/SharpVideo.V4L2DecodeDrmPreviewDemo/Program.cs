@@ -57,12 +57,12 @@ internal class Program
             [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_XRGB8888],
             drmBufferManagerLogger);
         var presenter = DrmPresenter.Create(
-            drmDevice, 
-            Width, 
-            Height, 
+            drmDevice,
+            Width,
+            Height,
             drmBufferManager,
             KnownPixelFormats.DRM_FORMAT_XRGB8888,  // Primary plane format
-            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format  
+            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format
             Logger);
 
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
