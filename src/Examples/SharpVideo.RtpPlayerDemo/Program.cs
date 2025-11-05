@@ -173,12 +173,11 @@ internal class Program
             LoggerFactory);
 
         // Create decoder pipeline - presenter now works directly with overlay
-        var pipelineLogger = LoggerFactory.CreateLogger<DecoderPipeline>();
         await using var pipeline = new DecoderPipeline(
             rtpReceiver,
             decoder,
             presenter,
-            pipelineLogger);
+            LoggerFactory);
 
         pipeline.Initialize();
 
@@ -187,7 +186,7 @@ internal class Program
 
         // Start RTP receiver and pipeline
         rtpReceiver.Start();
-        pipeline.Start();
+        await pipeline.StartAsync();
 
         Logger.LogInformation("RTP receiver started on {Address}:{Port}", BindAddress, BindPort);
 
@@ -216,11 +215,11 @@ internal class Program
         Logger.LogInformation("=== Final Statistics ===");
         Logger.LogInformation("RTP Received: {Count} frames", rtpReceiver.ReceivedFramesCount);
         Logger.LogInformation("RTP Dropped: {Count} frames", rtpReceiver.DroppedFramesCount);
-        Logger.LogInformation("Decoded: {Count} frames @ {Fps:F2} FPS", 
+        Logger.LogInformation("Decoded: {Count} frames @ {Fps:F2} FPS",
             pipeline.Statistics.DecodedFrames, pipeline.Statistics.AverageDecodeFps);
-        Logger.LogInformation("Presented: {Count} frames @ {Fps:F2} FPS", 
+        Logger.LogInformation("Presented: {Count} frames @ {Fps:F2} FPS",
             pipeline.Statistics.PresentedFrames, pipeline.Statistics.AveragePresentFps);
-        Logger.LogInformation("Avg decode time: {Time:F2} ms/frame", 
+        Logger.LogInformation("Avg decode time: {Time:F2} ms/frame",
             pipeline.Statistics.AverageDecodeTimeMs);
     }
 

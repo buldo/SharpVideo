@@ -9,6 +9,7 @@ using SharpVideo.Linux.Native.V4L2;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2Decoding.Models;
+using SharpVideo.V4L2Decoding.NaluSources;
 
 namespace SharpVideo.V4L2Decoding.Services;
 
@@ -30,9 +31,10 @@ public class H264V4L2StatelessDecoder
 
     private readonly bool _supportsSliceParamsControl;
 
-    // Thread for processing capture buffers
+    // Threads for parallel processing
     private Thread? _captureThread;
-    private CancellationTokenSource? _captureThreadCts;
+    private Thread? _decodingThread;
+    private CancellationTokenSource? _cts;
 
     // DPB (Decoded Picture Buffer) tracking - using Queue for O(1) operations
     private readonly Queue<DpbEntry> _dpb = new();
@@ -63,150 +65,165 @@ public class H264V4L2StatelessDecoder
     public H264V4L2StatelessDecoderStatistics Statistics { get; } = new();
 
     /// <summary>
-    /// Decodes H.264 stream using V4L2 hardware acceleration with efficient stream processing
+    /// Starts decoding H.264 NAL units from the provided source.
+    /// Runs in separate thread for minimal latency.
     /// </summary>
-    public async Task DecodeStreamAsync(Stream stream, CancellationToken cancellationToken = default)
+    /// <param name="naluSource">Source of NAL units (stream, RTP, etc.)</param>
+    public void StartDecoding(INaluSource naluSource)
     {
-        if (stream == null)
+        if (_decodingThread != null)
         {
-            throw new ArgumentNullException(nameof(stream));
+            throw new InvalidOperationException("Decoding already started");
         }
 
-        if (!stream.CanRead)
+        _logger.LogInformation("Starting H.264 stateless decoder");
+
+        _cts = new CancellationTokenSource();
+
+        // Start decoding thread
+        _decodingThread = new Thread(() => ProcessNalusThreadProc(naluSource, _cts.Token))
         {
-            throw new ArgumentException("Stream must be readable", nameof(stream));
+            Name = "H264DecoderThread",
+            IsBackground = true,
+            Priority = ThreadPriority.Highest // High priority for low latency
+        };
+        _decodingThread.Start();
+
+        _logger.LogInformation("Decoder thread started");
+    }
+
+    /// <summary>
+    /// Stops decoding and waits for graceful shutdown.
+    /// </summary>
+    public async Task StopDecodingAsync()
+    {
+        if (_cts == null || _decodingThread == null)
+        {
+            return;
         }
 
-        _logger.LogInformation("Starting H.264 stateless stream decode");
-        var decodingStopwatch = Stopwatch.StartNew();
+        _logger.LogInformation("Stopping decoder...");
 
-        using var naluProvider = new H264AnnexBNaluProvider();
-        _logger.LogInformation("NALU provider created; beginning stream processing");
-        var naluProcessingTask = ProcessNalusAsync(naluProvider, cancellationToken);
-        var feedTask = FeedStreamToNaluProviderAsync(stream, naluProvider, cancellationToken);
-        await Task.WhenAll(naluProcessingTask, feedTask);
+        _cts.Cancel();
 
-        // Drain the pipeline: wait for all queued frames to be processed by hardware
-        _logger.LogInformation("Draining decoder pipeline...");
-        int drainAttempts = 0;
-        int lastFrameCount = _framesDecoded;
-
-        // Use more aggressive polling initially, then back off
-        while (drainAttempts < 100) // Reduced from 2000 to 100 iterations
+        if (_decodingThread.IsAlive)
         {
-            _device.OutputMPlaneQueue.ReclaimProcessed();
-
-            // Check for progress
-            if (_framesDecoded != lastFrameCount)
+            if (!_decodingThread.Join(TimeSpan.FromSeconds(5)))
             {
-                _logger.LogDebug("Decoded {NewFrames} more frames during drain", _framesDecoded - lastFrameCount);
-                lastFrameCount = _framesDecoded;
-                drainAttempts = 0; // Reset timeout if we're making progress
+                _logger.LogWarning("Decoder thread did not stop gracefully");
             }
-
-            // Short sleep instead of SpinWait for better CPU usage
-            Thread.Sleep(1);
-            drainAttempts++;
         }
 
-        decodingStopwatch.Stop();
-        Statistics.DecodeElapsed = decodingStopwatch.Elapsed;
+        // Drain remaining frames
+        await DrainDecoderAsync();
+
         var fps = Statistics.DecodeElapsed.TotalSeconds > 0
             ? _framesDecoded / Statistics.DecodeElapsed.TotalSeconds
             : 0;
 
         _logger.LogInformation(
-            "Stateless decoding completed successfully. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
+            "Decoder stopped. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
             _framesDecoded,
             Statistics.DecodeElapsed.TotalSeconds,
             fps);
     }
 
     /// <summary>
-    /// Feeds stream data to NaluProvider in chunks
+    /// Drain the pipeline: wait for all queued frames to be processed by hardware
     /// </summary>
-    private async Task FeedStreamToNaluProviderAsync(
-        Stream stream,
-        H264AnnexBNaluProvider naluProvider,
-        CancellationToken cancellationToken)
+    private async Task DrainDecoderAsync()
     {
-        const int bufferSize = 16 * 1024; // Reduced from 64KB to 16KB for lower latency
-        var buffer = new byte[bufferSize];
-        long totalBytesRead = 0;
+        _logger.LogInformation("Draining decoder pipeline...");
+        int drainAttempts = 0;
+        int lastFrameCount = _framesDecoded;
 
-        try
+        while (drainAttempts < 100)
         {
-            int readIterations = 0;
-            int bytesRead;
-            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+            _device.OutputMPlaneQueue.ReclaimProcessed();
+
+            if (_framesDecoded != lastFrameCount)
             {
-                await naluProvider.AppendData(buffer.AsSpan(0, bytesRead).ToArray(), cancellationToken);
-                totalBytesRead += bytesRead;
-                readIterations++;
-
-                if (readIterations <= 5 || readIterations % 500 == 0)
-                {
-                    _logger.LogInformation(
-                        "Read chunk #{Chunk} ({Bytes} bytes); total fed {Total} bytes",
-                        readIterations,
-                        bytesRead,
-                        totalBytesRead);
-                }
+                _logger.LogDebug("Decoded {NewFrames} more frames during drain", _framesDecoded - lastFrameCount);
+                lastFrameCount = _framesDecoded;
+                drainAttempts = 0;
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error while feeding stream to NALU provider");
-            throw;
-        }
-        finally
-        {
-            naluProvider.CompleteWriting();
-            _logger.LogInformation("Completed feeding bitstream: {BytesRead} bytes", totalBytesRead);
+
+            await Task.Delay(1);
+            drainAttempts++;
         }
     }
 
     /// <summary>
-    /// Processes NALUs asynchronously as they become available
+    /// Thread procedure for processing NALUs from source with minimal latency
     /// </summary>
-    private async Task ProcessNalusAsync(H264AnnexBNaluProvider naluProvider, CancellationToken cancellationToken)
+    private void ProcessNalusThreadProc(INaluSource naluSource, CancellationToken cancellationToken)
     {
         var streamState = new H264BitstreamParserState();
         var parsingOptions = new ParsingOptions
         {
-            add_checksum = false // Disable checksum calculation for performance
+            add_checksum = false // Disable checksum for performance
         };
-        var naluCount = 0;
+
+        var decodingStopwatch = Stopwatch.StartNew();
+        int naluCount = 0;
+
         try
         {
-            await foreach (var naluData in naluProvider.NaluReader.ReadAllAsync(cancellationToken))
+            _logger.LogInformation("NALU processing thread started");
+
+            var reader = naluSource.NaluChannel;
+
+            // Synchronous reading from channel for minimal latency
+            while (!cancellationToken.IsCancellationRequested)
             {
-                _logger.LogTrace("Processing NALU #{Index} (size: {Size} bytes)", naluCount + 1, naluData.Data.Length);
-                if (naluData.Data.Length < 1)
+                // Wait for next NALU with timeout
+                if (!reader.WaitToReadAsync(cancellationToken).AsTask().Result)
                 {
-                    continue;
+                    // Channel completed
+                    break;
                 }
 
-                var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
-
-                if (naluState == null)
+                while (reader.TryRead(out var naluData))
                 {
-                    _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
-                    continue;
+                    if (naluData.Data.Length < 1)
+                    {
+                        continue;
+                    }
+
+                    if (_logger.IsEnabled(LogLevel.Trace))
+                    {
+                        _logger.LogTrace("Processing NALU #{Index} (size: {Size} bytes)", naluCount + 1,
+                            naluData.Data.Length);
+                    }
+
+                    var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
+
+                    if (naluState == null)
+                    {
+                        _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
+                        continue;
+                    }
+
+                    naluCount++;
+
+                    ProcessNaluByType(naluData, naluState, streamState);
                 }
-
-                naluCount++;
-
-                ProcessNaluByType(naluData, naluState, streamState);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogInformation("NALU processing cancelled");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error while ProcessNalusAsync");
-            throw;
+            _logger.LogError(ex, "Error in NALU processing thread");
         }
-
-        _logger.LogInformation("Finished processing NALUs ({Count} total)", naluCount);
+        finally
+        {
+            decodingStopwatch.Stop();
+            Statistics.DecodeElapsed = decodingStopwatch.Elapsed;
+            _logger.LogInformation("NALU processing thread stopped. Processed {Count} NALUs", naluCount);
+        }
     }
 
     /// <summary>
@@ -452,7 +469,7 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void ProcessCaptureBuffersThreadProc()
     {
-        var cancellationToken = _captureThreadCts!.Token;
+        var cancellationToken = _cts!.Token;
         _logger.LogInformation("Capture buffer processing thread started");
 
         while (!cancellationToken.IsCancellationRequested)
@@ -468,7 +485,7 @@ public class H264V4L2StatelessDecoder
             if (_configuration.UseDrmPrimeBuffers)
             {
                 // For DMABUF mode, pass buffer index to caller
-                _processDecodedBufferIndex(_drmBuffers[(int)dequeuedBuffer.Index]);
+                _processDecodedBufferIndex!(_drmBuffers![(int)dequeuedBuffer.Index]);
                 // Don't requeue - let the display system handle it
             }
             else
@@ -658,7 +675,7 @@ public class H264V4L2StatelessDecoder
         _device.OutputMPlaneQueue.StreamOn();
         _device.CaptureMPlaneQueue.StreamOn();
 
-        _captureThreadCts = new CancellationTokenSource();
+        _cts = new CancellationTokenSource();
         _captureThread = new Thread(ProcessCaptureBuffersThreadProc)
         {
             Name = "CaptureBufferProcessor",
@@ -672,9 +689,10 @@ public class H264V4L2StatelessDecoder
     {
         _logger.LogInformation("Cleaning up decoder resources...");
 
-        if (_captureThreadCts != null)
+        if (_cts != null)
         {
-            _captureThreadCts.Cancel();
+            _cts.Cancel();
+
             if (_captureThread is { IsAlive: true })
             {
                 if (!_captureThread.Join(TimeSpan.FromSeconds(2)))
@@ -683,10 +701,19 @@ public class H264V4L2StatelessDecoder
                 }
             }
 
-            _captureThreadCts.Dispose();
-            _captureThreadCts = null;
+            if (_decodingThread is { IsAlive: true })
+            {
+                if (!_decodingThread.Join(TimeSpan.FromSeconds(2)))
+                {
+                    _logger.LogWarning("Decoding thread did not stop gracefully");
+                }
+            }
+
+            _cts.Dispose();
+            _cts = null;
             _captureThread = null;
-            _logger.LogInformation("Stopped capture buffer processing thread");
+            _decodingThread = null;
+            _logger.LogInformation("Stopped decoder threads");
         }
 
         _device.OutputMPlaneQueue.StreamOff();

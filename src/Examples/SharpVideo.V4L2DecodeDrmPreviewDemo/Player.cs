@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.Drm;
 using SharpVideo.Utils;
 using SharpVideo.V4L2Decoding.Services;
+using SharpVideo.V4L2Decoding.NaluSources;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
@@ -79,7 +80,15 @@ public class Player
 
     private async Task DecodeLocalAsync(FileStream fileStream)
     {
-        await _decoder.DecodeStreamAsync(fileStream);
+        await using var naluSource = new StreamNaluSource(fileStream, _logger.CreateLogger<StreamNaluSource>());
+        await naluSource.StartAsync();
+        _decoder.StartDecoding(naluSource);
+
+        // Wait for source to complete feeding all NALUs
+        await naluSource.NaluChannel.Completion;
+
+        // Stop decoder and drain pipeline
+        await _decoder.StopDecodingAsync();
         _decodeCompleted.Set();
     }
 
