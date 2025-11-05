@@ -84,10 +84,7 @@ public class Player
         await naluSource.StartAsync();
         _decoder.StartDecoding(naluSource);
 
-        // Wait for source to complete feeding all NALUs
-        await naluSource.NaluChannel.Completion;
-
-        // Stop decoder and drain pipeline
+        // Wait for decoder to finish processing all NALUs
         await _decoder.StopDecodingAsync();
         _decodeCompleted.Set();
     }

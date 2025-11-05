@@ -1,4 +1,4 @@
-using System.Threading.Channels;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using SharpVideo.H264;
 
@@ -6,29 +6,24 @@ namespace SharpVideo.V4L2Decoding.NaluSources;
 
 /// <summary>
 /// Provides H.264 NAL units received from RTP depacketizer.
-/// Designed for minimal latency - NAL units are pushed directly to channel as they arrive.
+/// Designed for minimal latency - NAL units are pushed directly to queue as they arrive.
 /// </summary>
 public class RtpNaluSource : INaluSource
 {
     private readonly ILogger<RtpNaluSource>? _logger;
-    private readonly Channel<H264Nalu> _channel;
+    private readonly BlockingCollection<H264Nalu> _naluQueue;
     private bool _disposed;
     private bool _started;
 
-    public RtpNaluSource(ILogger<RtpNaluSource>? logger = null, int channelCapacity = 30)
+    public RtpNaluSource(ILogger<RtpNaluSource>? logger = null, int queueCapacity = 30)
     {
         _logger = logger;
 
-        // Bounded channel to prevent memory overflow if decoder can't keep up
-        _channel = Channel.CreateBounded<H264Nalu>(new BoundedChannelOptions(channelCapacity)
-        {
-            SingleReader = true,
-            SingleWriter = false, // RTP packets may arrive from network thread
-            FullMode = BoundedChannelFullMode.DropOldest // Drop oldest frames to maintain low latency
-        });
+        // Bounded collection to prevent memory overflow if decoder can't keep up
+        _naluQueue = new BlockingCollection<H264Nalu>(queueCapacity);
     }
 
-    public ChannelReader<H264Nalu> NaluChannel => _channel.Reader;
+    public BlockingCollection<H264Nalu> NaluQueue => _naluQueue;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -50,7 +45,7 @@ public class RtpNaluSource : INaluSource
         }
 
         _logger?.LogInformation("Stopping RTP NALU source");
-        _channel.Writer.Complete();
+        _naluQueue.CompleteAdding();
         _started = false;
 
         return Task.CompletedTask;
@@ -109,20 +104,20 @@ public class RtpNaluSource : INaluSource
 
         var nalu = new H264Nalu(data, startCodeLength);
 
-        // TryWrite is non-blocking and thread-safe
-        bool written = _channel.Writer.TryWrite(nalu);
+        // TryAdd is non-blocking and thread-safe
+        bool added = _naluQueue.TryAdd(nalu, 0);
 
-        if (!written && _logger != null && _logger.IsEnabled(LogLevel.Warning))
+        if (!added && _logger != null && _logger.IsEnabled(LogLevel.Warning))
         {
-            _logger.LogWarning("RTP NALU channel full, frame dropped (size: {Size})", naluData.Length);
+            _logger.LogWarning("RTP NALU queue full, frame dropped (size: {Size})", naluData.Length);
         }
 
-        if (written && _logger != null && _logger.IsEnabled(LogLevel.Trace))
+        if (added && _logger != null && _logger.IsEnabled(LogLevel.Trace))
         {
-            _logger.LogTrace("Pushed RTP NALU to channel (size: {Size})", naluData.Length);
+            _logger.LogTrace("Pushed RTP NALU to queue (size: {Size})", naluData.Length);
         }
 
-        return written;
+        return added;
     }
 
     public async ValueTask DisposeAsync()

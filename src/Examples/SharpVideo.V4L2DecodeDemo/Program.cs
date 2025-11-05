@@ -70,21 +70,20 @@ internal class Program
             {
                 decodedFrames++;
                 //saver.TryEnqueueFrame(span, 1920, 1080);
-            }, null);
+            }, null!);
 
         await using var fileStream = File.OpenRead(filePath);
         var decodeStopWatch = Stopwatch.StartNew();
-        decoder.InitializeDecoder(null);
+        decoder.InitializeDecoder(null!);
 
         await using var naluSource = new StreamNaluSource(fileStream, loggerFactory.CreateLogger<StreamNaluSource>());
         await naluSource.StartAsync();
         decoder.StartDecoding(naluSource);
 
-        // Wait for source to complete
-        await naluSource.NaluChannel.Completion;
-        await decoder.StopDecodingAsync();
-
-        logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
+        // Wait for decoder to finish processing all NALUs
+        // The decoder will automatically stop when queue is completed (EOF reached)
+        logger.LogInformation("Decoding started, waiting for completion...");
+        await decoder.StopDecodingAsync();        logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
         logger.LogInformation("Amount of decoded frames: {DecodedFrames}", decodedFrames);
     }
 

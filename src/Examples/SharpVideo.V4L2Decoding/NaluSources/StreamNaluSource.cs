@@ -1,4 +1,4 @@
-using System.Threading.Channels;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using SharpVideo.H264;
 
@@ -12,27 +12,23 @@ public class StreamNaluSource : INaluSource
 {
     private readonly Stream _stream;
     private readonly ILogger<StreamNaluSource>? _logger;
-    private readonly Channel<H264Nalu> _channel;
+    private readonly BlockingCollection<H264Nalu> _naluQueue;
     private H264AnnexBNaluProvider? _naluProvider;
     private Task? _feedTask;
     private Task? _readTask;
     private CancellationTokenSource? _cts;
     private bool _disposed;
 
-    public StreamNaluSource(Stream stream, ILogger<StreamNaluSource>? logger = null)
+    public StreamNaluSource(Stream stream, ILogger<StreamNaluSource>? logger = null, int queueCapacity = 100)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _logger = logger;
 
-        // Unbounded channel for maximum throughput, single reader/writer for performance
-        _channel = Channel.CreateUnbounded<H264Nalu>(new UnboundedChannelOptions
-        {
-            SingleReader = true,
-            SingleWriter = true
-        });
+        // Bounded collection for flow control
+        _naluQueue = new BlockingCollection<H264Nalu>(queueCapacity);
     }
 
-    public ChannelReader<H264Nalu> NaluChannel => _channel.Reader;
+    public BlockingCollection<H264Nalu> NaluQueue => _naluQueue;
 
     public Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -48,9 +44,11 @@ public class StreamNaluSource : INaluSource
 
         // Start feeding stream data to NALU provider
         _feedTask = FeedStreamAsync(_cts.Token);
+        _logger?.LogInformation("Feed task started");
 
         // Start reading NALUs and pushing to channel
         _readTask = ReadNalusAsync(_cts.Token);
+        _logger?.LogInformation("Read task started");
 
         return Task.CompletedTask;
     }
@@ -83,7 +81,7 @@ public class StreamNaluSource : INaluSource
             // Expected when cancelling
         }
 
-        _channel.Writer.Complete();
+        // Channel is completed in ReadNalusAsync finally block
         _logger?.LogInformation("Stream NALU source stopped");
     }
 
@@ -127,7 +125,7 @@ public class StreamNaluSource : INaluSource
         {
             await foreach (var nalu in _naluProvider!.NaluReader.ReadAllAsync(cancellationToken))
             {
-                await _channel.Writer.WriteAsync(nalu, cancellationToken);
+                _naluQueue.Add(nalu, cancellationToken);
                 naluCount++;
 
                 if (_logger != null && _logger.IsEnabled(LogLevel.Trace))
@@ -147,6 +145,12 @@ public class StreamNaluSource : INaluSource
             _logger?.LogError(ex, "Error reading NALUs from provider");
             throw;
         }
+        finally
+        {
+            // Signal that no more NALUs will be added
+            _naluQueue.CompleteAdding();
+            _logger?.LogDebug("Queue completed after reading {Count} NALUs", naluCount);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -162,6 +166,7 @@ public class StreamNaluSource : INaluSource
 
         _naluProvider?.Dispose();
         _cts?.Dispose();
+        _naluQueue?.Dispose();
 
         if (_stream != null)
         {

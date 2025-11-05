@@ -76,7 +76,7 @@ public class H264V4L2StatelessDecoder
             throw new InvalidOperationException("Decoding already started");
         }
 
-        _logger.LogInformation("Starting H.264 stateless decoder");
+        _logger.LogInformation("Starting H.264 stateless decoder with NALU source");
 
         _cts = new CancellationTokenSource();
 
@@ -89,7 +89,7 @@ public class H264V4L2StatelessDecoder
         };
         _decodingThread.Start();
 
-        _logger.LogInformation("Decoder thread started");
+        _logger.LogInformation("Decoder thread started (Thread ID: {ThreadId})", _decodingThread.ManagedThreadId);
     }
 
     /// <summary>
@@ -171,44 +171,37 @@ public class H264V4L2StatelessDecoder
         {
             _logger.LogInformation("NALU processing thread started");
 
-            var reader = naluSource.NaluChannel;
+            var queue = naluSource.NaluQueue;
 
-            // Synchronous reading from channel for minimal latency
-            while (!cancellationToken.IsCancellationRequested)
+            // Synchronous blocking read - minimal latency!
+            // GetConsumingEnumerable blocks until item available or CompleteAdding called
+            foreach (var naluData in queue.GetConsumingEnumerable(cancellationToken))
             {
-                // Wait for next NALU with timeout
-                if (!reader.WaitToReadAsync(cancellationToken).AsTask().Result)
+                if (naluData.Data.Length < 1)
                 {
-                    // Channel completed
-                    break;
+                    continue;
                 }
 
-                while (reader.TryRead(out var naluData))
+                if (_logger.IsEnabled(LogLevel.Trace))
                 {
-                    if (naluData.Data.Length < 1)
-                    {
-                        continue;
-                    }
-
-                    if (_logger.IsEnabled(LogLevel.Trace))
-                    {
-                        _logger.LogTrace("Processing NALU #{Index} (size: {Size} bytes)", naluCount + 1,
-                            naluData.Data.Length);
-                    }
-
-                    var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
-
-                    if (naluState == null)
-                    {
-                        _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
-                        continue;
-                    }
-
-                    naluCount++;
-
-                    ProcessNaluByType(naluData, naluState, streamState);
+                    _logger.LogTrace("Processing NALU #{Index} (size: {Size} bytes)", naluCount + 1,
+                        naluData.Data.Length);
                 }
+
+                var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
+
+                if (naluState == null)
+                {
+                    _logger.LogWarning("Parser returned null for NALU #{Index}; skipping", naluCount + 1);
+                    continue;
+                }
+
+                naluCount++;
+
+                ProcessNaluByType(naluData, naluState, streamState);
             }
+
+            _logger.LogInformation("Queue completed, all NALUs processed");
         }
         catch (OperationCanceledException)
         {
