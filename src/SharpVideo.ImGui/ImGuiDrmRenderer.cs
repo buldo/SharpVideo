@@ -124,7 +124,7 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
 
         // Initialize OpenGL ES
         _gl = GL.GetApi(NativeEgl.GetProcAddress);
-        
+
         // Log GL info
         LogGlInfo();
 
@@ -146,8 +146,8 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
 
         _gl.Viewport(0, 0, _width, _height);
 
-        // Clear with black background
-        _gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        // Clear with transparent background to allow underlying video plane to show through
+        _gl.ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
         // Enable blending for ImGui
@@ -174,19 +174,19 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
         if (!NativeEgl.SwapBuffers(_eglDisplay, _eglSurface))
         {
             var error = NativeEgl.GetError();
-            
+
             // EGL_BAD_SURFACE can occur if surface is already being used by GBM
             // This is expected in some race conditions and can be safely ignored
             if (error == NativeEgl.EGL_BAD_SURFACE)
             {
-                _logger?.LogDebug("eglSwapBuffers failed: {Error} (expected in some scenarios)", 
+                _logger?.LogDebug("eglSwapBuffers failed: {Error} (expected in some scenarios)",
                     NativeEgl.GetErrorString(error));
             }
             else
             {
                 _logger?.LogWarning("eglSwapBuffers failed: {Error}", NativeEgl.GetErrorString(error));
             }
-            
+
             return false;
         }
         return true;
@@ -205,7 +205,7 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
         if (!NativeEgl.MakeCurrent(_eglDisplay, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_CONTEXT))
         {
             var error = NativeEgl.GetError();
-            
+
             // EGL_BAD_ACCESS can occur if context is already released
             if (error != NativeEgl.EGL_BAD_ACCESS)
             {
@@ -225,12 +225,12 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
         if (!NativeEgl.MakeCurrent(_eglDisplay, _eglSurface, _eglSurface, _eglContext))
         {
             var error = NativeEgl.GetError();
-            
+
             // EGL_BAD_ACCESS can occur during shutdown or if surface is temporarily unavailable
             // EGL_BAD_SURFACE can occur if GBM is currently locking buffers
             if (error == NativeEgl.EGL_BAD_ACCESS || error == NativeEgl.EGL_BAD_SURFACE)
             {
-                _logger?.LogDebug("Failed to make EGL context current: {Error} (may be transient)", 
+                _logger?.LogDebug("Failed to make EGL context current: {Error} (may be transient)",
                     NativeEgl.GetErrorString(error));
             }
             else
@@ -360,7 +360,7 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
             if (!NativeEgl.MakeCurrent(_eglDisplay, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_CONTEXT))
             {
                 var error = NativeEgl.GetError();
-                _logger?.LogDebug("Context already released or error during release: {Error}", 
+                _logger?.LogDebug("Context already released or error during release: {Error}",
                     NativeEgl.GetErrorString(error));
             }
         }
