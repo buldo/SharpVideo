@@ -237,8 +237,25 @@ public class H264V4L2StatelessDecoder
         switch (naluType)
         {
             case NalUnitType.SPS_NUT:
+                var spsData = naluState.nal_unit_payload.sps?.sps_data;
+                if (spsData != null)
+                {
+                    _logger.LogInformation("*** SPS RECEIVED: id={SpsId}, profile={Profile}, level={Level}, size={Width}x{Height} ***",
+                        spsData.seq_parameter_set_id,
+                        spsData.profile_idc,
+                        spsData.level_idc,
+                        (spsData.pic_width_in_mbs_minus1 + 1) * 16,
+                        (spsData.pic_height_in_map_units_minus1 + 1) * 16);
+                }
+                break;
             case NalUnitType.PPS_NUT:
-                _logger.LogTrace("{NaluType} was found in stream", naluType);
+                var ppsData = naluState.nal_unit_payload.pps;
+                if (ppsData != null)
+                {
+                    _logger.LogInformation("*** PPS RECEIVED: id={PpsId}, references SPS={SpsId} ***",
+                        ppsData.pic_parameter_set_id,
+                        ppsData.seq_parameter_set_id);
+                }
                 break;
 
             case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT: // Non-IDR slice
@@ -280,6 +297,25 @@ public class H264V4L2StatelessDecoder
             _logger.LogDebug("Skipping non-initial slice for frame {FrameNum} in frame-based mode", header.frame_num);
             return;
         }
+
+        // Check if PPS is available
+        if (!streamState.pps.TryGetValue(header.pic_parameter_set_id, out var pps) || pps == null)
+        {
+            _logger.LogWarning("Cannot decode slice: PPS {PpsId} not received yet, skipping frame {FrameNum}",
+                header.pic_parameter_set_id, header.frame_num);
+            return;
+        }
+
+        // Check if SPS is available
+        if (!streamState.sps.TryGetValue(pps.seq_parameter_set_id, out var sps) || sps == null)
+        {
+            _logger.LogWarning("Cannot decode slice: SPS {SpsId} (referenced by PPS {PpsId}) not received yet, skipping frame {FrameNum}",
+                pps.seq_parameter_set_id, header.pic_parameter_set_id, header.frame_num);
+            return;
+        }
+
+        _logger.LogDebug("Decoding slice: frame_num={FrameNum}, PPS={PpsId}, SPS={SpsId}",
+            header.frame_num, header.pic_parameter_set_id, pps.seq_parameter_set_id);
 
         var isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 

@@ -24,7 +24,7 @@ public class RtpReceiverService : IDisposable
         var receiverLogger = loggerFactory.CreateLogger<Receiver>();
         _receiver = new Receiver(bindEndPoint, receiverLogger);
         _receiver.OnVideoFrameReceivedByIndex += OnVideoFrameReceived;
-        
+
         _logger.LogInformation("RTP receiver initialized on {EndPoint}", bindEndPoint);
     }
 
@@ -101,7 +101,7 @@ public class RtpReceiverService : IDisposable
         _nalUnitsQueue.CompleteAdding();
         _nalUnitsQueue.Dispose();
         _cts.Dispose();
-        
+
         _logger.LogInformation("RTP receiver service disposed");
     }
 }

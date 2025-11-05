@@ -186,7 +186,7 @@ public class DecoderPipeline : IAsyncDisposable
             // Find start code
             int startCodeLength = 0;
             if (pos + 4 <= frameData.Length &&
-                frameData[pos] == 0 && frameData[pos + 1] == 0 && 
+                frameData[pos] == 0 && frameData[pos + 1] == 0 &&
                 frameData[pos + 2] == 0 && frameData[pos + 3] == 1)
             {
                 startCodeLength = 4;
@@ -209,9 +209,9 @@ public class DecoderPipeline : IAsyncDisposable
 
             for (int i = nextPos; i < frameData.Length - 2; i++)
             {
-                if ((i + 3 < frameData.Length && 
+                if ((i + 3 < frameData.Length &&
                      frameData[i] == 0 && frameData[i + 1] == 0 && frameData[i + 2] == 0 && frameData[i + 3] == 1) ||
-                    (i + 2 < frameData.Length && 
+                    (i + 2 < frameData.Length &&
                      frameData[i] == 0 && frameData[i + 1] == 0 && frameData[i + 2] == 1))
                 {
                     naluEnd = i;
@@ -224,7 +224,7 @@ public class DecoderPipeline : IAsyncDisposable
             if (naluLength > startCodeLength)
             {
                 var nalu = frameData.AsSpan(pos, naluLength);
-                
+
                 // Get NALU type for logging (skip start code to read NAL header)
                 byte nalHeader = frameData[pos + startCodeLength];
                 int nalType = nalHeader & 0x1F;
@@ -233,7 +233,7 @@ public class DecoderPipeline : IAsyncDisposable
                 {
                     _logger.LogTrace("Found NALU: type={Type}, size={Size} bytes", nalType, naluLength);
                 }
-                
+
                 // Push NALU with existing start code
                 if (_naluSource.PushNalu(nalu, ensureStartCode: false))
                 {
