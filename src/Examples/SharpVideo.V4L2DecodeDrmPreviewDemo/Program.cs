@@ -87,8 +87,7 @@ internal class Program
             processDecodedAction: null, // Not used in DMABUF mode
             drmBufferManager: drmBufferManager);
 
-        var playerLogger = LoggerFactory.CreateLogger<Player>();
-        var player = new Player(presenter, decoder, playerLogger);
+        var player = new Player(presenter, decoder, LoggerFactory);
         player.Init();
 
         await using var fileStream = GetFileStream();
