@@ -175,8 +175,16 @@ public class H264V4L2StatelessDecoder
 
             // Synchronous blocking read - minimal latency!
             // GetConsumingEnumerable blocks until item available or CompleteAdding called
-            foreach (var naluData in queue.GetConsumingEnumerable(cancellationToken))
+            // Don't pass cancellationToken - we want to process all remaining NALUs even if cancelled
+            foreach (var naluData in queue.GetConsumingEnumerable())
             {
+                // Check cancellation manually only before heavy processing
+                if (cancellationToken.IsCancellationRequested && queue.IsCompleted)
+                {
+                    _logger.LogInformation("Cancellation requested and queue completed");
+                    break;
+                }
+
                 if (naluData.Data.Length < 1)
                 {
                     continue;
@@ -205,7 +213,7 @@ public class H264V4L2StatelessDecoder
         }
         catch (OperationCanceledException)
         {
-            _logger.LogInformation("NALU processing cancelled");
+            _logger.LogInformation("NALU processing cancelled after {Count} NALUs", naluCount);
         }
         catch (Exception ex)
         {
