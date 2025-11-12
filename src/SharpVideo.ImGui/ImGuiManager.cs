@@ -132,6 +132,10 @@ public sealed class ImGuiManager : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        // Re-acquire EGL context for rendering
+        // This is necessary after ReleaseContext() was called in SwapBuffers()
+        _renderer.AcquireContext();
+
         // Update timing
         var currentTime = _stopwatch.Elapsed;
         DeltaTime = (float)(currentTime - _lastFrameTime).TotalSeconds;
@@ -164,12 +168,23 @@ public sealed class ImGuiManager : IDisposable
     /// <summary>
     /// Swaps the rendering buffers to commit the frame.
     /// Returns true if successful, false if the frame should be dropped.
+    /// After successful swap, the EGL context is released to allow GBM surface operations.
     /// </summary>
     /// <returns>True if buffers were swapped successfully</returns>
     public bool SwapBuffers()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return _renderer.SwapBuffers();
+        
+        var result = _renderer.SwapBuffers();
+        
+        if (result)
+        {
+            // Release EGL context to allow GBM to lock the front buffer
+            // This prevents EGL_BAD_SURFACE and EGL_BAD_ACCESS errors
+            _renderer.ReleaseContext();
+        }
+        
+        return result;
     }
 
     /// <summary>

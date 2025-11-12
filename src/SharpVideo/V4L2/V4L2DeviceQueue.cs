@@ -49,31 +49,37 @@ public class V4L2DeviceQueue
 
         // To enqueue a memory mapped buffer applications set the memory field to V4L2_MEMORY_MMAP.
         // When VIDIOC_QBUF is called with a pointer to this structure the driver sets the V4L2_BUF_FLAG_MAPPED and V4L2_BUF_FLAG_QUEUED flags and clears the V4L2_BUF_FLAG_DONE flag in the flags field, or it returns an EINVAL error code.
-        var buffer = new V4L2Buffer
-        {
-            Index = mappedBuffer.Index,
-            Type = _type,
-            Memory = mappedBuffer.Memory,
-            Length = (uint)mappedBuffer.MappedPlanes.Count,
-            Field = (uint)V4L2Field.NONE,
-            Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
-            BytesUsed = 0,
-            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-            Sequence = 0,
-            RequestFd = request?.Fd ?? 0
-        };
 
         unsafe
         {
-            fixed (V4L2Plane* planePtr = mappedBuffer.Planes)
+            // Copy plane data to stack-allocated array for the ioctl call
+            var planeCount = mappedBuffer.Planes.Length;
+            var planeStorage = stackalloc V4L2Plane[planeCount];
+            for (int i = 0; i < planeCount; i++)
             {
-                buffer.Planes = planePtr;
+                planeStorage[i] = mappedBuffer.Planes[i];
+            }
 
-                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
-                if (!result.Success)
-                {
-                    throw new Exception($"Failed to queue buffer for {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
-                }
+            var buffer = new V4L2Buffer
+            {
+                Index = mappedBuffer.Index,
+                Type = _type,
+                Memory = mappedBuffer.Memory,
+                Length = (uint)planeCount,
+                Field = (uint)V4L2Field.NONE,
+                Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
+                BytesUsed = 0,
+                Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                Sequence = 0,
+                RequestFd = request?.Fd ?? 0,
+                Planes = planeStorage
+            };
+
+
+            var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+            if (!result.Success)
+            {
+                throw new Exception($"Failed to queue buffer for {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
             }
         }
     }
@@ -85,31 +91,35 @@ public class V4L2DeviceQueue
     {
         EnsureInitialised();
 
-        var buffer = new V4L2Buffer
-        {
-            Index = dmaBufBuffer.Index,
-            Type = _type,
-            Memory = V4L2Memory.DMABUF,
-            Length = (uint)dmaBufBuffer.Planes.Length,
-            Field = (uint)V4L2Field.NONE,
-            Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
-            BytesUsed = 0,
-            Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
-            Sequence = 0,
-            RequestFd = request?.Fd ?? 0
-        };
-
         unsafe
         {
-            fixed (V4L2Plane* planePtr = dmaBufBuffer.Planes)
+            // Copy plane data to stack-allocated array for the ioctl call
+            var planeCount = dmaBufBuffer.Planes.Length;
+            var planeStorage = stackalloc V4L2Plane[planeCount];
+            for (int i = 0; i < planeCount; i++)
             {
-                buffer.Planes = planePtr;
+                planeStorage[i] = dmaBufBuffer.Planes[i];
+            }
 
-                var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
-                if (!result.Success)
-                {
-                    throw new Exception($"Failed to queue DMABUF buffer for {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
-                }
+            var buffer = new V4L2Buffer
+            {
+                Index = dmaBufBuffer.Index,
+                Type = _type,
+                Memory = V4L2Memory.DMABUF,
+                Length = (uint)planeCount,
+                Field = (uint)V4L2Field.NONE,
+                Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
+                BytesUsed = 0,
+                Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                Sequence = 0,
+                RequestFd = request?.Fd ?? 0,
+                Planes = planeStorage
+            };
+
+            var result = LibV4L2.QueueBuffer(_deviceFd, ref buffer);
+            if (!result.Success)
+            {
+                throw new Exception($"Failed to queue DMABUF buffer for {_type}: {result.ErrorMessage ?? $"errno {result.ErrorCode}"}");
             }
         }
     }

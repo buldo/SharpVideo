@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Drm;
+using SharpVideo.Linux.Native;
 
 namespace SharpVideo.Utils;
 
@@ -21,24 +22,51 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
         uint width,
         uint height,
         DrmBufferManager bufferManager,
-        ILogger logger)
+        ILogger logger,
+        bool useAtomicMode = true)
         : base(drmDevice, plane, crtcId, width, height, logger)
     {
         _bufferManager = bufferManager;
 
-        var props = new AtomicPlaneProperties(plane);
-        if (props.IsValid())
+        // Only use atomic mode if explicitly requested AND capability is available
+        if (useAtomicMode)
         {
-            _atomicDisplayManager = new AtomicFlipManager(
-                drmDevice,
-                plane,
-                crtcId,
-                props,
-                width,
-                height,
-                width,
-                height,
-                logger);
+            // Check if atomic mode is supported
+            if (!drmDevice.TrySetClientCapability(DrmClientCapability.DRM_CLIENT_CAP_ATOMIC, true, out var result))
+            {
+                logger.LogWarning(
+                    "Atomic mode not supported by DRM device (error code: {ErrorCode}), falling back to legacy mode",
+                    result);
+                useAtomicMode = false;
+            }
+            else
+            {
+                var props = new AtomicPlaneProperties(plane);
+                if (props.IsValid())
+                {
+                    _atomicDisplayManager = new AtomicFlipManager(
+                        drmDevice,
+                        plane,
+                        crtcId,
+                        props,
+                        width,
+                        height,
+                        width,
+                        height,
+                        logger);
+                
+                    logger.LogInformation("Overlay plane using atomic mode with dedicated event loop");
+                }
+                else
+                {
+                    logger.LogWarning("Atomic properties not available for overlay plane, using legacy mode");
+                }
+            }
+        }
+        
+        if (_atomicDisplayManager == null)
+        {
+            logger.LogInformation("Overlay plane configured to use legacy SetPlane mode (no atomic/event loop)");
         }
     }
 

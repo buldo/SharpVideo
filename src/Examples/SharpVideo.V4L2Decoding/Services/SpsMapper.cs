@@ -14,6 +14,19 @@ public static class SpsMapper
         var constraintSetFlags = GetConstraintSetFlags(spsData);
         var spsFlags = GetSpsFlags(spsData);
 
+        // Initialize offset_for_ref_frame array with zeros first
+        var offsetForRefFrame = new int[255];
+        Array.Fill(offsetForRefFrame, 0);
+
+        // Copy actual values if present
+        if(spsData.offset_for_ref_frame != null)
+        {
+            for(int i = 0; i < spsData.offset_for_ref_frame.Count && i < 255; i++)
+            {
+                offsetForRefFrame[i] = spsData.offset_for_ref_frame[i];
+            }
+        }
+
         var ret = new V4L2CtrlH264Sps()
         {
             bit_depth_chroma_minus8 = (byte)spsData.bit_depth_chroma_minus8,
@@ -33,16 +46,8 @@ public static class SpsMapper
             pic_width_in_mbs_minus1 = (ushort)spsData.pic_width_in_mbs_minus1,
             profile_idc = (byte)spsData.profile_idc,
             seq_parameter_set_id = (byte)spsData.seq_parameter_set_id,
+            offset_for_ref_frame = offsetForRefFrame
         };
-
-        ret.offset_for_ref_frame = new int[255];
-        if(spsData.offset_for_ref_frame != null)
-        {
-            for(int i = 0; i < spsData.offset_for_ref_frame.Count && i < 255; i++)
-            {
-                ret.offset_for_ref_frame[i] = spsData.offset_for_ref_frame[i];
-            }
-        }
 
 
         return ret;

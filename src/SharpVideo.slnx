@@ -12,6 +12,7 @@
     <Project Path="Examples/SharpVideo.MultiPlaneExample/SharpVideo.MultiPlaneExample.csproj" Id="53b0ddba-a5a4-48ce-be74-c840e3722322" />
     <Project Path="Examples/SharpVideo.MultiPlaneGlExample/SharpVideo.MultiPlaneGlExample.csproj" />
     <Project Path="Examples/SharpVideo.ParseH264Demo/SharpVideo.ParseH264Demo.csproj" />
+    <Project Path="Examples/SharpVideo.RtpPlayerDemo/SharpVideo.RtpPlayerDemo.csproj" Id="05f5b15e-0bf4-49d2-91ff-60cf2bcd8e58" />
     <Project Path="Examples/SharpVideo.V4L2DecodeDemo/SharpVideo.V4L2DecodeDemo.csproj" />
     <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
     <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />

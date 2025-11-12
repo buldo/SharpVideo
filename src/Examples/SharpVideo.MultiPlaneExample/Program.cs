@@ -40,7 +40,7 @@ namespace SharpVideo.MultiPlaneExample
                 [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
                 LoggerFactory.CreateLogger<DrmBufferManager>());
 
-            var presenter = DrmPresenter.Create(
+            using var presenter = DrmPresenter.Create(
                 drmDevice,
                 Width,
                 Height,
@@ -49,21 +49,8 @@ namespace SharpVideo.MultiPlaneExample
                 KnownPixelFormats.DRM_FORMAT_NV12,  // Overlay plane format
                 Logger);
 
-            if (presenter == null)
-            {
-                Logger.LogError("Failed to create presenter");
-                return;
-            }
-
-            try
-            {
-                RunDemo(presenter, buffersManager);
-            }
-            finally
-            {
-                presenter.CleanupDisplay();
-                drmDevice.Dispose();
-            }
+            RunDemo(presenter, buffersManager);
+            drmDevice.Dispose();
 
             Logger.LogInformation("Demo completed successfully");
         }
@@ -139,11 +126,18 @@ namespace SharpVideo.MultiPlaneExample
             }
 
             // Fill primary plane with ARGB8888 test pattern (semi-transparent)
-            var primaryBuffer = presenter.PrimaryPlanePresenter.GetPrimaryPlaneBackBuffer();
+            var dmaPresenter = presenter.AsDmaBufferPresenter();
+            if (dmaPresenter == null)
+            {
+                Logger.LogError("Failed to get DMA buffer presenter");
+                return;
+            }
+
+            var primaryBuffer = dmaPresenter.GetPrimaryPlaneBackBuffer();
             TestPattern.FillARGB8888(primaryBuffer, Width, Height);
 
             // Present the primary plane
-            if (!presenter.PrimaryPlanePresenter.SwapPrimaryPlaneBuffers())
+            if (!dmaPresenter.SwapPrimaryPlaneBuffers())
             {
                 Logger.LogError("Failed to present primary plane");
                 return;

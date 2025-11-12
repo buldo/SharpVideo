@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.Drm;
 using SharpVideo.Utils;
 using SharpVideo.V4L2Decoding.Services;
+using SharpVideo.V4L2Decoding.NaluSources;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
@@ -17,6 +18,7 @@ public class Player
     private readonly DrmPresenter _presenter;
     private readonly H264V4L2StatelessDecoder _decoder;
     private readonly ILogger<Player> _logger;
+    private readonly ILoggerFactory _loggerFactory;
     // Use bounded capacity to limit latency - max 3 frames in display queue
     private readonly BlockingCollection<SharedDmaBuffer> _buffersToPresent = new(boundedCapacity: 3);
     private readonly CancellationTokenSource displayCts = new CancellationTokenSource();
@@ -29,11 +31,12 @@ public class Player
     public Player(
         DrmPresenter presenter,
         H264V4L2StatelessDecoder decoder,
-        ILogger<Player> logger)
+        ILoggerFactory loggerFactory)
     {
         _presenter = presenter;
         _decoder = decoder;
-        _logger = logger;
+        _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<Player>();
     }
 
     public PlayerStatistics Statistics { get; } = new();
@@ -79,7 +82,12 @@ public class Player
 
     private async Task DecodeLocalAsync(FileStream fileStream)
     {
-        await _decoder.DecodeStreamAsync(fileStream);
+        await using var naluSource = new StreamNaluSource(fileStream, _loggerFactory.CreateLogger<StreamNaluSource>());
+        await naluSource.StartAsync();
+        _decoder.StartDecoding(naluSource);
+
+        // Wait for decoder to finish processing all NALUs
+        await _decoder.StopDecodingAsync();
         _decodeCompleted.Set();
     }
 

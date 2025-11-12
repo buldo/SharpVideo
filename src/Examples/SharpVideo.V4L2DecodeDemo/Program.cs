@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2Decoding.Models;
 using SharpVideo.V4L2Decoding.Services;
+using SharpVideo.V4L2Decoding.NaluSources;
 using SixLabors.ImageSharp;
 
 namespace SharpVideo.V4L2DecodeDemo;
@@ -69,14 +70,20 @@ internal class Program
             {
                 decodedFrames++;
                 //saver.TryEnqueueFrame(span, 1920, 1080);
-            }, null);
+            }, null!);
 
         await using var fileStream = File.OpenRead(filePath);
         var decodeStopWatch = Stopwatch.StartNew();
-        decoder.InitializeDecoder(null);
-        await decoder.DecodeStreamAsync(fileStream);
+        decoder.InitializeDecoder(null!);
 
-        logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
+        await using var naluSource = new StreamNaluSource(fileStream, loggerFactory.CreateLogger<StreamNaluSource>());
+        await naluSource.StartAsync();
+        decoder.StartDecoding(naluSource);
+
+        // Wait for decoder to finish processing all NALUs
+        // The decoder will automatically stop when queue is completed (EOF reached)
+        logger.LogInformation("Decoding started, waiting for completion...");
+        await decoder.StopDecodingAsync();        logger.LogInformation("Decoding completed successfully in {ElapsedTime:F2} seconds!", decodeStopWatch.Elapsed.TotalSeconds);
         logger.LogInformation("Amount of decoded frames: {DecodedFrames}", decodedFrames);
     }
 

@@ -38,7 +38,7 @@ internal class Program
             [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
             LoggerFactory.CreateLogger<DrmBufferManager>());
 
-        var presenter = DrmPresenter.Create(
+        using var presenter = DrmPresenter.Create(
             drmDevice,
             Width,
             Height,
@@ -47,21 +47,8 @@ internal class Program
             KnownPixelFormats.DRM_FORMAT_NV12, // Overlay plane format
             Logger);
 
-        if (presenter == null)
-        {
-            Logger.LogError("Failed to create presenter");
-            return;
-        }
-
-        try
-        {
-            RunDemo(drmDevice, presenter, buffersManager);
-        }
-        finally
-        {
-            presenter.CleanupDisplay();
-            drmDevice.Dispose();
-        }
+        RunDemo(drmDevice, presenter, buffersManager);
+        drmDevice.Dispose();
 
         Logger.LogInformation("Demo completed successfully");
     }
@@ -151,15 +138,22 @@ internal class Program
         for (int frame = 0; frame < FrameCount; frame++)
         {
             // Get the current back buffer DMA-BUF for GPU rendering
-            var primaryDmaBuffer = presenter.PrimaryPlanePresenter.GetPrimaryPlaneBackBufferDma();
+            var dmaPresenter = presenter.AsDmaBufferPresenter();
+            if (dmaPresenter == null)
+            {
+                Logger.LogError("Failed to get DMA buffer presenter");
+                break;
+            }
 
-// Render OpenGL ES content directly to the DMA buffer (ZERO-COPY!)
+            var primaryDmaBuffer = dmaPresenter.GetPrimaryPlaneBackBufferDma();
+
+            // Render OpenGL ES content directly to the DMA buffer (ZERO-COPY!)
             // The GPU writes directly to the buffer that the display hardware will scan out
             glRenderer.RenderToDmaBuffer(primaryDmaBuffer);
 
             // Present the primary plane (swap buffers)
             // This just tells the display hardware to switch to the newly rendered buffer
-            if (!presenter.PrimaryPlanePresenter.SwapPrimaryPlaneBuffers())
+            if (!dmaPresenter.SwapPrimaryPlaneBuffers())
             {
                 Logger.LogError("Failed to present primary plane at frame {Frame}", frame);
                 break;
@@ -169,7 +163,7 @@ internal class Program
             var currentBuffer = overlayBuffers[currentOverlayIndex];
             presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(currentBuffer);
 
-// Get completed buffers
+            // Get completed buffers
             var completed = presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers();
 
             // Simulate frame timing (30 fps = ~33ms per frame)

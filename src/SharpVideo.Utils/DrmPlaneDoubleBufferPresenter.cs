@@ -168,7 +168,9 @@ public class DrmPlaneDoubleBufferPresenter : DrmSinglePlanePresenter
         var result = LibDrm.drmPrimeFDToHandle(drmDevice.DeviceFd, buffer.DmaBuffer.Fd, out uint handle);
         if (result != 0)
         {
-            logger.LogError("Failed to convert DMA FD to handle for {Format}: {Result}", format.GetName(), result);
+            var errno = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
+            logger.LogError("Failed to convert DMA FD to handle for {Format}: result={Result}, errno={Errno}", 
+                format.GetName(), result, errno);
             return (0, 0);
         }
 
@@ -208,56 +210,13 @@ public class DrmPlaneDoubleBufferPresenter : DrmSinglePlanePresenter
 
         if (resultFb != 0)
         {
-            logger.LogError("Failed to create {Format} framebuffer: {Result}", format.GetName(), resultFb);
+            var errno = System.Runtime.InteropServices.Marshal.GetLastPInvokeError();
+            logger.LogError("Failed to create {Format} framebuffer: result={Result}, errno={Errno}", 
+                format.GetName(), resultFb, errno);
             return (0, 0);
         }
 
         logger.LogTrace("Created {Format} framebuffer with ID: {FbId}", format.GetName(), fbId);
         return (fbId, handle);
-    }
-
-    private static unsafe bool SetCrtcMode(
-        DrmDevice drmDevice,
-        uint crtcId,
-        uint connectorId,
-        uint fbId,
-        DrmModeInfo mode,
-        uint width,
-        uint height,
-        ILogger logger)
-    {
-        var nativeMode = new DrmModeModeInfo
-        {
-            Clock = mode.Clock,
-            HDisplay = mode.HDisplay,
-            HSyncStart = mode.HSyncStart,
-            HSyncEnd = mode.HSyncEnd,
-            HTotal = mode.HTotal,
-            HSkew = mode.HSkew,
-            VDisplay = mode.VDisplay,
-            VSyncStart = mode.VSyncStart,
-            VSyncEnd = mode.VSyncEnd,
-            VTotal = mode.VTotal,
-            VScan = mode.VScan,
-            VRefresh = mode.VRefresh,
-            Flags = mode.Flags,
-            Type = mode.Type
-        };
-
-        var nameBytes = System.Text.Encoding.UTF8.GetBytes(mode.Name);
-        for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
-        {
-            nativeMode.Name[i] = nameBytes[i];
-        }
-
-        var result = LibDrm.drmModeSetCrtc(drmDevice.DeviceFd, crtcId, fbId, 0, 0, &connectorId, 1, &nativeMode);
-        if (result != 0)
-        {
-            logger.LogError("Failed to set CRTC mode: {Result}", result);
-            return false;
-        }
-
-        logger.LogInformation("Successfully set CRTC to mode {Name}", mode.Name);
-        return true;
     }
 }

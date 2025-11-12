@@ -57,12 +57,12 @@ internal class Program
             [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_XRGB8888],
             drmBufferManagerLogger);
         var presenter = DrmPresenter.Create(
-            drmDevice, 
-            Width, 
-            Height, 
+            drmDevice,
+            Width,
+            Height,
             drmBufferManager,
             KnownPixelFormats.DRM_FORMAT_XRGB8888,  // Primary plane format
-            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format  
+            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format
             Logger);
 
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
@@ -87,8 +87,7 @@ internal class Program
             processDecodedAction: null, // Not used in DMABUF mode
             drmBufferManager: drmBufferManager);
 
-        var playerLogger = LoggerFactory.CreateLogger<Player>();
-        var player = new Player(presenter, decoder, playerLogger);
+        var player = new Player(presenter, decoder, LoggerFactory);
         player.Init();
 
         await using var fileStream = GetFileStream();
@@ -103,7 +102,7 @@ internal class Program
         Logger.LogWarning("Displayed {FrameCount} frames, average present FPS: {Fps:F2}", player.Statistics.PresentedFrames, player.Statistics.PresentedFrames / player.Statistics.PresentElapsed.TotalSeconds);
         Logger.LogWarning("Processing completed successfully!");
 
-        presenter.CleanupDisplay();
+        presenter.Dispose();
 
     }
 

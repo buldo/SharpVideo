@@ -124,7 +124,7 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
 
         // Initialize OpenGL ES
         _gl = GL.GetApi(NativeEgl.GetProcAddress);
-        
+
         // Log GL info
         LogGlInfo();
 
@@ -140,18 +140,14 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        // Make sure we're rendering to the correct surface
-        if (!NativeEgl.MakeCurrent(_eglDisplay, _eglSurface, _eglSurface, _eglContext))
-        {
-            var error = NativeEgl.GetError();
-            _logger?.LogError("Failed to make EGL context current: {Error}", NativeEgl.GetErrorString(error));
-            return;
-        }
+        // Ensure we have the correct EGL context current
+        // This is necessary after ReleaseContext() was called
+        AcquireContext();
 
         _gl.Viewport(0, 0, _width, _height);
 
-        // Clear with black background
-        _gl.ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        // Clear with transparent background to allow underlying video plane to show through
+        _gl.ClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
         // Enable blending for ImGui
@@ -178,10 +174,70 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
         if (!NativeEgl.SwapBuffers(_eglDisplay, _eglSurface))
         {
             var error = NativeEgl.GetError();
-            _logger?.LogDebug("eglSwapBuffers failed: {Error}", NativeEgl.GetErrorString(error));
+
+            // EGL_BAD_SURFACE can occur if surface is already being used by GBM
+            // This is expected in some race conditions and can be safely ignored
+            if (error == NativeEgl.EGL_BAD_SURFACE)
+            {
+                _logger?.LogDebug("eglSwapBuffers failed: {Error} (expected in some scenarios)",
+                    NativeEgl.GetErrorString(error));
+            }
+            else
+            {
+                _logger?.LogWarning("eglSwapBuffers failed: {Error}", NativeEgl.GetErrorString(error));
+            }
+
             return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// Releases the EGL context from the current surface.
+    /// This must be called after SwapBuffers() and before GBM surface operations
+    /// to prevent EGL_BAD_SURFACE and EGL_BAD_ACCESS errors.
+    /// </summary>
+    public void ReleaseContext()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // Unbind the context from surfaces to allow GBM to lock the front buffer
+        if (!NativeEgl.MakeCurrent(_eglDisplay, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_CONTEXT))
+        {
+            var error = NativeEgl.GetError();
+
+            // EGL_BAD_ACCESS can occur if context is already released
+            if (error != NativeEgl.EGL_BAD_ACCESS)
+            {
+                _logger?.LogWarning("Failed to release EGL context: {Error}", NativeEgl.GetErrorString(error));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Re-acquires the EGL context for the surface.
+    /// This must be called before the next RenderDrawData() operation.
+    /// </summary>
+    public void AcquireContext()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (!NativeEgl.MakeCurrent(_eglDisplay, _eglSurface, _eglSurface, _eglContext))
+        {
+            var error = NativeEgl.GetError();
+
+            // EGL_BAD_ACCESS can occur during shutdown or if surface is temporarily unavailable
+            // EGL_BAD_SURFACE can occur if GBM is currently locking buffers
+            if (error == NativeEgl.EGL_BAD_ACCESS || error == NativeEgl.EGL_BAD_SURFACE)
+            {
+                _logger?.LogDebug("Failed to make EGL context current: {Error} (may be transient)",
+                    NativeEgl.GetErrorString(error));
+            }
+            else
+            {
+                _logger?.LogError("Failed to make EGL context current: {Error}", NativeEgl.GetErrorString(error));
+            }
+        }
     }
 
     private unsafe nint ChooseEglConfig(nint display, int[] attribs, uint visualId)
@@ -298,12 +354,69 @@ internal sealed unsafe class ImGuiDrmRenderer : IDisposable
 
         _logger?.LogDebug("Disposing ImGui DRM renderer");
 
-        NativeEgl.MakeCurrent(_eglDisplay, 0, 0, 0);
-        NativeEgl.DestroySurface(_eglDisplay, _eglSurface);
-        NativeEgl.DestroyContext(_eglDisplay, _eglContext);
-        NativeEgl.Terminate(_eglDisplay);
+        // Step 1: Release context from any surfaces first
+        try
+        {
+            if (!NativeEgl.MakeCurrent(_eglDisplay, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_SURFACE, NativeEgl.EGL_NO_CONTEXT))
+            {
+                var error = NativeEgl.GetError();
+                _logger?.LogDebug("Context already released or error during release: {Error}",
+                    NativeEgl.GetErrorString(error));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Exception while releasing EGL context");
+        }
 
-        _gl?.Dispose();
+        // Step 2: Destroy surface
+        try
+        {
+            if (_eglSurface != 0 && _eglSurface != NativeEgl.EGL_NO_SURFACE)
+            {
+                NativeEgl.DestroySurface(_eglDisplay, _eglSurface);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Exception while destroying EGL surface");
+        }
+
+        // Step 3: Destroy context
+        try
+        {
+            if (_eglContext != 0 && _eglContext != NativeEgl.EGL_NO_CONTEXT)
+            {
+                NativeEgl.DestroyContext(_eglDisplay, _eglContext);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Exception while destroying EGL context");
+        }
+
+        // Step 4: Terminate display
+        try
+        {
+            if (_eglDisplay != 0 && _eglDisplay != NativeEgl.EGL_NO_DISPLAY)
+            {
+                NativeEgl.Terminate(_eglDisplay);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Exception while terminating EGL display");
+        }
+
+        // Step 5: Dispose GL
+        try
+        {
+            _gl?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Exception while disposing GL");
+        }
 
         _disposed = true;
         _logger?.LogDebug("ImGui DRM renderer disposed");
