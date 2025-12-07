@@ -146,7 +146,7 @@ public abstract class BaseDecoder : IDisposable
     /// <param name="encodedBuffer">
     /// Buffer with encoded data
     /// </param>
-    protected abstract void ProcessNewEncodedFrame(UniversalEncodedBuffer encodedBuffer);
+    protected abstract void ProcessEncodedDataBuffer(UniversalEncodedBuffer encodedBuffer);
 
     protected abstract void FlushDecoder();
 
@@ -207,7 +207,7 @@ public abstract class BaseDecoder : IDisposable
                 // 2. Take buffer for decode and send it to decoder implementation
                 while (_encodedBuffersInput.TryTake(out var encodedBuffer))
                 {
-                    ProcessNewEncodedFrame(encodedBuffer);
+                    ProcessEncodedDataBuffer(encodedBuffer);
                 }
             }
         }
