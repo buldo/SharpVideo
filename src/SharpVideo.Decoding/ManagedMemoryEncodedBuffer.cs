@@ -10,7 +10,7 @@ public class ManagedMemoryEncodedBuffer : UniversalEncodedBuffer
         _buffer = GC.AllocateArray<byte>(size, true);
     }
 
-    public void Write(Span<byte> data)
+    public void Write(ReadOnlySpan<byte> data)
     {
         data.CopyTo(_buffer);
         _nowUsed = data.Length;
