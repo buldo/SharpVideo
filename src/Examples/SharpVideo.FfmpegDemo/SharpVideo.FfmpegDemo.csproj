@@ -5,14 +5,25 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+	<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="FFmpeg.AutoGen" Version="8.0.0" />
+    <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
+    <PackageReference Include="Hexa.NET.ImGui.Backends" Version="1.0.18" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+    <PackageReference Include="Silk.NET" Version="2.22.0" />
+    <PackageReference Include="Silk.NET.OpenGL" Version="2.22.0" />
+    <PackageReference Include="Silk.NET.Windowing" Version="2.22.0" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\SharpVideo.Decoding\SharpVideo.Decoding.csproj" />
+    <ProjectReference Include="..\..\SharpVideo.FfmpegBin\SharpVideo.FfmpegBin.csproj" />
     <ProjectReference Include="..\SharpVideo.DemoMedia\SharpVideo.DemoMedia.csproj" />
+    <ProjectReference Include="..\..\SharpVideo\SharpVideo.csproj" />
   </ItemGroup>
 
 </Project>

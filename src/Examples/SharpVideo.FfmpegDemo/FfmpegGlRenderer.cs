@@ -1,0 +1,267 @@
+using System.Numerics;
+using Microsoft.Extensions.Logging;
+using Silk.NET.Maths;
+using Silk.NET.OpenGL;
+using Silk.NET.Windowing;
+
+namespace SharpVideo.FfmpegDemo;
+
+/// <summary>
+/// OpenGL renderer for YUV420P video frames from FFmpeg
+/// </summary>
+internal unsafe class FfmpegGlRenderer : IDisposable
+{
+    private readonly ILogger<FfmpegGlRenderer>? _logger;
+    private readonly GL _gl;
+
+    private uint _shaderProgram;
+    private uint _vao;
+    private uint _vbo;
+    private uint _textureY;
+    private uint _textureU;
+    private uint _textureV;
+
+    private int _videoWidth;
+    private int _videoHeight;
+    private bool _disposed;
+
+    public FfmpegGlRenderer(GL gl, ILogger<FfmpegGlRenderer>? logger = null)
+    {
+        _gl = gl;
+        _logger = logger;
+
+        InitializeGl();
+    }
+
+    private void InitializeGl()
+    {
+        _logger?.LogInformation("Initializing OpenGL renderer for YUV video");
+
+        // Create shader program for YUV to RGB conversion
+        _shaderProgram = CreateYuvShaderProgram();
+
+        // Create fullscreen quad
+        (_vao, _vbo) = CreateFullscreenQuad();
+
+        // Create textures for Y, U, V planes
+        _textureY = CreateTexture();
+        _textureU = CreateTexture();
+        _textureV = CreateTexture();
+
+        _logger?.LogInformation("OpenGL renderer initialized");
+    }
+
+    private uint CreateYuvShaderProgram()
+    {
+        const string vertexShaderSource = @"
+#version 330 core
+layout (location = 0) in vec2 aPosition;
+layout (location = 1) in vec2 aTexCoord;
+
+out vec2 TexCoord;
+
+void main()
+{
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+    TexCoord = aTexCoord;
+}";
+
+        const string fragmentShaderSource = @"
+#version 330 core
+in vec2 TexCoord;
+out vec4 FragColor;
+
+uniform sampler2D texY;
+uniform sampler2D texU;
+uniform sampler2D texV;
+
+void main()
+{
+    float y = texture(texY, TexCoord).r;
+    float u = texture(texU, TexCoord).r - 0.5;
+    float v = texture(texV, TexCoord).r - 0.5;
+    
+    // YUV to RGB conversion (BT.601)
+    float r = y + 1.402 * v;
+    float g = y - 0.344136 * u - 0.714136 * v;
+    float b = y + 1.772 * u;
+    
+    FragColor = vec4(r, g, b, 1.0);
+}";
+
+        var vertexShader = _gl.CreateShader(ShaderType.VertexShader);
+        _gl.ShaderSource(vertexShader, vertexShaderSource);
+        _gl.CompileShader(vertexShader);
+        CheckShaderCompilation(vertexShader, "Vertex");
+
+        var fragmentShader = _gl.CreateShader(ShaderType.FragmentShader);
+        _gl.ShaderSource(fragmentShader, fragmentShaderSource);
+        _gl.CompileShader(fragmentShader);
+        CheckShaderCompilation(fragmentShader, "Fragment");
+
+        var program = _gl.CreateProgram();
+        _gl.AttachShader(program, vertexShader);
+        _gl.AttachShader(program, fragmentShader);
+        _gl.LinkProgram(program);
+        CheckProgramLinking(program);
+
+        _gl.DeleteShader(vertexShader);
+        _gl.DeleteShader(fragmentShader);
+
+        // Set texture units
+        _gl.UseProgram(program);
+        _gl.Uniform1(_gl.GetUniformLocation(program, "texY"), 0);
+        _gl.Uniform1(_gl.GetUniformLocation(program, "texU"), 1);
+        _gl.Uniform1(_gl.GetUniformLocation(program, "texV"), 2);
+
+        return program;
+    }
+
+    private void CheckShaderCompilation(uint shader, string type)
+    {
+        _gl.GetShader(shader, ShaderParameterName.CompileStatus, out int success);
+        if (success == 0)
+        {
+            var log = _gl.GetShaderInfoLog(shader);
+            throw new Exception($"{type} shader compilation failed: {log}");
+        }
+    }
+
+    private void CheckProgramLinking(uint program)
+    {
+        _gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int success);
+        if (success == 0)
+        {
+            var log = _gl.GetProgramInfoLog(program);
+            throw new Exception($"Shader program linking failed: {log}");
+        }
+    }
+
+    private (uint vao, uint vbo) CreateFullscreenQuad()
+    {
+        float[] vertices =
+        [
+            // Position    // TexCoord
+            -1.0f,  1.0f,  0.0f, 0.0f,  // Top-left
+            -1.0f, -1.0f,  0.0f, 1.0f,  // Bottom-left
+             1.0f, -1.0f,  1.0f, 1.0f,  // Bottom-right
+             1.0f,  1.0f,  1.0f, 0.0f   // Top-right
+        ];
+
+        var vao = _gl.GenVertexArray();
+        _gl.BindVertexArray(vao);
+
+        var vbo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+
+        fixed (float* v = vertices)
+        {
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)),
+                v, BufferUsageARB.StaticDraw);
+        }
+
+        // Position attribute
+        _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 4 * sizeof(float), (void*)0);
+        _gl.EnableVertexAttribArray(0);
+
+        // TexCoord attribute
+        _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, 4 * sizeof(float), (void*)(2 * sizeof(float)));
+        _gl.EnableVertexAttribArray(1);
+
+        return (vao, vbo);
+    }
+
+    private uint CreateTexture()
+    {
+        var texture = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, texture);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        return texture;
+    }
+
+    public void UploadFrame(FfmpegVideoFrame frame)
+    {
+        if (_videoWidth != frame.Width || _videoHeight != frame.Height)
+        {
+            _videoWidth = frame.Width;
+            _videoHeight = frame.Height;
+            _logger?.LogInformation("Video resolution: {Width}x{Height}", _videoWidth, _videoHeight);
+        }
+
+        // Upload Y plane
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, _textureY);
+        fixed (byte* data = frame.PlaneY)
+        {
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
+                (uint)frame.Width, (uint)frame.Height, 0,
+                PixelFormat.Red, PixelType.UnsignedByte, data);
+        }
+
+        // Upload U plane
+        _gl.ActiveTexture(TextureUnit.Texture1);
+        _gl.BindTexture(TextureTarget.Texture2D, _textureU);
+        fixed (byte* data = frame.PlaneU)
+        {
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
+                (uint)(frame.Width / 2), (uint)(frame.Height / 2), 0,
+                PixelFormat.Red, PixelType.UnsignedByte, data);
+        }
+
+        // Upload V plane
+        _gl.ActiveTexture(TextureUnit.Texture2);
+        _gl.BindTexture(TextureTarget.Texture2D, _textureV);
+        fixed (byte* data = frame.PlaneV)
+        {
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
+                (uint)(frame.Width / 2), (uint)(frame.Height / 2), 0,
+                PixelFormat.Red, PixelType.UnsignedByte, data);
+        }
+    }
+
+    public void Render()
+    {
+        // Activate textures
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, _textureY);
+        _gl.ActiveTexture(TextureUnit.Texture1);
+        _gl.BindTexture(TextureTarget.Texture2D, _textureU);
+        _gl.ActiveTexture(TextureUnit.Texture2);
+        _gl.BindTexture(TextureTarget.Texture2D, _textureV);
+
+        // Use shader program
+        _gl.UseProgram(_shaderProgram);
+
+        // Draw fullscreen quad
+        _gl.BindVertexArray(_vao);
+        _gl.DrawArrays(PrimitiveType.TriangleFan, 0, 4);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        try
+        {
+            _gl.DeleteTexture(_textureY);
+            _gl.DeleteTexture(_textureU);
+            _gl.DeleteTexture(_textureV);
+            _gl.DeleteBuffer(_vbo);
+            _gl.DeleteVertexArray(_vao);
+            _gl.DeleteProgram(_shaderProgram);
+        }
+        catch (Exception ex)
+        {
+            // OpenGL context may already be destroyed when window closes
+            _logger?.LogDebug(ex, "Error during OpenGL resource cleanup (context may be already destroyed)");
+        }
+
+        _disposed = true;
+    }
+}

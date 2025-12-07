@@ -22,6 +22,8 @@
   <Folder Name="/Solution Items/">
     <File Path="../README.md" />
   </Folder>
+  <Project Path="SharpVideo.Decoding/SharpVideo.Decoding.csproj" Id="81d9487a-54ee-45c5-802e-6bd03145ef7f" />
+  <Project Path="SharpVideo.FfmpegBin/SharpVideo.FfmpegBin.csproj" Id="fb99dfac-77f3-4f35-982f-33d7c5970bf0" />
   <Project Path="SharpVideo.ImGui/SharpVideo.ImGui.csproj" Id="560ee6bc-5eb1-42ca-8b18-b0e4b668c5fc" />
   <Project Path="SharpVideo.Linux.Native.Tests/SharpVideo.Linux.Native.Tests.csproj" />
   <Project Path="SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
