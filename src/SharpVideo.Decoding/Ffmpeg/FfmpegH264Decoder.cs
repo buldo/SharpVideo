@@ -99,7 +99,7 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
     }
 
     /// <param name="encodedBuffer">Only ManagedMemoryBuffer</param>
-    protected override void ProcessNewEncodedFrame(UniversalEncodedBuffer encodedBuffer)
+    protected override void ProcessEncodedDataBuffer(UniversalEncodedBuffer encodedBuffer)
     {
         var memoryBuffer = encodedBuffer as ManagedMemoryEncodedBuffer;
 
