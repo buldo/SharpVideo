@@ -1,4 +1,6 @@
-﻿namespace SharpVideo.Decoding;
+﻿using SharpVideo.H264;
+
+namespace SharpVideo.Decoding;
 
 public class ManagedMemoryEncodedBuffer : UniversalEncodedBuffer
 {
@@ -10,10 +12,25 @@ public class ManagedMemoryEncodedBuffer : UniversalEncodedBuffer
         _buffer = GC.AllocateArray<byte>(size, true);
     }
 
-    public void Write(ReadOnlySpan<byte> data)
+    public void CopyFromNalu(H264Nalu nalu)
     {
-        data.CopyTo(_buffer);
-        _nowUsed = data.Length;
+        nalu.Data.CopyTo(_buffer);
+        _nowUsed = nalu.Data.Length;
+        NaluPayloadStart = nalu.PayloadStart;
+    }
+
+    public int NaluPayloadStart { get; private set; }
+
+    public void AggregateInCurrent(List<ManagedMemoryEncodedBuffer> buffers)
+    {
+        _nowUsed = 0;
+
+        foreach (var externalBuffer in buffers)
+        {
+            var sourceSpan = externalBuffer.Get();
+            sourceSpan.CopyTo(_buffer.AsSpan(_nowUsed));
+            _nowUsed += sourceSpan.Length;
+        }
     }
 
     public Span<byte> Get()

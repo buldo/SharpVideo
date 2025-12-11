@@ -29,7 +29,6 @@ public abstract class BaseDecoder : IDisposable
     private readonly BlockingCollection<UniversalEncodedBuffer> _encodedBuffersInput = new();
     private readonly BlockingCollection<UniversalEncodedBuffer> _encodedBuffersOutput = new();
 
-    private readonly BlockingCollection<UniversalDecodedFrame> _decodedFramesInput = new();
     private readonly BlockingCollection<UniversalDecodedFrame> _decodedFramesOutput = new();
 
     private Thread? _decodingThread;
@@ -127,18 +126,7 @@ public abstract class BaseDecoder : IDisposable
     /// </summary>
     /// <param name="decodedFrame">
     /// </param>
-    public void ReuseDecodedBuffer(UniversalDecodedFrame decodedFrame)
-    {
-        _decodedFramesInput.Add(decodedFrame);
-    }
-
-    /// <summary>
-    /// Real implementations of <see cref="BaseDecoder"/> have to implement this method with logic of reusing frames
-    /// </summary>
-    /// <param name="decodedFrame">
-    /// Decoded frame
-    /// </param>
-    protected abstract void ProcessFrameBufferForReuse(UniversalDecodedFrame decodedFrame);
+    public abstract void ReuseDecodedFrame(UniversalDecodedFrame decodedFrame);
 
     /// <summary>
     /// Implementations of this methods will pass buffers to real decoders(ffmpeg, v4l2, va-api)
@@ -178,7 +166,7 @@ public abstract class BaseDecoder : IDisposable
         {
             _encodedBuffersInput.Dispose();
             _encodedBuffersOutput.Dispose();
-            _decodedFramesInput.Dispose();
+            //_decodedFramesInput.Dispose();
             _decodedFramesOutput.Dispose();
         }
     }
@@ -193,18 +181,8 @@ public abstract class BaseDecoder : IDisposable
     {
         try
         {
-            // We will process queues one by one.
-            // Each queue will be processed while data are available.
-            // This is dangerous. It can be a good idea to add limit counter
             while (!cancellationToken.IsCancellationRequested)
             {
-                // 1. If there are buffers with decoded frames to reuse, let reuse it
-                while (_decodedFramesInput.TryTake(out var frameToReuse))
-                {
-                    ProcessFrameBufferForReuse(frameToReuse);
-                }
-
-                // 2. Take buffer for decode and send it to decoder implementation
                 while (_encodedBuffersInput.TryTake(out var encodedBuffer))
                 {
                     ProcessEncodedDataBuffer(encodedBuffer);

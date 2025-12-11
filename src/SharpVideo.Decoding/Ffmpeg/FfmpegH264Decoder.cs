@@ -14,6 +14,8 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
     private bool _disposed;
     private readonly FfmpegFramesStorage _framesStorage;
     private readonly BlockingCollection<FfmpegDecodedFrame> _unusedFrames = new();
+    private readonly FfmpegH264FramesAggregator _framesAggregator = new();
+    private readonly ManagedMemoryEncodedBuffer _packetBuffer;
 
     private FfmpegH264Decoder(
         AVCodec* codec,
@@ -34,6 +36,8 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
             var buf = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
             AddEncodedBufferToReuse(buf);
         }
+
+        _packetBuffer = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
 
         // Preallocate some buffers for decoded data
         var framesCount = 3;
@@ -89,7 +93,7 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
         return new FfmpegH264Decoder(codec, codecContext, packet, logger);
     }
 
-    protected override void ProcessFrameBufferForReuse(UniversalDecodedFrame decodedFrame)
+    public override void ReuseDecodedFrame(UniversalDecodedFrame decodedFrame)
     {
         if (decodedFrame is FfmpegDecodedFrame ffmpegFrame)
         {
@@ -110,7 +114,20 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
             return;
         }
 
-        var dataSpan = memoryBuffer.Get();
+        var isReady = _framesAggregator.AddBuffer(memoryBuffer);
+        if (!isReady)
+        {
+            return;
+        }
+
+        var buffersToUse = _framesAggregator.Drain();
+        _packetBuffer.AggregateInCurrent(buffersToUse);
+        foreach (var buffer in buffersToUse)
+        {
+            AddEncodedBufferToReuse(buffer);
+        }
+
+        var dataSpan = _packetBuffer.Get();
         fixed (byte* dataPtr = dataSpan)
         {
             _packet->data = dataPtr;
@@ -123,9 +140,8 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
                 _logger.LogError("Error sending packet: {Error}", GetErrorString(ret));
                 return;
             }
+            _logger.LogTrace("Packet sent");
         }
-
-        AddEncodedBufferToReuse(encodedBuffer);
 
         // Receive frames from decoder
         while (true)

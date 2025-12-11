@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
+using SharpVideo.Decoding;
 
 namespace SharpVideo.FfmpegDemo;
 
@@ -182,44 +183,37 @@ void main()
         return texture;
     }
 
-    public void UploadFrame(FfmpegVideoFrame frame)
+    public void UploadFrame(FfmpegDecodedFrame frame)
     {
-        if (_videoWidth != frame.Width || _videoHeight != frame.Height)
+        var avFrame = frame.Frame;
+
+        if (_videoWidth != avFrame->width || _videoHeight != avFrame->height)
         {
-            _videoWidth = frame.Width;
-            _videoHeight = frame.Height;
+            _videoWidth = avFrame->width;
+            _videoHeight = avFrame->height;
             _logger?.LogInformation("Video resolution: {Width}x{Height}", _videoWidth, _videoHeight);
         }
 
         // Upload Y plane
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, _textureY);
-        fixed (byte* data = frame.PlaneY)
-        {
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
-                (uint)frame.Width, (uint)frame.Height, 0,
-                PixelFormat.Red, PixelType.UnsignedByte, data);
-        }
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
+            (uint)avFrame->width, (uint)avFrame->height, 0,
+            PixelFormat.Red, PixelType.UnsignedByte, avFrame->data[0]);
 
         // Upload U plane
         _gl.ActiveTexture(TextureUnit.Texture1);
         _gl.BindTexture(TextureTarget.Texture2D, _textureU);
-        fixed (byte* data = frame.PlaneU)
-        {
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
-                (uint)(frame.Width / 2), (uint)(frame.Height / 2), 0,
-                PixelFormat.Red, PixelType.UnsignedByte, data);
-        }
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
+            (uint)(avFrame->width / 2), (uint)(avFrame->height / 2), 0,
+            PixelFormat.Red, PixelType.UnsignedByte, avFrame->data[1]);
 
         // Upload V plane
         _gl.ActiveTexture(TextureUnit.Texture2);
         _gl.BindTexture(TextureTarget.Texture2D, _textureV);
-        fixed (byte* data = frame.PlaneV)
-        {
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
-                (uint)(frame.Width / 2), (uint)(frame.Height / 2), 0,
-                PixelFormat.Red, PixelType.UnsignedByte, data);
-        }
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8,
+            (uint)(avFrame->width / 2), (uint)(avFrame->height / 2), 0,
+            PixelFormat.Red, PixelType.UnsignedByte, avFrame->data[2]);
     }
 
     public void Render()

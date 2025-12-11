@@ -13,4 +13,6 @@ public class H264Nalu
 
     public ReadOnlySpan<byte> Data => _data;
     public ReadOnlySpan<byte> WithoutHeader => _data.AsSpan(_payloadStart);
+
+    public int PayloadStart => _payloadStart;
 }

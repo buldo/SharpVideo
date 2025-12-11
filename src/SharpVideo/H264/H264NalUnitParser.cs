@@ -70,4 +70,11 @@ public static class H264NalUnitParser
 
         return nalUnit;
     }
+
+    public static NalUnitType ParseTypeSimple(Span<byte> slice)
+    {
+        var firstByte = slice[0];
+        firstByte &= 0b00011111;
+        return (NalUnitType)firstByte;
+    }
 }
