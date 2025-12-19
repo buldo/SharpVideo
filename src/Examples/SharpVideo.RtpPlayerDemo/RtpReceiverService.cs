@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
-using SharpVideo.RtpPlayerDemo.Rtp;
+using SharpVideo.Rtp;
 
 namespace SharpVideo.RtpPlayerDemo;
 

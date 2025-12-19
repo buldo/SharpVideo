@@ -1,7 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.Logging;
 
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 public class Receiver
 {

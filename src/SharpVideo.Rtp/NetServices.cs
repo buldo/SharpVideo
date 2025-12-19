@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 /// <summary>
 /// Helper class to provide network services.

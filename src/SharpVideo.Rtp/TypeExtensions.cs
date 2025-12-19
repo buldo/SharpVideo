@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 internal static class TypeExtensions
 {

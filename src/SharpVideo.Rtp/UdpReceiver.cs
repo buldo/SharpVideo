@@ -3,7 +3,7 @@ using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 internal delegate void PacketReceivedDelegate(UdpReceiver receiver, int localPort, IPEndPoint remoteEndPoint, byte[] packet);
 

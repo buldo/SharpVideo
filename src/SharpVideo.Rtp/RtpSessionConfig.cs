@@ -1,6 +1,6 @@
 using System.Net;
 
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 internal sealed class RtpSessionConfig
 {

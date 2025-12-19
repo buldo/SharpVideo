@@ -1,4 +1,4 @@
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 /// <summary>
 /// Representation of the VP8 RTP header as specified in RFC7741

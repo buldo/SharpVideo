@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 internal class Crypto
 {

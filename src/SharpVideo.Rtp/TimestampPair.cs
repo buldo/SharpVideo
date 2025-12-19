@@ -1,4 +1,4 @@
-namespace SharpVideo.RtpPlayerDemo.Rtp;
+namespace SharpVideo.Rtp;
 
 internal class TimestampPair
 {
