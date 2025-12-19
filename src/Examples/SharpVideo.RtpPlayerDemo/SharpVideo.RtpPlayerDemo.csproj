@@ -10,14 +10,15 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Project references -->
     <ProjectReference Include="../../SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
     <ProjectReference Include="../../SharpVideo/SharpVideo.csproj" />
+    <ProjectReference Include="..\..\SharpVideo.Rtp\SharpVideo.Rtp.csproj" />
     <ProjectReference Include="..\..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
     <ProjectReference Include="..\..\SharpVideo.ImGui\SharpVideo.ImGui.csproj" />
     <ProjectReference Include="..\SharpVideo.V4L2Decoding\SharpVideo.V4L2Decoding.csproj" />
-    
-    <!-- NuGet packages -->
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />

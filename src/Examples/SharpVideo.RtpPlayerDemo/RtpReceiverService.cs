@@ -9,7 +9,6 @@ namespace SharpVideo.RtpPlayerDemo;
 /// <summary>
 /// Service wrapper for RTP receiver that provides H.264 NAL units to decoder
 /// </summary>
-[SupportedOSPlatform("linux")]
 public class RtpReceiverService : IDisposable
 {
     private readonly Receiver _receiver;
