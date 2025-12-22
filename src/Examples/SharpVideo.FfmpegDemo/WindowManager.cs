@@ -116,16 +116,16 @@ internal unsafe class WindowManager : IDisposable
             while (!_disposed)
             {
                 _logger.LogTrace("Waiting for decoded frame #{Count}", frameCount + 1);
-                
+
                 // Wait for a decoded frame from the decoder
                 var decodedFrame = _decoder.WaitForDecodedFrames();
-                
+
                 _logger.LogTrace("Received decoded frame #{Count}", frameCount + 1);
 
                 if (decodedFrame is FfmpegDecodedFrame ffmpegFrame)
                 {
                     FfmpegDecodedFrame? frameToReturn = null;
-                    
+
                     lock (_frameLock)
                     {
                         if (_currentFrame != null)
@@ -136,14 +136,14 @@ internal unsafe class WindowManager : IDisposable
                         _currentFrame = ffmpegFrame;
                         _logger.LogTrace("Frame #{Count} ready for rendering", frameCount + 1);
                     }
-                    
+
                     // Return old frame if we had one
                     if (frameToReturn != null)
                     {
                         _logger.LogTrace("Returning overwritten frame to decoder");
                         _decoder.ReuseDecodedFrame(frameToReturn);
                     }
-                    
+
                     frameCount++;
 
                     if (frameCount % 30 == 0)
@@ -182,7 +182,7 @@ internal unsafe class WindowManager : IDisposable
             {
                 _logger.LogTrace("Uploading frame to OpenGL");
                 _glRenderer.UploadFrame(_currentFrame);
-                
+
                 // Save frame info for statistics
                 var frame = _currentFrame.Frame;
                 _lastFrameWidth = frame->width;
@@ -190,7 +190,7 @@ internal unsafe class WindowManager : IDisposable
                 _lastFrameFormat = frame->format;
                 _lastFramePts = frame->pts;
                 _lastFrameIsKey = (frame->flags & FFmpeg.AutoGen.ffmpeg.AV_FRAME_FLAG_KEY) != 0;
-                
+
                 frameToReturn = _currentFrame;
                 _currentFrame = null;
                 _logger.LogTrace("Frame marked for return to decoder");

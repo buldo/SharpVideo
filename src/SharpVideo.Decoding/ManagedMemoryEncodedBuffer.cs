@@ -12,6 +12,10 @@ public class ManagedMemoryEncodedBuffer : UniversalEncodedBuffer
         _buffer = GC.AllocateArray<byte>(size, true);
     }
 
+    /// <summary>
+    /// Only 3 or 4 start codes supported.
+    /// We not check data
+    /// </summary>
     public void CopyFromSpan(ReadOnlySpan<byte> nalu)
     {
         ReadOnlySpan<byte> expected = stackalloc byte[] { 0x00, 0x00, 0x00, 0x01 };
