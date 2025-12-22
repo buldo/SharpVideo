@@ -1,6 +1,6 @@
 namespace SharpVideo.Rtp;
 
-internal enum RTPHeaderExtensionType
+public enum RTPHeaderExtensionType
 {
     OneByte,
     TwoByte

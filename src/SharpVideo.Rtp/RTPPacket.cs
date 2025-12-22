@@ -1,6 +1,6 @@
 namespace SharpVideo.Rtp;
 
-internal class RTPPacket
+public class RTPPacket
 {
     public RTPHeader Header;
     public byte[] Payload;

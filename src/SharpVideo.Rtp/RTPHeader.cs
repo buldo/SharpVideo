@@ -1,6 +1,6 @@
 namespace SharpVideo.Rtp;
 
-internal class RTPHeader
+public class RTPHeader
 {
     public const int MIN_HEADER_LEN = 12;
 

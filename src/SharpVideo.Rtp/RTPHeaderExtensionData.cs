@@ -1,6 +1,6 @@
 namespace SharpVideo.Rtp;
 
-internal class RTPHeaderExtensionData
+public class RTPHeaderExtensionData
 {
     public RTPHeaderExtensionData(int id, byte[] data, RTPHeaderExtensionType type)
     {

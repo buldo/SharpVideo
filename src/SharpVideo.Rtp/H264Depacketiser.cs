@@ -1,6 +1,6 @@
 namespace SharpVideo.Rtp;
 
-internal class H264Depacketiser
+public class H264Depacketiser
 {
     const int SPS = 7;
     const int PPS = 8;

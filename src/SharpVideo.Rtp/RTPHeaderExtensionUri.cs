@@ -1,6 +1,6 @@
 namespace SharpVideo.Rtp;
 
-internal class RTPHeaderExtensionUri
+public class RTPHeaderExtensionUri
 {
     public enum Type
     {
