@@ -2,8 +2,6 @@
 
 using Microsoft.Extensions.Logging;
 
-using static System.Runtime.InteropServices.JavaScript.JSType;
-
 namespace SharpVideo.FfmpegBin;
 
 public static class FfmpegLoader

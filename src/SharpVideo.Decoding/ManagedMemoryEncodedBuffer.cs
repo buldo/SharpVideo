@@ -12,6 +12,20 @@ public class ManagedMemoryEncodedBuffer : UniversalEncodedBuffer
         _buffer = GC.AllocateArray<byte>(size, true);
     }
 
+    public void CopyFromSpan(ReadOnlySpan<byte> nalu)
+    {
+        ReadOnlySpan<byte> expected = stackalloc byte[] { 0x00, 0x00, 0x00, 0x01 };
+        var start = 3;
+        if (nalu.Slice(0, 4).SequenceEqual(expected))
+        {
+            start = 4;
+        }
+
+        nalu.CopyTo(_buffer);
+        _nowUsed = nalu.Length;
+        NaluPayloadStart = start;
+    }
+
     public void CopyFromNalu(H264Nalu nalu)
     {
         nalu.Data.CopyTo(_buffer);
