@@ -14,19 +14,20 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
     private bool _disposed;
     private readonly FfmpegFramesStorage _framesStorage;
     private readonly BlockingCollection<FfmpegDecodedFrame> _unusedFrames = new();
-    private readonly FfmpegH264FramesAggregator _framesAggregator = new();
-    private readonly ManagedMemoryEncodedBuffer _packetBuffer;
+    private FfmpegH264Parser? _parser;
 
     private FfmpegH264Decoder(
         AVCodec* codec,
         AVCodecContext* codecContext,
         AVPacket* packet,
+        FfmpegH264Parser parser,
         ILogger<FfmpegH264Decoder> logger)
         : base(logger)
     {
         _codec = codec;
         _codecContext = codecContext;
         _packet = packet;
+        _parser = parser;
         _logger = logger;
 
         // Preallocate some buffers for encoded data
@@ -36,8 +37,6 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
             var buf = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
             AddEncodedBufferToReuse(buf);
         }
-
-        _packetBuffer = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
 
         // Preallocate some buffers for decoded data
         var framesCount = 3;
@@ -90,7 +89,9 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
 
         logger.LogInformation("Packet allocated");
 
-        return new FfmpegH264Decoder(codec, codecContext, packet, logger);
+        var parser = new FfmpegH264Parser(AVCodecID.AV_CODEC_ID_H264, logger);
+
+        return new FfmpegH264Decoder(codec, codecContext, packet, parser, logger);
     }
 
     public override void ReuseDecodedFrame(UniversalDecodedFrame decodedFrame)
@@ -109,45 +110,54 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
 
         if (_codecContext == null ||
             _packet == null ||
+            _parser == null ||
             memoryBuffer == null)
         {
             return;
         }
 
-        var isReady = _framesAggregator.AddBuffer(memoryBuffer);
-        if (!isReady)
+        var parseResult = _parser.Parse(memoryBuffer, _codecContext);
+        if (parseResult == null)
         {
+            // Parser hasn't accumulated enough data yet
             return;
         }
 
-        var buffersToUse = _framesAggregator.Drain();
-        _packetBuffer.AggregateInCurrent(buffersToUse);
-        foreach (var buffer in buffersToUse)
+        // If parser returned error or empty packet, return buffers to reuse
+        if (parseResult.Data == null || parseResult.Size == 0)
         {
-            AddEncodedBufferToReuse(buffer);
+            foreach (var buffer in parseResult.Buffers)
+            {
+                AddEncodedBufferToReuse(buffer);
+            }
+            return;
         }
 
-        var dataSpan = _packetBuffer.Get();
-        fixed (byte* dataPtr = dataSpan)
-        {
-            _packet->data = dataPtr;
-            _packet->size = dataSpan.Length;
+        // Send packet to decoder
+        _packet->data = parseResult.Data;
+        _packet->size = parseResult.Size;
 
-            // Send packet to decoder
-            var ret = ffmpeg.avcodec_send_packet(_codecContext, _packet);
-            if (ret < 0)
-            {
-                _logger.LogError("Error sending packet: {Error}", GetErrorString(ret));
-                return;
-            }
+        var ret = ffmpeg.avcodec_send_packet(_codecContext, _packet);
+        if (ret < 0)
+        {
+            _logger.LogError("Error sending packet: {Error}", GetErrorString(ret));
+        }
+        else
+        {
             _logger.LogTrace("Packet sent");
+        }
+
+        // Return buffers to reuse after packet has been sent
+        foreach (var buffer in parseResult.Buffers)
+        {
+            AddEncodedBufferToReuse(buffer);
         }
 
         // Receive frames from decoder
         while (true)
         {
             var frameWrapper = _unusedFrames.Take();
-            var ret = ffmpeg.avcodec_receive_frame(_codecContext, frameWrapper.Frame);
+            ret = ffmpeg.avcodec_receive_frame(_codecContext, frameWrapper.Frame);
             if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
             {
                 // No data. Frame can be reused
@@ -234,6 +244,9 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
 
     private void CleanupNativeResources()
     {
+        _parser?.Dispose();
+        _parser = null;
+
         foreach (var wrapper in _framesStorage.GetAllWrappers())
         {
             var frame = wrapper.Frame;
