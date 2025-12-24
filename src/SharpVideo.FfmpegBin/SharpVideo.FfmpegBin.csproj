@@ -17,6 +17,12 @@
       <PackagePath>runtimes/win-x64/native</PackagePath>
       <Pack>true</Pack>
     </None>
+    <None Include="native\linux-x64\*.so.*">
+      <Link>runtimes\linux-x64\native\%(RecursiveDir)%(Filename)%(Extension)</Link>
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+        <PackagePath>runtimes/linux-x64/native</PackagePath>
+        <Pack>true</Pack>
+    </None>  
   </ItemGroup>
 
 </Project>
