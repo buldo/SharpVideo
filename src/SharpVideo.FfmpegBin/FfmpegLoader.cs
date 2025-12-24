@@ -103,7 +103,18 @@ public static class FfmpegLoader
     [SupportedOSPlatform("linux")]
     private static string? LoadLinux(ILogger logger)
     {
-        return null;
+        var ffmpegPath = Path.Combine(
+            AppDomain.CurrentDomain.BaseDirectory,
+            "runtimes",
+            "linux-x64",
+            "native");
+
+        if (!Directory.Exists(ffmpegPath))
+        {
+            throw new Exception($"Expected directory with binaries are not exists: {ffmpegPath}");
+        }
+
+        return ffmpegPath;
     }
 
     private static string? GetLibraryPath(string basePath, string name)
