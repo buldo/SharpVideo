@@ -5,6 +5,7 @@ using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.V4L2;
+using SharpVideo.Utils.Buffers;
 
 namespace SharpVideo.Utils;
 

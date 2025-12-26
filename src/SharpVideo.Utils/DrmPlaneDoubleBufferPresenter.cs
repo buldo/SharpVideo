@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Linux.Native;
+using SharpVideo.Utils.Buffers;
 
 namespace SharpVideo.Utils;
 
