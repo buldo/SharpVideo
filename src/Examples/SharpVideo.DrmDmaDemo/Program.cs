@@ -4,6 +4,7 @@ using SharpVideo.Linux.Native;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.Utils;
+using SharpVideo.Utils.Buffers;
 
 namespace SharpVideo.DrmDmaDemo
 {
@@ -71,8 +72,8 @@ namespace SharpVideo.DrmDmaDemo
 
         private static DmaBuffers.DmaBuffer? CreateAndFillNv12Buffer(DmaBuffersAllocator allocator, int width, int height)
         {
-            ulong nv12BufferSize = (ulong)(width * height * 3.0 / 2.0);
-            var dmaBuf = allocator.Allocate(nv12BufferSize);
+            var bufferParams = BuffersInfoProvider.GetBufferParams((uint)width, (uint)height, KnownPixelFormats.DRM_FORMAT_NV12);
+            var dmaBuf = allocator.Allocate(bufferParams.TotalSize);
             if (dmaBuf == null)
             {
                 Console.WriteLine("Failed to allocate NV12 DMA buffer.");
@@ -309,8 +310,8 @@ namespace SharpVideo.DrmDmaDemo
 
         private static DmaBuffers.DmaBuffer? CreateRgbBuffer(DmaBuffersAllocator allocator, int width, int height)
         {
-            ulong rgbBufferSize = (ulong)(width * height * 4); // XRGB8888 = 4 bytes per pixel
-            var rgbBuf = allocator.Allocate(rgbBufferSize);
+            var bufferParams = BuffersInfoProvider.GetBufferParams((uint)width, (uint)height, KnownPixelFormats.DRM_FORMAT_XRGB8888);
+            var rgbBuf = allocator.Allocate(bufferParams.TotalSize);
             if (rgbBuf == null)
             {
                 Console.WriteLine("Failed to allocate RGB buffer.");
@@ -344,11 +345,27 @@ namespace SharpVideo.DrmDmaDemo
             }
             Console.WriteLine($"Converted RGB DMA FD {rgbBuf.Fd} to handle {rgbHandle}");
 
+            var bufferParams = BuffersInfoProvider.GetBufferParams((uint)width, (uint)height, KnownPixelFormats.DRM_FORMAT_XRGB8888);
             var rgbFormat = KnownPixelFormats.DRM_FORMAT_XRGB8888.Fourcc;
-            uint rgbPitch = (uint)(width * 4);
-            uint* rgbHandles = stackalloc uint[4] { rgbHandle, 0, 0, 0 };
-            uint* rgbPitches = stackalloc uint[4] { rgbPitch, 0, 0, 0 };
-            uint* rgbOffsets = stackalloc uint[4] { 0, 0, 0, 0 };
+
+            uint* rgbHandles = stackalloc uint[4];
+            uint* rgbPitches = stackalloc uint[4];
+            uint* rgbOffsets = stackalloc uint[4];
+
+            for (int i = 0; i < bufferParams.PlanesCount; i++)
+            {
+                var plane = bufferParams.Planes[i];
+                rgbHandles[i] = rgbHandle;
+                rgbPitches[i] = plane.Pitch;
+                rgbOffsets[i] = plane.Offset;
+            }
+
+            for (int i = bufferParams.PlanesCount; i < 4; i++)
+            {
+                rgbHandles[i] = 0;
+                rgbPitches[i] = 0;
+                rgbOffsets[i] = 0;
+            }
 
             var resultFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, rgbFormat,
                                                rgbHandles, rgbPitches, rgbOffsets, out var rgbFbId, 0);
@@ -432,14 +449,27 @@ namespace SharpVideo.DrmDmaDemo
             }
             Console.WriteLine($"Converted NV12 DMA FD {nv12Buffer.Fd} to handle {nv12Handle}");
 
+            var bufferParams = BuffersInfoProvider.GetBufferParams((uint)width, (uint)height, KnownPixelFormats.DRM_FORMAT_NV12);
             var nv12Format = KnownPixelFormats.DRM_FORMAT_NV12.Fourcc;
-            uint yPitch = (uint)width;
-            uint uvPitch = (uint)width;
-            uint yOffset = 0;
-            uint uvOffset = (uint)(width * height);
-            uint* nv12Handles = stackalloc uint[4] { nv12Handle, nv12Handle, 0, 0 };
-            uint* nv12Pitches = stackalloc uint[4] { yPitch, uvPitch, 0, 0 };
-            uint* nv12Offsets = stackalloc uint[4] { yOffset, uvOffset, 0, 0 };
+
+            uint* nv12Handles = stackalloc uint[4];
+            uint* nv12Pitches = stackalloc uint[4];
+            uint* nv12Offsets = stackalloc uint[4];
+
+            for (int i = 0; i < bufferParams.PlanesCount; i++)
+            {
+                var plane = bufferParams.Planes[i];
+                nv12Handles[i] = nv12Handle;
+                nv12Pitches[i] = plane.Pitch;
+                nv12Offsets[i] = plane.Offset;
+            }
+
+            for (int i = bufferParams.PlanesCount; i < 4; i++)
+            {
+                nv12Handles[i] = 0;
+                nv12Pitches[i] = 0;
+                nv12Offsets[i] = 0;
+            }
 
             var resultFb = LibDrm.drmModeAddFB2(drmDevice.DeviceFd, (uint)width, (uint)height, nv12Format,
                                                nv12Handles, nv12Pitches, nv12Offsets, out var nv12FbId, 0);
