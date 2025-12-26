@@ -73,6 +73,10 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
         var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
             drmDevice, resources, width, height, logger);
 
+        // Use actual mode dimensions instead of requested dimensions
+        var actualWidth = mode.HDisplay;
+        var actualHeight = mode.VDisplay;
+
         DrmPlane? overlayPlane = null;
         DrmPlaneLastDmaBufferPresenter? overlayPlanePresenter = null;
 
@@ -88,8 +92,8 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
                 drmDevice,
                 overlayPlane,
                 crtcId,
-                width,
-                height,
+                actualWidth,
+                actualHeight,
                 bufferManager,
                 logger);
         }
@@ -98,8 +102,8 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
             drmDevice,
             primaryPlane,
             crtcId,
-            width,
-            height,
+            actualWidth,
+            actualHeight,
             logger,
             bufferManager,
             primaryPlanePixelFormat,
@@ -138,12 +142,13 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
         var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
             drmDevice, resources, width, height, logger);
 
+        // Use actual mode dimensions instead of requested dimensions
         var primaryPlanePresenter = new DrmPlaneGbmPresenter(
             drmDevice,
             primaryPlane,
             crtcId,
-            width,
-            height,
+            mode.HDisplay,
+            mode.VDisplay,
             logger,
             gbmDevice,
             primaryPlanePixelFormat,
@@ -183,12 +188,13 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
         var (primaryPlane, crtcId, connector, mode) = SetupPrimaryPlane(
             drmDevice, resources, width, height, logger);
 
+        // Use actual mode dimensions instead of requested dimensions
         var primaryPlanePresenter = new DrmPlaneGbmAtomicPresenter(
             drmDevice,
             primaryPlane,
             crtcId,
-            width,
-            height,
+            mode.HDisplay,
+            mode.VDisplay,
             logger,
             gbmDevice,
             primaryPlanePixelFormat,
@@ -240,12 +246,13 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
             drmDevice, resources, width, height, logger);
 
         // Create atomic GBM primary plane presenter
+        // Use actual mode dimensions instead of requested dimensions for correct display
         var primaryPlanePresenter = new DrmPlaneGbmAtomicPresenter(
             drmDevice,
             primaryPlane,
             crtcId,
-            width,
-            height,
+            mode.HDisplay,
+            mode.VDisplay,
             logger,
             gbmDevice,
             primaryPlanePixelFormat,
@@ -261,12 +268,13 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
 
         // IMPORTANT: Disable atomic mode for overlay to avoid dual event loop conflict
         // The GBM atomic presenter already has an event loop thread
+        // Use actual mode dimensions for correct scaling
         var overlayPlanePresenter = new DrmPlaneLastDmaBufferPresenter(
             drmDevice,
             overlayPlane,
             crtcId,
-            width,
-            height,
+            mode.HDisplay,
+            mode.VDisplay,
             bufferManager,
             logger,
             useAtomicMode: false);  // Use legacy SetPlane to avoid event loop conflicts
