@@ -11,8 +11,13 @@ namespace SharpVideo.DrmDmaDemo
     [SupportedOSPlatform("linux")]
     internal class Program
     {
-        private const int Width = 1920;
-        private const int Height = 1080;
+        // Buffer dimensions (720p)
+        private const int BufferWidth = 1280;
+        private const int BufferHeight = 720;
+
+        // Preferred display dimensions (1080p)
+        private const int PreferredDisplayWidth = 1920;
+        private const int PreferredDisplayHeight = 1080;
 
         private static readonly ILoggerFactory LoggerFactory = Microsoft.Extensions.Logging.LoggerFactory
             .Create(builder => builder.AddConsole()
@@ -43,7 +48,7 @@ namespace SharpVideo.DrmDmaDemo
                 return;
             }
 
-            var nv12Buffer = CreateAndFillNv12Buffer(allocator, Width, Height);
+            var nv12Buffer = CreateAndFillNv12Buffer(allocator, BufferWidth, BufferHeight);
             if (nv12Buffer == null)
             {
                 return;
@@ -51,7 +56,7 @@ namespace SharpVideo.DrmDmaDemo
 
             try
             {
-                if (PresentNv12Buffer(drmDevice, nv12Buffer, Width, Height, allocator))
+                if (PresentNv12Buffer(drmDevice, nv12Buffer, BufferWidth, BufferHeight, allocator))
                 {
                     Console.WriteLine("Successfully presented buffer on display.");
                     Console.WriteLine("Displaying pattern for 10 seconds...");
@@ -139,7 +144,7 @@ namespace SharpVideo.DrmDmaDemo
             return connector;
         }
 
-        private static DrmModeInfo? FindDisplayMode(DrmConnector connector, int width, int height)
+        private static DrmModeInfo? FindDisplayMode(DrmConnector connector, int preferredWidth, int preferredHeight)
         {
             Console.WriteLine($"Available modes ({connector.Modes.Count}):");
             foreach (var m in connector.Modes)
@@ -147,26 +152,35 @@ namespace SharpVideo.DrmDmaDemo
                 Console.WriteLine($"  {m.Name}: {m.HDisplay}x{m.VDisplay}@{m.VRefresh}Hz, Type: {m.Type}");
             }
 
-            // Try to find mode with specific refresh rate first
-            var mode = connector.Modes.FirstOrDefault(m => m.HDisplay == width && m.VDisplay == height && m.VRefresh == 60);
-            if (mode == null)
+            // Try to find preferred resolution with maximum refresh rate
+            var preferredModes = connector.Modes
+                .Where(m => m.HDisplay == preferredWidth && m.VDisplay == preferredHeight)
+                .OrderByDescending(m => m.VRefresh)
+                .ToList();
+
+            if (preferredModes.Count > 0)
             {
-                Console.WriteLine($"{width}x{height}@60Hz mode not found! Looking for any {width}x{height} mode...");
-                var matchingModes = connector.Modes.Where(m => m.HDisplay == width && m.VDisplay == height);
-                foreach (var m in matchingModes)
-                {
-                    Console.WriteLine($"  {m.Name}: {m.HDisplay}x{m.VDisplay}@{m.VRefresh}Hz");
-                }
-                mode = matchingModes.FirstOrDefault();
-                if (mode == null)
-                {
-                    Console.WriteLine($"No {width}x{height} mode found at all!");
-                    return null;
-                }
+                var mode = preferredModes.First();
+                Console.WriteLine($"Using preferred mode: {mode.Name} ({mode.HDisplay}x{mode.VDisplay}@{mode.VRefresh}Hz)");
+                return mode;
             }
 
-            Console.WriteLine($"Using mode: {mode.Name} ({mode.HDisplay}x{mode.VDisplay}@{mode.VRefresh}Hz)");
-            return mode;
+            Console.WriteLine($"{preferredWidth}x{preferredHeight} mode not found! Selecting mode with highest refresh rate...");
+
+            // Find mode with maximum refresh rate, then highest resolution
+            var bestMode = connector.Modes
+                .OrderByDescending(m => m.VRefresh)
+                .ThenByDescending(m => (long)m.HDisplay * m.VDisplay)
+                .FirstOrDefault();
+
+            if (bestMode == null)
+            {
+                Console.WriteLine("No display modes available!");
+                return null;
+            }
+
+            Console.WriteLine($"Using mode: {bestMode.Name} ({bestMode.HDisplay}x{bestMode.VDisplay}@{bestMode.VRefresh}Hz)");
+            return bestMode;
         }
 
         private static uint FindCrtc(DrmConnector connector, DrmDeviceResources resources)
@@ -426,11 +440,12 @@ namespace SharpVideo.DrmDmaDemo
             return nativeMode;
         }
 
-        private static unsafe bool SetPlane(int drmFd, uint planeId, uint crtcId, uint fbId, int width, int height)
+        private static unsafe bool SetPlane(int drmFd, uint planeId, uint crtcId, uint fbId, int srcWidth, int srcHeight, int dstWidth, int dstHeight)
         {
+            // Source coordinates are in 16.16 fixed point format
             var result = LibDrm.drmModeSetPlane(drmFd, planeId, crtcId, fbId, 0,
-                                               0, 0, (uint)width, (uint)height,
-                                               0, 0, (uint)width << 16, (uint)height << 16);
+                                               0, 0, (uint)dstWidth, (uint)dstHeight,
+                                               0, 0, (uint)srcWidth << 16, (uint)srcHeight << 16);
             if (result != 0)
             {
                 Console.WriteLine($"Failed to set plane {planeId}: {result}");
@@ -483,7 +498,7 @@ namespace SharpVideo.DrmDmaDemo
             return nv12FbId;
         }
 
-        private static bool PresentNv12Buffer(DrmDevice drmDevice, DmaBuffers.DmaBuffer nv12Buffer, int width, int height, DmaBuffersAllocator allocator)
+        private static bool PresentNv12Buffer(DrmDevice drmDevice, DmaBuffers.DmaBuffer nv12Buffer, int bufferWidth, int bufferHeight, DmaBuffersAllocator allocator)
         {
             var resources = drmDevice.GetResources();
             if (resources == null)
@@ -498,7 +513,7 @@ namespace SharpVideo.DrmDmaDemo
                 return false;
             }
 
-            var mode = FindDisplayMode(connector, width, height);
+            var mode = FindDisplayMode(connector, PreferredDisplayWidth, PreferredDisplayHeight);
             if (mode == null)
             {
                 return false;
@@ -533,7 +548,10 @@ namespace SharpVideo.DrmDmaDemo
             }
             Console.WriteLine($"Found NV12-capable overlay plane: ID {nv12Plane.Id}");
 
-            return SetupDisplay(drmDevice, connector, mode, crtcId, primaryPlane, nv12Plane, nv12Buffer, width, height, allocator);
+            int displayWidth = mode.HDisplay;
+            int displayHeight = mode.VDisplay;
+
+            return SetupDisplay(drmDevice, connector, mode, crtcId, primaryPlane, nv12Plane, nv12Buffer, bufferWidth, bufferHeight, displayWidth, displayHeight, allocator);
         }
 
         private static unsafe bool SetupDisplay(
@@ -544,25 +562,27 @@ namespace SharpVideo.DrmDmaDemo
             DrmPlane primaryPlane,
             DrmPlane nv12Plane,
             DmaBuffers.DmaBuffer nv12Buffer,
-            int width,
-            int height,
+            int bufferWidth,
+            int bufferHeight,
+            int displayWidth,
+            int displayHeight,
             DmaBuffersAllocator allocator)
         {
             Console.WriteLine("=== Step 1: Setting up RGB buffer for mode setting ===");
-            var rgbBuf = CreateRgbBuffer(allocator, width, height);
+            var rgbBuf = CreateRgbBuffer(allocator, displayWidth, displayHeight);
             if (rgbBuf == null)
             {
                 return false;
             }
 
-            var (rgbFbId, rgbHandle) = CreateRgbFramebuffer(drmDevice, rgbBuf, width, height);
+            var (rgbFbId, rgbHandle) = CreateRgbFramebuffer(drmDevice, rgbBuf, displayWidth, displayHeight);
             if (rgbFbId == 0)
             {
                 rgbBuf.Dispose();
                 return false;
             }
 
-            Console.WriteLine($"=== Step 2: Setting CRTC to {width}x{height} mode ===");
+            Console.WriteLine($"=== Step 2: Setting CRTC to {displayWidth}x{displayHeight} mode ===");
             if (!SetCrtcMode(drmDevice, crtcId, connector.ConnectorId, rgbFbId, mode))
             {
                 LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
@@ -571,7 +591,7 @@ namespace SharpVideo.DrmDmaDemo
             }
 
             Console.WriteLine($"=== Step 3: Setting primary plane with RGB buffer ===");
-            if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, width, height))
+            if (!SetPlane(drmDevice.DeviceFd, primaryPlane.Id, crtcId, rgbFbId, displayWidth, displayHeight, displayWidth, displayHeight))
             {
                 LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
                 rgbBuf.Dispose();
@@ -579,8 +599,8 @@ namespace SharpVideo.DrmDmaDemo
             }
             Console.WriteLine("Successfully set primary plane with RGB framebuffer");
 
-            Console.WriteLine($"=== Step 4: Setting up NV12 overlay ===");
-            var nv12FbId = CreateNv12Framebuffer(drmDevice, nv12Buffer, width, height);
+            Console.WriteLine($"=== Step 4: Setting up NV12 overlay (buffer {bufferWidth}x{bufferHeight} scaled to {displayWidth}x{displayHeight}) ===");
+            var nv12FbId = CreateNv12Framebuffer(drmDevice, nv12Buffer, bufferWidth, bufferHeight);
             if (nv12FbId == 0)
             {
                 LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
@@ -588,7 +608,7 @@ namespace SharpVideo.DrmDmaDemo
                 return false;
             }
 
-            if (!SetPlane(drmDevice.DeviceFd, nv12Plane.Id, crtcId, nv12FbId, width, height))
+            if (!SetPlane(drmDevice.DeviceFd, nv12Plane.Id, crtcId, nv12FbId, bufferWidth, bufferHeight, displayWidth, displayHeight))
             {
                 LibDrm.drmModeRmFB(drmDevice.DeviceFd, nv12FbId);
                 LibDrm.drmModeRmFB(drmDevice.DeviceFd, rgbFbId);
@@ -598,8 +618,8 @@ namespace SharpVideo.DrmDmaDemo
 
             Console.WriteLine("Successfully set NV12 overlay plane!");
             Console.WriteLine("=== Display Setup Complete ===");
-            Console.WriteLine($"  Primary plane (ID {primaryPlane.Id}): RGB framebuffer at {width}x{height}");
-            Console.WriteLine($"  Overlay plane (ID {nv12Plane.Id}): NV12 content covering full screen");
+            Console.WriteLine($"  Primary plane (ID {primaryPlane.Id}): RGB framebuffer at {displayWidth}x{displayHeight}");
+            Console.WriteLine($"  Overlay plane (ID {nv12Plane.Id}): NV12 content {bufferWidth}x{bufferHeight} scaled to {displayWidth}x{displayHeight}");
 
             rgbBuf.UnmapBuffer();
             return true;
