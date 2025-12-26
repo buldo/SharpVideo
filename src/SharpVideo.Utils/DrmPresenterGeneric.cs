@@ -313,19 +313,48 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
 
         logger.LogInformation("Found connected display: {Type}", connector.ConnectorType);
 
-        var mode = connector.Modes.FirstOrDefault(m => m.HDisplay == width && m.VDisplay == height);
-        if (mode == null)
+        // Log available modes
+        logger.LogInformation("Available display modes ({Count}):", connector.Modes.Count);
+        foreach (var m in connector.Modes)
         {
-            logger.LogError(
-                "No {Width}x{Height} display mode found on device FD {DeviceFd}. Available modes: {Modes}",
-                width, height, drmDevice.DeviceFd,
-                string.Join(", ", connector.Modes.Select(m => $"{m.HDisplay}x{m.VDisplay}@{m.VRefresh}Hz")));
-            
-            throw new DrmModeNotFoundException(width, height, drmDevice.DeviceFd);
+            logger.LogDebug("  {Name}: {Width}x{Height}@{RefreshRate}Hz, Type: {Type}",
+                m.Name, m.HDisplay, m.VDisplay, m.VRefresh, m.Type);
         }
 
-        logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{RefreshRate}Hz)",
-            mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
+        // Try to find preferred resolution with maximum refresh rate
+        var preferredModes = connector.Modes
+            .Where(m => m.HDisplay == width && m.VDisplay == height)
+            .OrderByDescending(m => m.VRefresh)
+            .ToList();
+
+        DrmModeInfo? mode;
+        if (preferredModes.Count > 0)
+        {
+            mode = preferredModes.First();
+            logger.LogInformation("Using preferred mode: {Name} ({Width}x{Height}@{RefreshRate}Hz)",
+                mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
+        }
+        else
+        {
+            logger.LogWarning(
+                "{Width}x{Height} mode not found! Selecting best available mode...",
+                width, height);
+
+            // Find mode with maximum refresh rate, then highest resolution
+            mode = connector.Modes
+                .OrderByDescending(m => m.VRefresh)
+                .ThenByDescending(m => (long)m.HDisplay * m.VDisplay)
+                .FirstOrDefault();
+
+            if (mode == null)
+            {
+                logger.LogError("No display modes available on device FD {DeviceFd}", drmDevice.DeviceFd);
+                throw new DrmModeNotFoundException(width, height, drmDevice.DeviceFd);
+            }
+
+            logger.LogInformation("Using fallback mode: {Name} ({Width}x{Height}@{RefreshRate}Hz)",
+                mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
+        }
 
         var encoder = connector.Encoder ?? connector.Encoders.FirstOrDefault();
         if (encoder == null)

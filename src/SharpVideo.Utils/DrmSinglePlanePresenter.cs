@@ -32,6 +32,16 @@ public abstract class DrmSinglePlanePresenter
         _logger = logger;
     }
 
+    /// <summary>
+    /// Gets the display width in pixels.
+    /// </summary>
+    public uint Width => _width;
+
+    /// <summary>
+    /// Gets the display height in pixels.
+    /// </summary>
+    public uint Height => _height;
+
     public virtual void Cleanup()
     {
     }
