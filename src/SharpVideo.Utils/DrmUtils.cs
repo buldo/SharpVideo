@@ -11,31 +11,53 @@ namespace SharpVideo.Utils;
 public static class DrmUtils
 {
     /// <summary>
-    /// Opens the first available DRM device from /dev/dri/card*.
+    /// Opens the first available DRM device that has a connected display.
     /// </summary>
-    /// <returns>Opened DRM device or null if no devices available.</returns>
+    /// <returns>Opened DRM device with connected display.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when no DRM device with connected display is found.</exception>
     public static DrmDevice OpenDrmDevice(ILogger logger)
     {
         var devices = Directory.EnumerateFiles("/dev/dri", "card*", SearchOption.TopDirectoryOnly);
         foreach (var device in devices)
         {
+            DrmDevice? drmDevice = null;
             try
             {
-                var drmDevice = DrmDevice.Open(device);
-                if (drmDevice != null)
+                drmDevice = DrmDevice.Open(device);
+                if (drmDevice == null)
                 {
-                    logger.LogInformation("Opened DRM device: {Device}", device);
+                    logger.LogDebug("Failed to open DRM device: {Device}", device);
+                    continue;
+                }
+
+                var resources = drmDevice.GetResources();
+                if (resources == null)
+                {
+                    logger.LogDebug("Failed to get resources for DRM device: {Device}", device);
+                    drmDevice.Dispose();
+                    continue;
+                }
+
+                var hasConnectedDisplay = resources.Connectors
+                    .Any(c => c.Connection == DrmModeConnection.Connected);
+
+                if (hasConnectedDisplay)
+                {
+                    logger.LogInformation("Opened DRM device with connected display: {Device}", device);
                     return drmDevice;
                 }
-                logger.LogWarning("Failed to open DRM device: {Device}", device);
+
+                logger.LogDebug("DRM device {Device} has no connected display, skipping", device);
+                drmDevice.Dispose();
             }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Exception while opening DRM device: {Device}", device);
+                drmDevice?.Dispose();
             }
         }
 
-        throw new Exception("Failed to open any DRM device");
+        throw new InvalidOperationException("Failed to find any DRM device with connected display");
     }
 
     public static List<DrmClientCapability> EnableDrmCapabilities(this DrmDevice drmDevice, ILogger logger)
