@@ -21,18 +21,8 @@ public static class FfmpegLoader
         "avdevice"
     ];
 
-    private static readonly string[] _linuxProbeDirs =
-    [
-        "/usr/lib/x86_64-linux-gnu"
-    ];
-
     private static readonly string _libExtension = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "dll" : "so";
     private static readonly string _libPrefix = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "" : "lib";
-
-    static FfmpegLoader()
-    {
-        var currentPlatform = RuntimeInformation.OSArchitecture;
-    }
 
     public static string? Load(ILogger logger)
     {
