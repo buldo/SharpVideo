@@ -88,7 +88,7 @@ public class DrmBufferManager : IDisposable
     {
         var bufInfo = BuffersInfoProvider.GetBufferParams(width, height, pixelFormat);
 
-        var buffer = _allocator.Allocate(bufInfo.FullSize);
+        var buffer = _allocator.Allocate(bufInfo.TotalSize);
         if (buffer == null)
         {
             throw new Exception("Failed to allocate buffer");
@@ -130,9 +130,10 @@ public class DrmBufferManager : IDisposable
         // Configure handles, pitches and offsets based on plane count
         for (int i = 0; i < bufferParams.PlanesCount; i++)
         {
+            var plane = bufferParams.Planes[i];
             handles[i] = handle; // Same handle for all planes in contiguous buffer
-            pitches[i] = buffer.Stride > 0 ? buffer.Stride : bufferParams.Stride;
-            offsets[i] = (uint)bufferParams.PlaneOffsets[i];
+            pitches[i] = buffer.Stride > 0 ? buffer.Stride : plane.Pitch;
+            offsets[i] = plane.Offset;
         }
 
         // Fill remaining slots with zeros
