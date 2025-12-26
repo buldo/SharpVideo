@@ -1,5 +1,6 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
+using SharpVideo.Drm;
 
 namespace SharpVideo.Decoding;
 
@@ -159,6 +160,12 @@ public abstract class BaseDecoder : IDisposable
     {
         _decodedFramesOutput.Add(decodedFrame);
     }
+
+    /// <summary>
+    /// Gets the pixel format of decoded frames output by this decoder.
+    /// This is known at construction time and does not change.
+    /// </summary>
+    public abstract PixelFormat OutputPixelFormat { get; }
 
     protected virtual void Dispose(bool disposing)
     {

@@ -1,6 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
+using SharpVideo.Drm;
 
 namespace SharpVideo.Decoding.Ffmpeg;
 
@@ -216,6 +217,11 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
 
         _logger.LogInformation("Flushed {FlushedFrames} remaining frame(s)", flushedFrames);
     }
+
+    /// <summary>
+    /// FFmpeg software H.264 decoder always outputs YUV420P format.
+    /// </summary>
+    public override PixelFormat OutputPixelFormat => KnownPixelFormats.DRM_FORMAT_YUV420;
 
     private static string GetErrorString(int errorCode)
     {
