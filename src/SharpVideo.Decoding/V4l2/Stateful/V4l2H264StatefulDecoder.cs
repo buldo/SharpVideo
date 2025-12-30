@@ -49,6 +49,13 @@ public class V4l2H264StatefulDecoder : BaseDecoder
         _configuration = configuration;
         _drmBufferManager = drmBufferManager;
         _outputPixelFormat = configuration.GetPixelFormat();
+
+        // Preallocate buffers for encoded data
+        for (int i = 0; i < 3; i++)
+        {
+            var buf = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
+            AddEncodedBufferToReuse(buf);
+        }
     }
 
     /// <summary>

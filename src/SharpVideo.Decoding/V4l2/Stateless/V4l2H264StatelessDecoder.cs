@@ -62,6 +62,13 @@ public class V4l2H264StatelessDecoder : BaseDecoder
 
         // Will be set after device is opened
         _supportsSliceParamsControl = false;
+
+        // Preallocate buffers for encoded data
+        for (int i = 0; i < 3; i++)
+        {
+            var buf = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
+            AddEncodedBufferToReuse(buf);
+        }
     }
 
     /// <summary>
