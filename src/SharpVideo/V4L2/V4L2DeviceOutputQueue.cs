@@ -34,13 +34,13 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
  _associatedMediaRequests = new MediaRequest[BuffersPool.Buffers.Count];
   }
 
-    public void WriteBufferAndEnqueue(ReadOnlySpan<byte> data, MediaRequest? request = null)
+    public void WriteBufferAndEnqueue(ReadOnlySpan<byte> data, MediaRequest? request = null, TimeVal? timestamp = null)
     {
         EnsureInitialised();
- var buffer = BuffersPool.AcquireBuffer();
+        var buffer = BuffersPool.AcquireBuffer();
         buffer.CopyDataToPlane(data, 0);
         _associatedMediaRequests[buffer.Index] = request;
-   Enqueue(buffer, request);
+        Enqueue(buffer, request, timestamp);
     }
 
     public void ReclaimProcessed()

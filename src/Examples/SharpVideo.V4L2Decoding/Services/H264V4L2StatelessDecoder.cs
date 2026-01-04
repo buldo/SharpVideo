@@ -487,15 +487,9 @@ public class H264V4L2StatelessDecoder
         }
 
         var sliceType = (uint)(header.slice_type % 5);
-        switch (sliceType)
+        if (sliceType == 0 || sliceType == 3) // P or SP slice
         {
-            case 0: // P slice
-            case 3: // SP slice
-                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
-                break;
-            case 1: // B slice
-                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BFRAME;
-                break;
+            flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
         }
 
         return flags;

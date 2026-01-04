@@ -255,6 +255,7 @@ public class SpsDataState
         UInt32 nextScale = 8;
         for (UInt32 j = 0; j < sizeOfScalingList; j++)
         {
+            int index = (int)(i * sizeOfScalingList + j);
             if (nextScale != 0)
             {
                 // delta_scale  se(v)
@@ -262,7 +263,7 @@ public class SpsDataState
                 {
                     return false;
                 }
-                nextScale = (uint)((lastScale + (delta_scale) + 256) % 256);
+                nextScale = (uint)((lastScale + (uint)(delta_scale) + 256) % 256);
                 // make sure vector has ith element
                 while (useDefaultScalingMatrixFlag.Count <= i)
                 {
@@ -272,12 +273,12 @@ public class SpsDataState
                 useDefaultScalingMatrixFlag[(int)i] = (uint)((j == 0 && nextScale == 0) ? 1 : 0);
             }
             // make sure vector has jth element
-            while (scalingList.Count <= j)
+            while (scalingList.Count <= index)
             {
                 scalingList.Add(0);
             }
-            scalingList[(int)j] = (nextScale == 0) ? lastScale : nextScale;
-            lastScale = scalingList[(int)j];
+            scalingList[index] = (nextScale == 0) ? lastScale : nextScale;
+            lastScale = scalingList[index];
         }
         return true;
     }

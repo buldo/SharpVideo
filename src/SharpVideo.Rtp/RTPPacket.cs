@@ -5,11 +5,15 @@ public class RTPPacket
     public RTPHeader Header;
     public byte[] Payload;
 
-    public RTPPacket(byte[] packet)
+    public RTPPacket(byte[] packet) : this(packet.AsSpan())
+    {
+    }
+
+    public RTPPacket(ReadOnlySpan<byte> packet)
     {
         Header = new RTPHeader(packet);
         Payload = new byte[Header.PayloadSize];
-        Array.Copy(packet, Header.Length, Payload, 0, Payload.Length);
+        packet.Slice(Header.Length, Header.PayloadSize).CopyTo(Payload);
     }
 
     public byte[] GetBytes()

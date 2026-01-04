@@ -34,7 +34,7 @@ public class V4L2DeviceQueue
 
     public V4L2DmaBufBufferPool DmaBufBuffersPool => _isInitialized && _dmaBufBuffersPool != null ? _dmaBufBuffersPool! : throw new Exception("Not initialised or not using DMABUF");
 
-    internal void Enqueue(V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null)
+    internal void Enqueue(V4L2MMapMPlaneBuffer mappedBuffer, MediaRequest? request = null, TimeVal? timestamp = null)
     {
         EnsureInitialised();
 
@@ -69,7 +69,7 @@ public class V4L2DeviceQueue
                 Field = (uint)V4L2Field.NONE,
                 Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
                 BytesUsed = 0,
-                Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                Timestamp = timestamp ?? new TimeVal { TvSec = 0, TvUsec = 0 },
                 Sequence = 0,
                 RequestFd = request?.Fd ?? 0,
                 Planes = planeStorage
@@ -87,7 +87,7 @@ public class V4L2DeviceQueue
     /// <summary>
     /// Enqueues a DMABUF buffer to the queue.
     /// </summary>
-    internal void EnqueueDmaBuf(V4L2DmaBufMPlaneBuffer dmaBufBuffer, MediaRequest? request = null)
+    internal void EnqueueDmaBuf(V4L2DmaBufMPlaneBuffer dmaBufBuffer, MediaRequest? request = null, TimeVal? timestamp = null)
     {
         EnsureInitialised();
 
@@ -110,7 +110,7 @@ public class V4L2DeviceQueue
                 Field = (uint)V4L2Field.NONE,
                 Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
                 BytesUsed = 0,
-                Timestamp = new TimeVal { TvSec = 0, TvUsec = 0 },
+                Timestamp = timestamp ?? new TimeVal { TvSec = 0, TvUsec = 0 },
                 Sequence = 0,
                 RequestFd = request?.Fd ?? 0,
                 Planes = planeStorage

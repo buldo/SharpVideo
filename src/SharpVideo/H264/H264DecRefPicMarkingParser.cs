@@ -20,6 +20,7 @@ class H264DecRefPicMarkingParser
     public static DecRefPicMarkingState? ParseDecRefPicMarking(BitBuffer bit_buffer, uint32_t nal_unit_type)
     {
         uint32_t golomb_tmp;
+        bit_buffer.GetCurrentOffset(out int startByteOffset, out int startBitOffset);
 
         // H264 dec_ref_pic_marking() NAL Unit.
         // Section 7.3.3.3 ("Decoded reference picture marking syntax") of the
@@ -71,8 +72,8 @@ class H264DecRefPicMarkingParser
                     dec_ref_pic_marking.memory_management_control_operation.Add(
                         golomb_tmp);
 
-                    if ((dec_ref_pic_marking.memory_management_control_operation.Last() == 1) ||
-                        (dec_ref_pic_marking.memory_management_control_operation.Last() == 3))
+                    if ((dec_ref_pic_marking.memory_management_control_operation.Count > 0 && dec_ref_pic_marking.memory_management_control_operation.Last() == 1) ||
+                        (dec_ref_pic_marking.memory_management_control_operation.Count > 0 && dec_ref_pic_marking.memory_management_control_operation.Last() == 3))
                     {
                         // difference_of_pic_nums_minus1[i]  ue(v)
                         if (!bit_buffer.ReadExponentialGolomb(out golomb_tmp))
@@ -83,7 +84,7 @@ class H264DecRefPicMarkingParser
                         dec_ref_pic_marking.difference_of_pic_nums_minus1.Add(golomb_tmp);
                     }
 
-                    if (dec_ref_pic_marking.memory_management_control_operation.Last() == 2)
+                    if (dec_ref_pic_marking.memory_management_control_operation.Count > 0 && dec_ref_pic_marking.memory_management_control_operation.Last() == 2)
                     {
                         // long_term_pic_num[i]  ue(v)
                         if (!bit_buffer.ReadExponentialGolomb(out golomb_tmp))
@@ -94,8 +95,8 @@ class H264DecRefPicMarkingParser
                         dec_ref_pic_marking.long_term_pic_num.Add(golomb_tmp);
                     }
 
-                    if ((dec_ref_pic_marking.memory_management_control_operation.Last() == 3) ||
-                        (dec_ref_pic_marking.memory_management_control_operation.Last() == 6))
+                    if ((dec_ref_pic_marking.memory_management_control_operation.Count > 0 && dec_ref_pic_marking.memory_management_control_operation.Last() == 3) ||
+                        (dec_ref_pic_marking.memory_management_control_operation.Count > 0 && dec_ref_pic_marking.memory_management_control_operation.Last() == 6))
                     {
                         // long_term_frame_idx[i]  ue(v)
                         if (!bit_buffer.ReadExponentialGolomb(out golomb_tmp))
@@ -106,7 +107,7 @@ class H264DecRefPicMarkingParser
                         dec_ref_pic_marking.long_term_frame_idx.Add(golomb_tmp);
                     }
 
-                    if (dec_ref_pic_marking.memory_management_control_operation.Last() == 4)
+                    if (dec_ref_pic_marking.memory_management_control_operation.Count > 0 && dec_ref_pic_marking.memory_management_control_operation.Last() == 4)
                     {
                         // max_long_term_frame_idx_plus1[i]  ue(v)
                         if (!bit_buffer.ReadExponentialGolomb(out golomb_tmp))
@@ -118,9 +119,12 @@ class H264DecRefPicMarkingParser
                             golomb_tmp);
                     }
                 } while (
-                    dec_ref_pic_marking.memory_management_control_operation.Last() != 0);
+                    dec_ref_pic_marking.memory_management_control_operation.Count > 0 && dec_ref_pic_marking.memory_management_control_operation.Last() != 0);
             }
         }
+
+        bit_buffer.GetCurrentOffset(out int endByteOffset, out int endBitOffset);
+        dec_ref_pic_marking.bit_size = (uint32_t)((endByteOffset - startByteOffset) * 8 + (endBitOffset - startBitOffset));
 
         return dec_ref_pic_marking;
     }

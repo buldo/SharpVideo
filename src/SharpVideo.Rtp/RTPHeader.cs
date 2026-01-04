@@ -1,5 +1,7 @@
 namespace SharpVideo.Rtp;
 
+using System.Runtime.InteropServices;
+
 public class RTPHeader
 {
     public const int MIN_HEADER_LEN = 12;
@@ -36,27 +38,35 @@ public class RTPHeader
     /// Extract and load the RTP header from an RTP packet.
     /// </summary>
     /// <param name="packet"></param>
-    public RTPHeader(byte[] packet)
+    public RTPHeader(byte[] packet) : this(packet.AsSpan())
+    {
+    }
+
+    /// <summary>
+    /// Extract and load the RTP header from an RTP packet.
+    /// </summary>
+    /// <param name="packet"></param>
+    public RTPHeader(ReadOnlySpan<byte> packet)
     {
         if (packet.Length < MIN_HEADER_LEN)
         {
             throw new ApplicationException("The packet did not contain the minimum number of bytes for an RTP header packet.");
         }
 
-        UInt16 firstWord = BitConverter.ToUInt16(packet, 0);
+        UInt16 firstWord = MemoryMarshal.Read<UInt16>(packet.Slice(0, 2));
 
         if (BitConverter.IsLittleEndian)
         {
-            firstWord = NetConvert.DoReverseEndian(firstWord);
-            SequenceNumber = NetConvert.DoReverseEndian(BitConverter.ToUInt16(packet, 2));
-            Timestamp = NetConvert.DoReverseEndian(BitConverter.ToUInt32(packet, 4));
-            SyncSource = NetConvert.DoReverseEndian(BitConverter.ToUInt32(packet, 8));
+            firstWord = NetConvert.DoReverseEndian((ushort)firstWord);
+            SequenceNumber = NetConvert.DoReverseEndian((ushort)MemoryMarshal.Read<UInt16>(packet.Slice(2, 2)));
+            Timestamp = NetConvert.DoReverseEndian((uint)MemoryMarshal.Read<UInt32>(packet.Slice(4, 4)));
+            SyncSource = NetConvert.DoReverseEndian((uint)MemoryMarshal.Read<UInt32>(packet.Slice(8, 4)));
         }
         else
         {
-            SequenceNumber = BitConverter.ToUInt16(packet, 2);
-            Timestamp = BitConverter.ToUInt32(packet, 4);
-            SyncSource = BitConverter.ToUInt32(packet, 8);
+            SequenceNumber = MemoryMarshal.Read<UInt16>(packet.Slice(2, 2));
+            Timestamp = MemoryMarshal.Read<UInt32>(packet.Slice(4, 4));
+            SyncSource = MemoryMarshal.Read<UInt32>(packet.Slice(8, 4));
         }
 
 
@@ -75,23 +85,23 @@ public class RTPHeader
         {
             if (BitConverter.IsLittleEndian)
             {
-                ExtensionProfile = NetConvert.DoReverseEndian(BitConverter.ToUInt16(packet, 12 + 4 * CSRCCount));
+                ExtensionProfile = NetConvert.DoReverseEndian((ushort)MemoryMarshal.Read<UInt16>(packet.Slice(12 + 4 * CSRCCount, 2)));
                 headerExtensionLength += 2;
-                ExtensionLength = NetConvert.DoReverseEndian(BitConverter.ToUInt16(packet, 14 + 4 * CSRCCount));
+                ExtensionLength = NetConvert.DoReverseEndian((ushort)MemoryMarshal.Read<UInt16>(packet.Slice(14 + 4 * CSRCCount, 2)));
                 headerExtensionLength += 2 + ExtensionLength * 4;
             }
             else
             {
-                ExtensionProfile = BitConverter.ToUInt16(packet, 12 + 4 * CSRCCount);
+                ExtensionProfile = MemoryMarshal.Read<UInt16>(packet.Slice(12 + 4 * CSRCCount, 2));
                 headerExtensionLength += 2;
-                ExtensionLength = BitConverter.ToUInt16(packet, 14 + 4 * CSRCCount);
+                ExtensionLength = MemoryMarshal.Read<UInt16>(packet.Slice(14 + 4 * CSRCCount, 2));
                 headerExtensionLength += 2 + ExtensionLength * 4;
             }
 
             if (ExtensionLength > 0 && packet.Length >= (headerAndCSRCLength + 4 + ExtensionLength * 4))
             {
                 ExtensionPayload = new byte[ExtensionLength * 4];
-                Buffer.BlockCopy(packet, headerAndCSRCLength + 4, ExtensionPayload, 0, ExtensionLength * 4);
+                packet.Slice(headerAndCSRCLength + 4, ExtensionLength * 4).CopyTo(ExtensionPayload);
             }
         }
 

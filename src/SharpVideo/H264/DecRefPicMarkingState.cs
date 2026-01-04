@@ -18,4 +18,5 @@ public class DecRefPicMarkingState
     public List<uint32_t> long_term_pic_num = new();
     public List<uint32_t> long_term_frame_idx = new();
     public List<uint32_t> max_long_term_frame_idx_plus1 = new();
+    public uint32_t bit_size = 0;
 }

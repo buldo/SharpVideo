@@ -24,4 +24,9 @@ internal sealed class DpbEntry
     /// True if this is a long-term reference frame.
     /// </summary>
     public bool IsLongTerm { get; set; }
+
+    /// <summary>
+    /// V4L2 timestamp for reference identification.
+    /// </summary>
+    public ulong Timestamp { get; set; }
 }

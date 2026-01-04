@@ -67,6 +67,7 @@ public class PpsState
         uint nextScale = 8;
         for (uint j = 0; j < sizeOfScalingList; j++)
         {
+            int index = i * (int)sizeOfScalingList + (int)j;
             if (nextScale != 0)
             {
                 // delta_scale  se(v)
@@ -92,12 +93,12 @@ public class PpsState
                 useDefaultScalingMatrixFlag[(int)i] = (j == 0 && nextScale == 0) ? 1u : 0u;
             }
             // make sure list has jth element
-            while (scalingList.Count <= j)
+            while (scalingList.Count <= index)
             {
                 scalingList.Add(0);
             }
-            scalingList[(int)j] = (nextScale == 0) ? lastScale : nextScale;
-            lastScale = scalingList[(int)j];
+            scalingList[index] = (nextScale == 0) ? lastScale : nextScale;
+            lastScale = scalingList[index];
         }
         return true;
     }
