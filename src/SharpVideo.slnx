@@ -18,6 +18,7 @@
     <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
     <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
     <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
+    <Project Path="SharpVideo.Decoding.OhdDemo/SharpVideo.Decoding.OhdDemo.csproj" Id="fc19e915-ee43-4486-b39d-6ccd5642a09a" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path="../README.md" />
