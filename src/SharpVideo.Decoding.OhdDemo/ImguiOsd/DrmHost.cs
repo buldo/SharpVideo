@@ -4,6 +4,7 @@ using FFmpeg.AutoGen;
 
 using Hexa.NET.ImGui;
 
+using SharpVideo.Decoding.OhdDemo.Configuration;
 using SharpVideo.Decoding.V4l2;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
@@ -24,14 +25,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 [SupportedOSPlatform("linux")]
 internal sealed class DrmHost : UiHostBase
 {
-    private readonly CancellationTokenSource _cancellationTokenSource = new();
-    private readonly ILogger<DrmHost> _logger;
-    private readonly ILoggerFactory _loggerFactory;
     private readonly DrmHostConfiguration _configuration;
-
-    private Task? _drawThread;
-    private VideoFrameManager? _videoFrameManager;
-    private ImGuiUiRenderer? _uiRenderer;
 
     // DRM resources
     private DrmDevice? _drmDevice;
@@ -44,59 +38,25 @@ internal sealed class DrmHost : UiHostBase
     private VideoPlaneRenderer? _videoPlaneRenderer;
     private readonly Dictionary<SharedDmaBuffer, UniversalDecodedFrame> _framesInUseByDrm = new();
 
+    protected override bool ShowDemoWindow => _configuration.ShowDemoWindow;
+
     public DrmHost(
         [FromKeyedServices("h264-stream")] InMemoryPipeStreamAccessor h264Stream,
         DecodersFactory decodersFactory,
         ILoggerFactory loggerFactory,
         ILogger<DrmHost> logger,
         DrmHostConfiguration? configuration = null)
-        : base(h264Stream, decodersFactory, logger)
+        : base(h264Stream, decodersFactory, loggerFactory, logger)
     {
-        _logger = logger;
-        _loggerFactory = loggerFactory;
         _configuration = configuration ?? new DrmHostConfiguration();
-        _logger.LogInformation("DrmHost initialized (dual-plane mode)");
+        Logger.LogInformation("DrmHost initialized (dual-plane mode)");
     }
 
-    protected override void Start()
-    {
-        _logger.LogInformation("Starting DrmHost");
-
-        _videoFrameManager = new VideoFrameManager(
-            H264Decoder,
-            _loggerFactory.CreateLogger<VideoFrameManager>());
-
-        _uiRenderer = new ImGuiUiRenderer(
-            _loggerFactory.CreateLogger<ImGuiUiRenderer>(),
-            customRenderCallback: null,
-            showDemoWindow: _configuration.ShowDemoWindow);
-
-        _drawThread = Task.Factory.StartNew(DrawThread, TaskCreationOptions.LongRunning);
-        _videoFrameManager.Start();
-    }
-
-    public override async Task StopAsync(CancellationToken cancellationToken)
-    {
-        _logger.LogInformation("Stopping DrmHost");
-        await _cancellationTokenSource.CancelAsync();
-
-        if (_drawThread != null)
-        {
-            await _drawThread;
-        }
-
-        if (_videoFrameManager != null)
-        {
-            await _videoFrameManager.StopAsync();
-            _videoFrameManager.Dispose();
-        }
-    }
-
-    private void DrawThread()
+    protected override void RunDrawThread()
     {
         try
         {
-            _logger.LogInformation("DrawThread started");
+            Logger.LogInformation("DrawThread started");
 
             // Set environment for DRM
             Environment.SetEnvironmentVariable("EGL_PLATFORM", "drm");
@@ -105,36 +65,36 @@ internal sealed class DrmHost : UiHostBase
 
             if (_presenter == null || _imguiManager == null)
             {
-                _logger.LogError("Failed to initialize DRM resources");
+                Logger.LogError("Failed to initialize DRM resources");
                 return;
             }
 
             // Warmup frame
-            _logger.LogInformation("Rendering warmup frame...");
+            Logger.LogInformation("Rendering warmup frame...");
             var gbmAtomicPresenter = _presenter.AsGbmAtomicPresenter();
             if (gbmAtomicPresenter != null && _imguiManager.WarmupFrame(RenderOsdFrame))
             {
                 if (gbmAtomicPresenter.SubmitFrame())
                 {
-                    _logger.LogInformation("Warmup frame submitted");
+                    Logger.LogInformation("Warmup frame submitted");
                 }
             }
 
             Thread.Sleep(100);
-            _logger.LogInformation("Display initialization completed");
+            Logger.LogInformation("Display initialization completed");
 
             // Enter main loop
-            _logger.LogInformation("Entering render loop");
+            Logger.LogInformation("Entering render loop");
             RunRenderLoop();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Exception in DrawThread");
+            Logger.LogError(ex, "Exception in DrawThread");
         }
         finally
         {
             CleanupResources();
-            _logger.LogInformation("DrawThread finished");
+            Logger.LogInformation("DrawThread finished");
         }
     }
 
@@ -147,13 +107,13 @@ internal sealed class DrmHost : UiHostBase
         // Get decoder's output format - DRM plane must support this format
         var videoPixelFormat = H264Decoder.OutputPixelFormat;
 
-        _logger.LogInformation(
+        Logger.LogInformation(
             "Initializing DRM resources. Video pixel format: {Format}",
             videoPixelFormat.GetName());
 
         // Open DRM device
         _drmDevice = string.IsNullOrEmpty(_configuration.DrmDevicePath)
-            ? DrmUtils.OpenDrmDevice(_logger)
+            ? DrmUtils.OpenDrmDevice(Logger)
             : DrmDevice.Open(_configuration.DrmDevicePath);
 
         if (_drmDevice == null)
@@ -161,11 +121,11 @@ internal sealed class DrmHost : UiHostBase
             throw new InvalidOperationException("Failed to open DRM device");
         }
 
-        _drmDevice.EnableDrmCapabilities(_logger);
+        _drmDevice.EnableDrmCapabilities(Logger);
 
         // Create GBM device for ImGui rendering
         _gbmDevice = GbmDevice.CreateFromDrmDevice(_drmDevice);
-        _logger.LogInformation("Created GBM device for ImGui rendering");
+        Logger.LogInformation("Created GBM device for ImGui rendering");
 
         // Create DMA buffer allocator for video plane
         if (!DmaBuffersAllocator.TryCreate(out _dmaAllocator) || _dmaAllocator == null)
@@ -178,7 +138,7 @@ internal sealed class DrmHost : UiHostBase
             _drmDevice,
             _dmaAllocator,
             [videoPixelFormat, KnownPixelFormats.DRM_FORMAT_ARGB8888],
-            _loggerFactory.CreateLogger<DrmBufferManager>());
+            LoggerFactory.CreateLogger<DrmBufferManager>());
 
         // Create unified DRM presenter with GBM atomic primary (ImGui) and DMA overlay (video)
         _presenter = DrmPresenter.CreateWithGbmAtomicAndDmaOverlay(
@@ -189,7 +149,7 @@ internal sealed class DrmHost : UiHostBase
             _drmBufferManager,
             KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary plane for ImGui OSD
             videoPixelFormat,                      // Overlay plane for video (matches decoder)
-            _logger);
+            Logger);
 
         if (_presenter == null)
         {
@@ -202,12 +162,12 @@ internal sealed class DrmHost : UiHostBase
 
         if (actualWidth != _configuration.DisplayWidth || actualHeight != _configuration.DisplayHeight)
         {
-            _logger.LogWarning(
+            Logger.LogWarning(
                 "Display mode differs from requested: requested {ReqWidth}x{ReqHeight}, actual {ActWidth}x{ActHeight}",
                 _configuration.DisplayWidth, _configuration.DisplayHeight, actualWidth, actualHeight);
         }
 
-        _logger.LogInformation("Created dual-plane DRM presenter ({Width}x{Height})", actualWidth, actualHeight);
+        Logger.LogInformation("Created dual-plane DRM presenter ({Width}x{Height})", actualWidth, actualHeight);
 
         // Configure z-order: Primary plane (ImGui OSD) on top, Overlay plane (video) below
         ConfigurePlaneZOrder();
@@ -218,8 +178,8 @@ internal sealed class DrmHost : UiHostBase
             _inputManager = new InputManager(
                 actualWidth,
                 actualHeight,
-                _loggerFactory.CreateLogger<InputManager>());
-            _logger.LogInformation("Input manager initialized");
+                LoggerFactory.CreateLogger<InputManager>());
+            Logger.LogInformation("Input manager initialized");
         }
 
         // Get GBM atomic presenter for ImGui
@@ -248,18 +208,18 @@ internal sealed class DrmHost : UiHostBase
         _imguiManager = new ImGuiManager(
             imguiConfig,
             _inputManager,
-            _loggerFactory.CreateLogger<ImGuiManager>());
+            LoggerFactory.CreateLogger<ImGuiManager>());
 
-        _logger.LogInformation("ImGui manager initialized");
+        Logger.LogInformation("ImGui manager initialized");
 
         // Create video plane renderer for overlay
         _videoPlaneRenderer = new VideoPlaneRenderer(
             _presenter.OverlayPlanePresenter,
             _drmBufferManager,
             videoPixelFormat,
-            _loggerFactory.CreateLogger<VideoPlaneRenderer>());
+            LoggerFactory.CreateLogger<VideoPlaneRenderer>());
 
-        _logger.LogInformation("DRM resources initialized successfully (dual-plane mode)");
+        Logger.LogInformation("DRM resources initialized successfully (dual-plane mode)");
     }
 
     private void ConfigurePlaneZOrder()
@@ -269,29 +229,29 @@ internal sealed class DrmHost : UiHostBase
             return;
         }
 
-        _logger.LogInformation("Configuring plane z-order...");
+        Logger.LogInformation("Configuring plane z-order...");
 
         var primaryZposRange = _presenter.PrimaryPlane.GetPlaneZPositionRange();
         var overlayZposRange = _presenter.OverlayPlane.GetPlaneZPositionRange();
 
         if (primaryZposRange.HasValue)
         {
-            _logger.LogInformation("Primary plane zpos range: [{Min}, {Max}], current: {Current}",
+            Logger.LogInformation("Primary plane zpos range: [{Min}, {Max}], current: {Current}",
                 primaryZposRange.Value.min, primaryZposRange.Value.max, primaryZposRange.Value.current);
         }
         else
         {
-            _logger.LogWarning("Primary plane does not support zpos property");
+            Logger.LogWarning("Primary plane does not support zpos property");
         }
 
         if (overlayZposRange.HasValue)
         {
-            _logger.LogInformation("Overlay plane zpos range: [{Min}, {Max}], current: {Current}",
+            Logger.LogInformation("Overlay plane zpos range: [{Min}, {Max}], current: {Current}",
                 overlayZposRange.Value.min, overlayZposRange.Value.max, overlayZposRange.Value.current);
         }
         else
         {
-            _logger.LogWarning("Overlay plane does not support zpos property");
+            Logger.LogWarning("Overlay plane does not support zpos property");
         }
 
         // Set z-position to make primary plane (OSD) appear on top of overlay (video)
@@ -300,7 +260,7 @@ internal sealed class DrmHost : UiHostBase
             var primaryZpos = primaryZposRange.Value.max;
             var overlayZpos = overlayZposRange.Value.min;
 
-            _logger.LogInformation("Setting Primary zpos={PrimaryZpos} (OSD on top), Overlay zpos={OverlayZpos} (video below)",
+            Logger.LogInformation("Setting Primary zpos={PrimaryZpos} (OSD on top), Overlay zpos={OverlayZpos} (video below)",
                 primaryZpos, overlayZpos);
 
             var primarySuccess = _presenter.PrimaryPlane.SetPlaneZPosition(primaryZpos);
@@ -308,11 +268,11 @@ internal sealed class DrmHost : UiHostBase
 
             if (primarySuccess && overlaySuccess)
             {
-                _logger.LogInformation("Z-positioning successful: OSD will render on top of video");
+                Logger.LogInformation("Z-positioning successful: OSD will render on top of video");
             }
             else
             {
-                _logger.LogWarning("Failed to set z-positions - OSD may not appear on top of video");
+                Logger.LogWarning("Failed to set z-positions - OSD may not appear on top of video");
             }
         }
     }
@@ -326,11 +286,11 @@ internal sealed class DrmHost : UiHostBase
 
         if (gbmAtomicPresenter == null)
         {
-            _logger.LogError("Failed to get GBM atomic presenter for render loop");
+            Logger.LogError("Failed to get GBM atomic presenter for render loop");
             return;
         }
 
-        while (!exiting && !_cancellationTokenSource.Token.IsCancellationRequested)
+        while (!exiting && !CancellationTokenSource.Token.IsCancellationRequested)
         {
             try
             {
@@ -352,7 +312,7 @@ internal sealed class DrmHost : UiHostBase
                     // Check for ESC key to exit
                     if (_inputManager.IsKeyDown(1)) // KEY_ESC = 1
                     {
-                        _logger.LogInformation("ESC key pressed, exiting");
+                        Logger.LogInformation("ESC key pressed, exiting");
                         exiting = true;
                         continue;
                     }
@@ -374,12 +334,12 @@ internal sealed class DrmHost : UiHostBase
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Exception in render loop on frame {Frame}", frameCount);
+                Logger.LogError(ex, "Exception in render loop on frame {Frame}", frameCount);
                 exiting = true;
             }
         }
 
-        _logger.LogInformation("Render loop exited after {FrameCount} frames", frameCount);
+        Logger.LogInformation("Render loop exited after {FrameCount} frames", frameCount);
     }
 
     private void RenderVideoFrame()
@@ -387,10 +347,10 @@ internal sealed class DrmHost : UiHostBase
         // Release buffers that DRM has finished displaying
         ReleaseCompletedFrames();
 
-        var frame = _videoFrameManager?.AcquireCurrentFrame();
+        var frame = VideoFrameManager?.AcquireCurrentFrame();
         if (frame != null)
         {
-            _logger.LogTrace("Rendering video frame to overlay plane");
+            Logger.LogTrace("Rendering video frame to overlay plane");
 
             // Update UI statistics based on frame type
             UpdateFrameStatistics(frame);
@@ -409,10 +369,10 @@ internal sealed class DrmHost : UiHostBase
                 // For other frame types (FFmpeg or MMAP), a copy occurs,
                 // so the original frame can be released immediately
                 _videoPlaneRenderer?.RenderFrame(frame);
-                _videoFrameManager?.ReleaseFrame(frame);
+                VideoFrameManager?.ReleaseFrame(frame);
             }
             
-            _logger.LogTrace("Video frame presented");
+            Logger.LogTrace("Video frame presented");
         }
     }
 
@@ -429,7 +389,7 @@ internal sealed class DrmHost : UiHostBase
                 {
                     if (_framesInUseByDrm.Remove(buffer, out var frameToRelease))
                     {
-                        _videoFrameManager?.ReleaseFrame(frameToRelease);
+                        VideoFrameManager?.ReleaseFrame(frameToRelease);
                     }
                 }
             }
@@ -444,7 +404,7 @@ internal sealed class DrmHost : UiHostBase
                 var avFrame = ffmpegFrame.Frame;
                 if (avFrame != null)
                 {
-                    _uiRenderer?.UpdateFrameStatistics(
+                    UiRenderer?.UpdateFrameStatistics(
                         avFrame->width,
                         avFrame->height,
                         avFrame->format,
@@ -453,7 +413,7 @@ internal sealed class DrmHost : UiHostBase
                 }
                 break;
             case V4l2DecodedFrame v4l2Frame:
-                _uiRenderer?.UpdateFrameStatistics(
+                UiRenderer?.UpdateFrameStatistics(
                     (int)v4l2Frame.Width,
                     (int)v4l2Frame.Height,
                     0, // V4L2 doesn't use AVPixelFormat
@@ -466,19 +426,19 @@ internal sealed class DrmHost : UiHostBase
     private void RenderOsdFrame(float deltaTime)
     {
         // Render ImGui UI (OSD)
-        _uiRenderer?.RenderUi(deltaTime);
+        UiRenderer?.RenderUi(deltaTime);
     }
 
     private void CleanupResources()
     {
-        _logger.LogInformation("Cleaning up DRM resources");
+        Logger.LogInformation("Cleaning up DRM resources");
 
         // Release any frames still in use by DRM
         lock (_framesInUseByDrm)
         {
             foreach (var frame in _framesInUseByDrm.Values)
             {
-                _videoFrameManager?.ReleaseFrame(frame);
+                VideoFrameManager?.ReleaseFrame(frame);
             }
             _framesInUseByDrm.Clear();
         }
