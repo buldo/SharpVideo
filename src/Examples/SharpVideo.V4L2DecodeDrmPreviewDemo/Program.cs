@@ -54,16 +54,29 @@ internal class Program
         using var drmBufferManager = new DrmBufferManager(
             drmDevice,
             allocator,
-            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_XRGB8888],
+            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_ARGB8888],
             drmBufferManagerLogger);
         var presenter = DrmPresenter.Create(
             drmDevice,
             Width,
             Height,
             drmBufferManager,
-            KnownPixelFormats.DRM_FORMAT_XRGB8888,  // Primary plane format
-            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary plane format (with alpha for transparency)
+            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format (video)
             Logger);
+
+        // Configure z-order: Primary plane (transparent) on top, Overlay plane (video) below
+        Logger.LogInformation("Configuring plane z-order: video below, transparent primary on top");
+        var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
+        var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
+
+        if (primaryZposRange.HasValue && overlayZposRange.HasValue)
+        {
+            presenter.PrimaryPlane.SetPlaneZPosition(primaryZposRange.Value.max);  // Primary on top
+            presenter.OverlayPlane.SetPlaneZPosition(overlayZposRange.Value.min);  // Video below
+            Logger.LogInformation("Set Primary zpos={PrimaryZ} (top), Overlay zpos={OverlayZ} (bottom)",
+                primaryZposRange.Value.max, overlayZposRange.Value.min);
+        }
 
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
         using var _ = v4L2Device; // Ensure disposal

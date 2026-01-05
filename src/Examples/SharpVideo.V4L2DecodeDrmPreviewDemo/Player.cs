@@ -64,19 +64,13 @@ public class Player
     {
         Statistics.IncrementDecodedFrames();
 
-        // Try to add without blocking - if queue is full, drop the oldest frame to reduce latency
-        if (!_buffersToPresent.TryAdd(buffer, 0))
-        {
-            if (_logger.IsEnabled(LogLevel.Debug))
-            {
-                _logger.LogDebug("Display queue full, frame may be delayed");
-            }
-            _buffersToPresent.Add(buffer); // Block until space available
-        }
+        // Add to display queue - blocks if queue is full (back-pressure)
+        _buffersToPresent.Add(buffer);
 
         if (_logger.IsEnabled(LogLevel.Trace))
         {
-            _logger.LogTrace("Frame decoded: {DecodedCount}", Statistics.DecodedFrames);
+            _logger.LogTrace("Frame decoded: {DecodedCount}, queue size: {QueueSize}",
+                Statistics.DecodedFrames, _buffersToPresent.Count);
         }
     }
 
@@ -86,8 +80,10 @@ public class Player
         await naluSource.StartAsync();
         _decoder.StartDecoding(naluSource);
 
-        // Wait for decoder to finish processing all NALUs
-        await _decoder.StopDecodingAsync();
+        // Wait for decoder thread to complete naturally (processes all NALUs from the queue)
+        // The decoder thread will exit when naluSource.NaluQueue.CompleteAdding() is called
+        // and all items are consumed
+        await _decoder.WaitForDecodingCompleteAsync();
         _decodeCompleted.Set();
     }
 

@@ -13,7 +13,7 @@ namespace SharpVideo.Utils;
 /// <typeparam name="TPrimaryPresenter">Type of primary plane presenter</typeparam>
 /// <typeparam name="TOverlayPresenter">Type of overlay plane presenter (use object if no overlay)</typeparam>
 /// <remarks>
-/// Thread Safety: 
+/// Thread Safety:
 /// - Factory methods are thread-safe
 /// - Instance methods are NOT thread-safe - use from single thread
 /// - Disposal is thread-safe and idempotent
@@ -219,7 +219,7 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
     /// IMPORTANT: Overlay uses legacy mode (useAtomicMode: false) to avoid dual event loop conflict.
     /// The GBM atomic presenter already has an event loop thread for page flip events.
     /// This combination is ideal for applications that need both GPU-rendered UI and hardware-decoded video.
-    /// 
+    ///
     /// Thread Safety:
     /// - Primary plane rendering: OpenGL ES context must be used from a single render thread
     /// - Overlay plane updates: Can be called from video decoder thread (different from render thread)
@@ -459,7 +459,7 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
             logger.LogError(
                 "No overlay plane with {Format} format found on CRTC {CrtcId}, device FD {DeviceFd}",
                 pixelFormat.GetName(), crtcId, drmDevice.DeviceFd);
-            
+
             throw new DrmPlaneNotFoundException("overlay", pixelFormat, drmDevice.DeviceFd);
         }
         return plane;
@@ -511,7 +511,7 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
         try
         {
             PrimaryPlanePresenter.Cleanup();
-            
+
             if (OverlayPlanePresenter is DrmSinglePlanePresenter overlayPresenter)
             {
                 overlayPresenter.Cleanup();

@@ -93,6 +93,40 @@ public class H264V4L2StatelessDecoder
     }
 
     /// <summary>
+    /// Waits for decoding to complete naturally (all NALUs processed).
+    /// Does NOT cancel the decoding - just waits for it to finish.
+    /// Use this for file/stream playback where you want all frames decoded.
+    /// </summary>
+    public async Task WaitForDecodingCompleteAsync()
+    {
+        if (_decodingThread == null)
+        {
+            return;
+        }
+
+        _logger.LogInformation("Waiting for decoder to complete...");
+
+        // Wait for decoding thread to finish naturally
+        while (_decodingThread.IsAlive)
+        {
+            await Task.Delay(10);
+        }
+
+        // Drain remaining frames from hardware
+        await DrainDecoderAsync();
+
+        var fps = Statistics.DecodeElapsed.TotalSeconds > 0
+            ? _framesDecoded / Statistics.DecodeElapsed.TotalSeconds
+            : 0;
+
+        _logger.LogInformation(
+            "Decoding completed. {FrameCount} frames in {ElapsedTime:F2}s ({FPS:F2} fps)",
+            _framesDecoded,
+            Statistics.DecodeElapsed.TotalSeconds,
+            fps);
+    }
+
+    /// <summary>
     /// Stops decoding and waits for graceful shutdown.
     /// </summary>
     public async Task StopDecodingAsync()
@@ -195,6 +229,7 @@ public class H264V4L2StatelessDecoder
                     _logger.LogTrace("Processing NALU #{Index} (size: {Size} bytes)", naluCount + 1,
                         naluData.Data.Length);
                 }
+                Thread.Sleep(TimeSpan.FromSeconds(0.3));
 
                 var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
 
