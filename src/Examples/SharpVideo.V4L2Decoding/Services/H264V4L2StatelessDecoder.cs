@@ -229,7 +229,6 @@ public class H264V4L2StatelessDecoder
                     _logger.LogTrace("Processing NALU #{Index} (size: {Size} bytes)", naluCount + 1,
                         naluData.Data.Length);
                 }
-                Thread.Sleep(TimeSpan.FromSeconds(0.3));
 
                 var naluState = H264NalUnitParser.ParseNalUnit(naluData.WithoutHeader, streamState, parsingOptions);
 
