@@ -10,8 +10,8 @@
     <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
     <Project Path="Examples/SharpVideo.FfmpegDemo/SharpVideo.FfmpegDemo.csproj" Id="4da4025e-86c9-4960-9509-72e61055ae64" />
     <Project Path="Examples/SharpVideo.ImGuiDemo/SharpVideo.ImGuiDemo.csproj" Id="ee5cdfbc-015b-44f4-9c3a-76e8c7ff64c0" />
-    <Project Path="Examples/SharpVideo.MultiPlaneExample/SharpVideo.MultiPlaneExample.csproj" Id="53b0ddba-a5a4-48ce-be74-c840e3722322" />
-    <Project Path="Examples/SharpVideo.MultiPlaneGlExample/SharpVideo.MultiPlaneGlExample.csproj" />
+    <Project Path="Examples/SharpVideo.MultiPlaneDemo/SharpVideo.MultiPlaneDemo.csproj" Id="53b0ddba-a5a4-48ce-be74-c840e3722322" />
+    <Project Path="Examples/SharpVideo.MultiPlaneGlDemo/SharpVideo.MultiPlaneGlDemo.csproj" />
     <Project Path="Examples/SharpVideo.ParseH264Demo/SharpVideo.ParseH264Demo.csproj" />
     <Project Path="Examples/SharpVideo.RtpPlayerDemo/SharpVideo.RtpPlayerDemo.csproj" Id="05f5b15e-0bf4-49d2-91ff-60cf2bcd8e58" />
     <Project Path="Examples/SharpVideo.V4L2DecodeDemo/SharpVideo.V4L2DecodeDemo.csproj" />
