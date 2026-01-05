@@ -357,7 +357,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Encoded
             UpdateFrameStatistics(frame);
 
             // If it's a V4L2 DMA-BUF frame, we must hold it until DRM finishes displaying it
-            if (frame is V4l2DecodedFrame { IsDmaBuf: true, DmaBuffer: not null } v4l2Frame)
+            if (frame is V4l2DecodedFrame v4l2Frame)
             {
                 lock (_framesInUseByDrm)
                 {
@@ -367,7 +367,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Encoded
             }
             else
             {
-                // For other frame types (FFmpeg or MMAP), a copy occurs,
+                // For other frame types (FFmpeg), a copy occurs,
                 // so the original frame can be released immediately
                 _videoPlaneRenderer?.RenderFrame(frame);
                 VideoFrameManager?.ReleaseFrame(frame);

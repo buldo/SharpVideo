@@ -82,56 +82,13 @@ internal sealed class VideoPlaneRenderer : IDisposable
     }
 
     /// <summary>
-    /// Renders V4L2 frame. Uses zero-copy for DMA-BUF, copy for MMAP.
+    /// Renders V4L2 frame using zero-copy DMA-BUF.
     /// </summary>
     private void RenderV4l2Frame(V4l2DecodedFrame frame)
     {
-        if (frame.IsDmaBuf && frame.DmaBuffer is not null)
-        {
-            // Zero-copy path: V4L2 decoder already output to DMA buffer
-            _logger.LogTrace("Zero-copy V4L2 DMA-BUF frame to overlay plane");
-            _overlayPresenter.SetOverlayPlaneBuffer(frame.DmaBuffer);
-        }
-        else if (frame.MmapBuffer is not null)
-        {
-            // MMAP path: need to copy to DMA buffer
-            RenderV4l2MmapFrame(frame);
-        }
-    }
-
-    /// <summary>
-    /// Renders V4L2 MMAP frame by copying to DMA buffer.
-    /// </summary>
-    private void RenderV4l2MmapFrame(V4l2DecodedFrame frame)
-    {
-        if (frame.MmapBuffer is null)
-        {
-            return;
-        }
-
-        // Check if we need to (re)allocate buffers for this resolution
-        if (frame.Width != _currentVideoWidth || frame.Height != _currentVideoHeight)
-        {
-            ReallocateBuffers(frame.Width, frame.Height);
-        }
-
-        if (_buffers.Count == 0)
-        {
-            _logger.LogWarning("No buffers available for rendering");
-            return;
-        }
-
-        // Get next buffer
-        var buffer = _buffers[_currentBufferIndex];
-        _currentBufferIndex = (_currentBufferIndex + 1) % _buffers.Count;
-
-        // Copy from MMAP buffer to DMA buffer
-        var srcSpan = frame.MmapBuffer.MappedPlanes[0].AsSpan();
-        var dstSpan = buffer.DmaBuffer.GetMappedSpan();
-        srcSpan[..Math.Min(srcSpan.Length, dstSpan.Length)].CopyTo(dstSpan);
-
-        buffer.DmaBuffer.SyncMap();
-        _overlayPresenter.SetOverlayPlaneBuffer(buffer);
+        // Zero-copy path: V4L2 decoder already output to DMA buffer
+        _logger.LogTrace("Zero-copy V4L2 DMA-BUF frame to overlay plane");
+        _overlayPresenter.SetOverlayPlaneBuffer(frame.DmaBuffer);
     }
 
     /// <summary>

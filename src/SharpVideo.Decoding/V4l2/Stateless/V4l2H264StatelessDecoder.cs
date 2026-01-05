@@ -25,7 +25,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
     private readonly string _devicePath;
     private readonly string? _mediaDevicePath;
     private readonly V4l2DecoderConfiguration _configuration;
-    private readonly DrmBufferManager? _drmBufferManager;
+    private readonly DrmBufferManager _drmBufferManager;
 
     private V4L2Device? _device;
     private MediaDevice? _mediaDevice;
@@ -59,7 +59,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         string devicePath,
         string? mediaDevicePath,
         V4l2DecoderConfiguration configuration,
-        DrmBufferManager? drmBufferManager)
+        DrmBufferManager drmBufferManager)
         : base(logger)
     {
         _logger = logger;
@@ -76,16 +76,17 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
     /// <param name="loggerFactory">Logger factory for creating loggers.</param>
     /// <param name="decoderInfo">Decoder information from discovery.</param>
     /// <param name="configuration">Decoder configuration settings.</param>
-    /// <param name="drmBufferManager">Optional DRM buffer manager for zero-copy decoding.</param>
+    /// <param name="drmBufferManager">DRM buffer manager for zero-copy decoding (required).</param>
     /// <returns>A new stateless decoder instance.</returns>
     public static V4l2H264StatelessDecoder Create(
         ILoggerFactory loggerFactory,
         V4l2H264DecoderInfo decoderInfo,
-        V4l2DecoderConfiguration? configuration = null,
-        DrmBufferManager? drmBufferManager = null)
+        V4l2DecoderConfiguration? configuration,
+        DrmBufferManager drmBufferManager)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(decoderInfo);
+        ArgumentNullException.ThrowIfNull(drmBufferManager);
 
         if (decoderInfo.DecoderType != V4l2H264DecoderType.Stateless)
         {
@@ -95,13 +96,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         }
 
         configuration ??= new V4l2DecoderConfiguration();
-
-        if (configuration.UseDrmPrimeBuffers && drmBufferManager == null)
-        {
-            throw new ArgumentException(
-                "DrmBufferManager is required when UseDrmPrimeBuffers is true",
-                nameof(drmBufferManager));
-        }
 
         var logger = loggerFactory.CreateLogger<V4l2H264StatelessDecoder>();
         logger.LogInformation(
@@ -157,14 +151,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
             throw new InvalidOperationException("Decoder not initialized");
         }
 
-        if (decodedFrame.IsDmaBuf && decodedFrame.DmaBuffer is not null)
-        {
-            _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(decodedFrame.DmaBuffer.V4L2Buffer);
-        }
-        else
-        {
-            _device.CaptureMPlaneQueue.ReuseBuffer(decodedFrame.BufferIndex);
-        }
+        _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(decodedFrame.DmaBuffer.V4L2Buffer);
     }
 
     /// <inheritdoc />
@@ -335,8 +322,21 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
     {
         _logger.LogInformation("Setting up and mapping buffers...");
 
-        // Setup OUTPUT buffers for encoded data
-        SetupMMapBufferQueue(_device!.OutputMPlaneQueue, _configuration.OutputBufferCount);
+        // Setup OUTPUT buffers for encoded data (MMAP)
+        SetupOutputMMapBuffers();
+
+        // Setup CAPTURE buffers for decoded frames (DMA-BUF)
+        SetupDmaBufCaptureQueue();
+    }
+
+    private void SetupOutputMMapBuffers()
+    {
+        _device!.OutputMPlaneQueue.InitMMap(_configuration.OutputBufferCount);
+        foreach (var buffer in _device.OutputMPlaneQueue.BuffersPool.Buffers)
+        {
+            buffer.MapToMemory();
+        }
+
         if (_mediaDevice != null)
         {
             _mediaDevice.AllocateMediaRequests(_configuration.RequestPoolSize);
@@ -351,25 +351,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
             _encodedBuffers.Add(encodedBuffer);
             AddEncodedBufferToReuse(encodedBuffer);
         }
-
-        // Setup CAPTURE buffers for decoded frames
-        if (_configuration.UseDrmPrimeBuffers)
-        {
-            SetupDmaBufCaptureQueue();
-        }
-        else
-        {
-            SetupMMapBufferQueue(_device.CaptureMPlaneQueue, _configuration.CaptureBufferCount);
-        }
-    }
-
-    private void SetupMMapBufferQueue(V4L2DeviceQueue queue, uint bufferCount)
-    {
-        queue.InitMMap(bufferCount);
-        foreach (var buffer in queue.BuffersPool.Buffers)
-        {
-            buffer.MapToMemory();
-        }
     }
 
     private void SetupDmaBufCaptureQueue()
@@ -382,7 +363,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
             throw new InvalidOperationException("Only 1 plane DMABUF is supported");
         }
 
-        _drmBuffers = _drmBufferManager!.AllocateFromFormat(
+        _drmBuffers = _drmBufferManager.AllocateFromFormat(
             negotiatedFormat.Width,
             negotiatedFormat.Height,
             negotiatedFormat.PlaneFormats[0],
@@ -408,14 +389,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
     {
         _logger.LogInformation("Starting V4L2 streaming...");
 
-        if (_configuration.UseDrmPrimeBuffers)
-        {
-            _device!.CaptureMPlaneQueue.EnqueueAllDmaBufBuffers();
-        }
-        else
-        {
-            _device!.CaptureMPlaneQueue.EnqueueAllBuffers();
-        }
+        _device!.CaptureMPlaneQueue.EnqueueAllDmaBufBuffers();
 
         _device.OutputMPlaneQueue.StreamOn();
         _device.CaptureMPlaneQueue.StreamOn();
@@ -442,24 +416,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
                 continue;
             }
 
-            V4l2DecodedFrame decodedFrame;
-            var captureFormat = _device.GetCaptureFormatMPlane();
-
-            if (_configuration.UseDrmPrimeBuffers)
-            {
-                decodedFrame = new V4l2DecodedFrame(_drmBuffers![(int)dequeuedBuffer.Index]);
-            }
-            else
-            {
-                var buffer = _device.CaptureMPlaneQueue.BuffersPool.Buffers[(int)dequeuedBuffer.Index];
-                decodedFrame = new V4l2DecodedFrame(
-                    buffer,
-                    captureFormat.Width,
-                    captureFormat.Height,
-                    captureFormat.PlaneFormats[0].BytesPerLine,
-                    new PixelFormat(captureFormat.PixelFormat));
-            }
-
+            var decodedFrame = new V4l2DecodedFrame(_drmBuffers![(int)dequeuedBuffer.Index]);
             AddDecodedFrameToOutput(decodedFrame);
         }
 
@@ -802,12 +759,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
             _device.OutputMPlaneQueue.StreamOff();
             _device.CaptureMPlaneQueue.StreamOff();
 
-            UnmapBuffers(_device.OutputMPlaneQueue);
-
-            if (!_configuration.UseDrmPrimeBuffers)
-            {
-                UnmapBuffers(_device.CaptureMPlaneQueue);
-            }
+            UnmapOutputBuffers();
 
             _device.Dispose();
             _device = null;
@@ -820,9 +772,9 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         _logger.LogInformation("Decoder cleanup completed");
     }
 
-    private void UnmapBuffers(V4L2DeviceQueue queue)
+    private void UnmapOutputBuffers()
     {
-        foreach (var buffer in queue.BuffersPool.Buffers)
+        foreach (var buffer in _device!.OutputMPlaneQueue.BuffersPool.Buffers)
         {
             buffer.Unmap();
         }

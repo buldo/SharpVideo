@@ -8,6 +8,7 @@ using SharpVideo.Decoding.V4l2.Discovery;
 using SharpVideo.Decoding.V4l2.Stateful;
 using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.FfmpegBin;
+using SharpVideo.Utils;
 
 namespace SharpVideo.Decoding.OhdDemo;
 
@@ -19,6 +20,7 @@ public class DecodersFactory
     private readonly V4l2H264DecoderProvider _v4L2Provider;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<DecodersFactory> _logger;
+    private readonly DrmBufferManager? _drmBufferManager;
 
     private bool _ffmpegLoaded;
     private V4l2H264DecoderInfo? _cachedV4l2DecoderInfo;
@@ -26,11 +28,13 @@ public class DecodersFactory
 
     public DecodersFactory(
         V4l2H264DecoderProvider v4L2Provider,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        DrmBufferManager? drmBufferManager = null)
     {
         _v4L2Provider = v4L2Provider;
         _loggerFactory = loggerFactory;
         _logger = _loggerFactory.CreateLogger<DecodersFactory>();
+        _drmBufferManager = drmBufferManager;
     }
 
     /// <summary>
@@ -118,9 +122,15 @@ public class DecodersFactory
 
     private IDecoder CreateV4l2DecoderFromInfo(V4l2H264DecoderInfo decoderInfo)
     {
+        if (_drmBufferManager == null)
+        {
+            throw new InvalidOperationException("DrmBufferManager is required for V4L2 stateless decoder");
+        }
+
         return decoderInfo.DecoderType switch
         {
-            V4l2H264DecoderType.Stateless => V4l2H264StatelessDecoder.Create(_loggerFactory, decoderInfo),
+            V4l2H264DecoderType.Stateless => V4l2H264StatelessDecoder.Create(
+                _loggerFactory, decoderInfo, null, _drmBufferManager),
             //V4l2H264DecoderType.Stateful => V4l2H264StatefulDecoder.Create(_loggerFactory, decoderInfo),
             _ => throw new InvalidOperationException($"Unexpected decoder type: {decoderInfo.DecoderType}")
         };
