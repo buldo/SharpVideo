@@ -16,13 +16,13 @@ public class PpsState
     public UInt32 bottom_field_pic_order_in_frame_present_flag = 0;
     public UInt32 num_slice_groups_minus1 = 0;
     public UInt32 slice_group_map_type = 0;
-    public List<UInt32> run_length_minus1;
-    public List<UInt32> top_left;
-    public List<UInt32> bottom_right;
+    public List<UInt32> run_length_minus1 = new();
+    public List<UInt32> top_left = new();
+    public List<UInt32> bottom_right = new();
     public UInt32 slice_group_change_direction_flag = 0;
     public UInt32 slice_group_change_rate_minus1 = 0;
     public UInt32 pic_size_in_map_units_minus1 = 0;
-    public List<UInt32> slice_group_id;
+    public List<UInt32> slice_group_id = new();
     public UInt32 num_ref_idx_l0_default_active_minus1 = 0;
     public UInt32 num_ref_idx_l1_default_active_minus1 = 0;
     public UInt32 weighted_pred_flag = 0;
