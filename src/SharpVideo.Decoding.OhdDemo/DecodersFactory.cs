@@ -69,6 +69,30 @@ public class DecodersFactory
     }
 
     /// <summary>
+    /// Attempts to create a V4L2 hardware decoder with the provided buffer manager.
+    /// </summary>
+    /// <param name="drmBufferManager">DRM buffer manager for zero-copy decoding.</param>
+    /// <returns>A V4L2 decoder if available, null otherwise.</returns>
+    public IDecoder? TryCreateV4l2DecoderWithBufferManager(DrmBufferManager drmBufferManager)
+    {
+        ArgumentNullException.ThrowIfNull(drmBufferManager);
+
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            _logger.LogDebug("V4L2 decoders are only available on Linux");
+            return null;
+        }
+
+        var decoderInfo = GetCachedV4l2DecoderInfo();
+        if (decoderInfo == null)
+        {
+            return null;
+        }
+
+        return CreateV4l2DecoderFromInfo(decoderInfo, drmBufferManager);
+    }
+
+    /// <summary>
     /// Gets information about the best available V4L2 decoder, if any.
     /// </summary>
     /// <returns>Decoder info or null if no V4L2 decoder is available.</returns>
@@ -120,9 +144,11 @@ public class DecodersFactory
         return _cachedV4l2DecoderInfo;
     }
 
-    private IDecoder CreateV4l2DecoderFromInfo(V4l2H264DecoderInfo decoderInfo)
+    private IDecoder CreateV4l2DecoderFromInfo(V4l2H264DecoderInfo decoderInfo, DrmBufferManager? bufferManager = null)
     {
-        if (_drmBufferManager == null)
+        var effectiveBufferManager = bufferManager ?? _drmBufferManager;
+
+        if (effectiveBufferManager == null)
         {
             throw new InvalidOperationException("DrmBufferManager is required for V4L2 stateless decoder");
         }
@@ -130,7 +156,7 @@ public class DecodersFactory
         return decoderInfo.DecoderType switch
         {
             V4l2H264DecoderType.Stateless => V4l2H264StatelessDecoder.Create(
-                _loggerFactory, decoderInfo, null, _drmBufferManager),
+                _loggerFactory, decoderInfo, null, effectiveBufferManager),
             //V4l2H264DecoderType.Stateful => V4l2H264StatefulDecoder.Create(_loggerFactory, decoderInfo),
             _ => throw new InvalidOperationException($"Unexpected decoder type: {decoderInfo.DecoderType}")
         };

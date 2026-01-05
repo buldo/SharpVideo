@@ -5,6 +5,7 @@ using Hexa.NET.ImGui;
 using SharpVideo.Decoding.OhdDemo.Configuration;
 using SharpVideo.Decoding.V4l2;
 using SharpVideo.Decoding.V4l2.Stateless;
+using SharpVideo.Utils;
 
 namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
@@ -23,6 +24,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Encoded
     private const int WarmupDelayMs = 100;
 
     private readonly DrmHostConfiguration _configuration;
+    private readonly DrmBufferManager _drmBufferManager;
 
     private DrmRenderingContext? _renderingContext;
     private DrmVideoRenderLoop? _videoRenderLoop;
@@ -34,9 +36,13 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Encoded
         V4l2H264StatelessDecoder decoder,
         ILoggerFactory loggerFactory,
         ILogger<DrmHost> logger,
+        DrmBufferManager drmBufferManager,
         DrmHostConfiguration? configuration = null)
         : base(h264Stream, decoder, loggerFactory, logger)
     {
+        ArgumentNullException.ThrowIfNull(drmBufferManager);
+
+        _drmBufferManager = drmBufferManager;
         _configuration = configuration ?? new DrmHostConfiguration();
         Logger.LogInformation("DrmHost initialized (dual-plane mode)");
     }
@@ -85,6 +91,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Encoded
         _renderingContext = DrmRenderingContext.Create(
             videoPixelFormat,
             _configuration,
+            _drmBufferManager,
             LoggerFactory);
 
         _videoRenderLoop = new DrmVideoRenderLoop(
@@ -154,5 +161,9 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Encoded
 
         _renderingContext?.Dispose();
         _renderingContext = null;
+
+        // DrmBufferManager is owned by DrmHost and must be disposed last
+        // (after decoder stops using it)
+        _drmBufferManager.Dispose();
     }
 }

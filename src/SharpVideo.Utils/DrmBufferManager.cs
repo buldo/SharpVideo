@@ -21,6 +21,11 @@ public class DrmBufferManager : IDisposable
     private readonly FrozenDictionary<PixelFormat, List<SharedDmaBuffer>> _managedDrmBuffers;
     private bool _disposed;
 
+    /// <summary>
+    /// Gets the DRM device associated with this buffer manager.
+    /// </summary>
+    public DrmDevice DrmDevice => _drmDevice;
+
     public DrmBufferManager(
         DrmDevice drmDevice,
         DmaBuffersAllocator allocator,

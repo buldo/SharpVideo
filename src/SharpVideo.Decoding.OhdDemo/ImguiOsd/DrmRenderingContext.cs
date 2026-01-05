@@ -23,11 +23,10 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 internal sealed class DrmRenderingContext : IDisposable
 {
     private readonly ILogger _logger;
+    private readonly DrmBufferManager _drmBufferManager;
+    private readonly bool _ownsBufferManager;
 
-    private DrmDevice? _drmDevice;
     private GbmDevice? _gbmDevice;
-    private DmaBuffersAllocator? _dmaAllocator;
-    private DrmBufferManager? _drmBufferManager;
     private DrmPresenter? _presenter;
     private InputManager? _inputManager;
     private ImGuiManager? _imguiManager;
@@ -38,8 +37,7 @@ internal sealed class DrmRenderingContext : IDisposable
     /// <summary>
     /// Gets the DRM buffer manager for video plane allocation.
     /// </summary>
-    public DrmBufferManager BufferManager =>
-        _drmBufferManager ?? throw new InvalidOperationException("Context not initialized");
+    public DrmBufferManager BufferManager => _drmBufferManager;
 
     /// <summary>
     /// Gets the DRM presenter for plane management.
@@ -74,24 +72,32 @@ internal sealed class DrmRenderingContext : IDisposable
     /// </summary>
     public bool ExitRequested => _exitRequested;
 
-    private DrmRenderingContext(ILogger logger)
+    private DrmRenderingContext(DrmBufferManager drmBufferManager, bool ownsBufferManager, ILogger logger)
     {
+        _drmBufferManager = drmBufferManager;
+        _ownsBufferManager = ownsBufferManager;
         _logger = logger;
     }
 
     /// <summary>
-    /// Creates and initializes a DRM rendering context.
+    /// Creates and initializes a DRM rendering context using an existing buffer manager.
     /// </summary>
+    /// <param name="videoPixelFormat">Pixel format for video frames.</param>
+    /// <param name="configuration">DRM host configuration.</param>
+    /// <param name="drmBufferManager">Existing DRM buffer manager (ownership is NOT transferred).</param>
+    /// <param name="loggerFactory">Logger factory.</param>
     public static DrmRenderingContext Create(
         PixelFormat videoPixelFormat,
         DrmHostConfiguration configuration,
+        DrmBufferManager drmBufferManager,
         ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(drmBufferManager);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
         var logger = loggerFactory.CreateLogger<DrmRenderingContext>();
-        var context = new DrmRenderingContext(logger);
+        var context = new DrmRenderingContext(drmBufferManager, ownsBufferManager: false, logger);
 
         context.Initialize(videoPixelFormat, configuration, loggerFactory);
 
@@ -158,7 +164,7 @@ internal sealed class DrmRenderingContext : IDisposable
             _inputManager.ProcessEvents();
         }
 
-        // Check for ESC key (KEY_ESC = 1)
+        // Check for ESC key
         if (_inputManager.IsKeyDown(LinuxInputConstants.KEY_ESC))
         {
             _logger.LogInformation("ESC key pressed, exit requested");
@@ -197,38 +203,16 @@ internal sealed class DrmRenderingContext : IDisposable
             "Initializing DRM rendering context. Video pixel format: {Format}",
             videoPixelFormat.GetName());
 
-        // Open DRM device
-        _drmDevice = string.IsNullOrEmpty(configuration.DrmDevicePath)
-            ? DrmUtils.OpenDrmDevice(_logger)
-            : DrmDevice.Open(configuration.DrmDevicePath);
-
-        if (_drmDevice == null)
-        {
-            throw new InvalidOperationException("Failed to open DRM device");
-        }
-
-        _drmDevice.EnableDrmCapabilities(_logger);
+        // Get the DRM device from the buffer manager
+        var drmDevice = _drmBufferManager.DrmDevice;
 
         // Create GBM device for ImGui rendering
-        _gbmDevice = GbmDevice.CreateFromDrmDevice(_drmDevice);
+        _gbmDevice = GbmDevice.CreateFromDrmDevice(drmDevice);
         _logger.LogInformation("Created GBM device for ImGui rendering");
-
-        // Create DMA buffer allocator for video plane
-        if (!DmaBuffersAllocator.TryCreate(out _dmaAllocator) || _dmaAllocator == null)
-        {
-            throw new InvalidOperationException("Failed to create DMA buffers allocator");
-        }
-
-        // Initialize DrmBufferManager with formats needed
-        _drmBufferManager = new DrmBufferManager(
-            _drmDevice,
-            _dmaAllocator,
-            [videoPixelFormat, KnownPixelFormats.DRM_FORMAT_ARGB8888],
-            loggerFactory.CreateLogger<DrmBufferManager>());
 
         // Create unified DRM presenter
         _presenter = DrmPresenter.CreateWithGbmAtomicAndDmaOverlay(
-            _drmDevice,
+            drmDevice,
             configuration.DisplayWidth,
             configuration.DisplayHeight,
             _gbmDevice,
@@ -269,12 +253,12 @@ internal sealed class DrmRenderingContext : IDisposable
         }
 
         // Initialize ImGui
-        InitializeImGui(configuration, loggerFactory);
+        InitializeImGui(drmDevice, configuration, loggerFactory);
 
         _logger.LogInformation("DRM rendering context initialized successfully");
     }
 
-    private void InitializeImGui(DrmHostConfiguration configuration, ILoggerFactory loggerFactory)
+    private void InitializeImGui(DrmDevice drmDevice, DrmHostConfiguration configuration, ILoggerFactory loggerFactory)
     {
         var gbmAtomicPresenter = _presenter!.AsGbmAtomicPresenter();
         if (gbmAtomicPresenter == null)
@@ -286,7 +270,7 @@ internal sealed class DrmRenderingContext : IDisposable
         {
             Width = DisplayWidth,
             Height = DisplayHeight,
-            DrmDevice = _drmDevice!,
+            DrmDevice = drmDevice,
             GbmDevice = _gbmDevice!,
             GbmSurfaceHandle = gbmAtomicPresenter.GetNativeGbmSurfaceHandle(),
             PixelFormat = KnownPixelFormats.DRM_FORMAT_ARGB8888,
@@ -376,8 +360,12 @@ internal sealed class DrmRenderingContext : IDisposable
         _imguiManager?.Dispose();
         _inputManager?.Dispose();
         _presenter?.Dispose();
-        _drmBufferManager?.Dispose();
         _gbmDevice?.Dispose();
-        _drmDevice?.Dispose();
+
+        // Only dispose buffer manager if we own it
+        if (_ownsBufferManager)
+        {
+            _drmBufferManager.Dispose();
+        }
     }
 }
