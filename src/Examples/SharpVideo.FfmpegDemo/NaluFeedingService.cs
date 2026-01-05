@@ -113,7 +113,7 @@ internal class NaluFeedingService : IDisposable
 
                 // Copy NALU data WITH start codes (Annex-B format required by FFmpeg)
                 _logger.LogTrace("Writing NALU data to buffer ({Size} bytes)", nalu.Data.Length);
-                buffer!.CopyFromNalu(nalu);
+                buffer!.CopyFromSpan(nalu.Data);
 
                 // Send buffer to decoder
                 _logger.LogTrace("Sending buffer to decoder (NALU #{Count})", naluCount + 1);

@@ -6,7 +6,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// </summary>
 internal sealed class VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer> : IDisposable
     where TDecoder : BaseDecoder<TDecoderInputBuffer, TDecoderOutputBuffer>, IDecoder
-    where TDecoderInputBuffer : class
+    where TDecoderInputBuffer : UniversalEncodedBuffer
     where TDecoderOutputBuffer : class
 {
     private readonly TDecoder _decoder;

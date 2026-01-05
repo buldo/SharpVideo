@@ -49,11 +49,9 @@ public class V4l2EncodedBuffer : UniversalEncodedBuffer
     /// Copies data from a span into the buffer.
     /// Supports 3 or 4 byte start codes.
     /// </summary>
-    public void CopyFromSpan(ReadOnlySpan<byte> nalu)
+    public override void CopyFromSpan(ReadOnlySpan<byte> nalu)
     {
-        ReadOnlySpan<byte> fourByteStart = stackalloc byte[] { 0x00, 0x00, 0x00, 0x01 };
-        var payloadStart = nalu.Length >= 4 && nalu.Slice(0, 4).SequenceEqual(fourByteStart) ? 4 : 3;
-
+        var payloadStart = GetPayloadStart(nalu);
         _mmapBuffer.CopyDataToPlane(nalu, 0);
         _usedBytes = nalu.Length;
         NaluPayloadStart = payloadStart;

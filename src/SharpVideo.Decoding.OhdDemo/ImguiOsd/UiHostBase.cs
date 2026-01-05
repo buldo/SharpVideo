@@ -4,7 +4,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
 internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer> : IUiHost
     where TDecoder: BaseDecoder<TDecoderInputBuffer, TDecoderOutputBuffer>, IDecoder
-    where TDecoderInputBuffer: class
+    where TDecoderInputBuffer: UniversalEncodedBuffer
     where TDecoderOutputBuffer : class
 {
     private readonly H264Depacketiser _h264Depacketiser = new();
@@ -109,12 +109,8 @@ internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutput
             return;
         }
 
-        if (buffer is ManagedMemoryEncodedBuffer memBuf)
-        {
-            // Use the internal buffer of MemoryStream to avoid ToArray() copy
-            var internalBuffer = frame.GetBuffer();
-            memBuf.CopyFromSpan(internalBuffer.AsSpan(0, (int)frame.Length));
-        }
+        var internalBuffer = frame.ToArray();
+        buffer.CopyFromSpan(internalBuffer.AsSpan(0, (int)frame.Length));
 
         H264Decoder.AddBufferForDecode(buffer);
     }

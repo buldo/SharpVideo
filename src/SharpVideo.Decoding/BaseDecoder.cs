@@ -24,7 +24,7 @@ namespace SharpVideo.Decoding;
 /// Always use `GetEncodedBuffersForReuse` and `ReuseDecodedBuffer` because it covers all cases - then decoders allocates frames by themselves or uses pre-allocated buffers.
 /// </remarks>
 public abstract class BaseDecoder<TInputBuffer, TOutputBuffer> : IDisposable, IDecoder
-    where TInputBuffer: class
+    where TInputBuffer: UniversalEncodedBuffer
 {
     private readonly ILogger _logger;
 

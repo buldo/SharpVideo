@@ -1,6 +1,4 @@
-﻿using SharpVideo.H264;
-
-namespace SharpVideo.Decoding;
+﻿namespace SharpVideo.Decoding;
 
 public class ManagedMemoryEncodedBuffer : UniversalEncodedBuffer
 {
@@ -16,25 +14,12 @@ public class ManagedMemoryEncodedBuffer : UniversalEncodedBuffer
     /// Only 3 or 4 start codes supported.
     /// We not check data
     /// </summary>
-    public void CopyFromSpan(ReadOnlySpan<byte> nalu)
+    public override void CopyFromSpan(ReadOnlySpan<byte> nalu)
     {
-        ReadOnlySpan<byte> expected = stackalloc byte[] { 0x00, 0x00, 0x00, 0x01 };
-        var start = 3;
-        if (nalu.Slice(0, 4).SequenceEqual(expected))
-        {
-            start = 4;
-        }
-
+        var start = GetPayloadStart(nalu);
         nalu.CopyTo(_buffer);
         _nowUsed = nalu.Length;
         NaluPayloadStart = start;
-    }
-
-    public void CopyFromNalu(H264Nalu nalu)
-    {
-        nalu.Data.CopyTo(_buffer);
-        _nowUsed = nalu.Data.Length;
-        NaluPayloadStart = nalu.PayloadStart;
     }
 
     public int NaluPayloadStart { get; private set; }
