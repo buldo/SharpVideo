@@ -2,12 +2,10 @@
 
 namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
-internal abstract partial class UiHostBase : IHostedService
+internal abstract class UiHostBase : IHostedService
 {
-    private readonly InMemoryPipeStreamAccessor _h264Stream;
     private readonly H264Depacketiser _h264Depacketiser = new();
     private readonly ILogger<UiHostBase> _logger;
-    private Task _decodingThread;
 
     protected readonly BaseDecoder H264Decoder;
 
@@ -16,11 +14,12 @@ internal abstract partial class UiHostBase : IHostedService
         DecodersFactory decodersFactory,
         ILogger<UiHostBase> logger)
     {
-        _h264Stream = h264Stream;
+        _logger = logger;
+
         H264Decoder = decodersFactory.CreateH264Decoder();
         H264Decoder.Start();
-        _logger = logger;
-        _h264Stream.SetReceiveAction(ReceiveH624);
+
+        h264Stream.SetReceiveAction(ReceiveH624);
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -62,10 +61,5 @@ internal abstract partial class UiHostBase : IHostedService
         }
 
         H264Decoder.AddBufferForDecode(buffer);
-    }
-
-    private unsafe void DecodingThread()
-    {
-
     }
 }
