@@ -22,14 +22,14 @@ internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutput
 
     protected UiHostBase(
         InMemoryPipeStreamAccessor h264Stream,
-        DecodersFactory decodersFactory,
+        TDecoder decoder,
         ILoggerFactory loggerFactory,
         ILogger logger)
     {
         LoggerFactory = loggerFactory;
         Logger = logger;
 
-        H264Decoder = (TDecoder)decodersFactory.CreateH264Decoder();
+        H264Decoder = decoder;
         H264Decoder.Start();
 
         h264Stream.SetReceiveAction(ReceiveH624);

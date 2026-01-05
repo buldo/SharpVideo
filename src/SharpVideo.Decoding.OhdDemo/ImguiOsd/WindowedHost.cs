@@ -25,11 +25,11 @@ internal sealed class WindowedHost : UiHostBase<FfmpegH264Decoder, ManagedMemory
 
     public WindowedHost(
         [FromKeyedServices("h264-stream")] InMemoryPipeStreamAccessor h264Stream,
-        DecodersFactory decodersFactory,
+        FfmpegH264Decoder decoder,
         ILoggerFactory loggerFactory,
         ILogger<WindowedHost> logger,
         WindowedHostConfiguration? configuration = null)
-        : base(h264Stream, decodersFactory, loggerFactory, logger)
+        : base(h264Stream, decoder, loggerFactory, logger)
     {
         _configuration = configuration ?? new WindowedHostConfiguration();
         Logger.LogInformation("WindowedHost initialized");

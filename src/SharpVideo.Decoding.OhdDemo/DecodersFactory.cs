@@ -34,29 +34,6 @@ public class DecodersFactory
     }
 
     /// <summary>
-    /// Creates the best available H264 decoder for the current platform.
-    /// On Linux, attempts to use V4L2 hardware decoders first, then falls back to FFmpeg.
-    /// On other platforms, uses FFmpeg.
-    /// </summary>
-    /// <returns>A configured H264 decoder instance.</returns>
-    public IDecoder CreateH264Decoder()
-    {
-        // Try V4L2 hardware decoder on Linux
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-        {
-            var v4l2Decoder = TryCreateV4l2Decoder();
-            if (v4l2Decoder != null)
-            {
-                return v4l2Decoder;
-            }
-
-            _logger.LogInformation("No V4L2 hardware decoder found, falling back to FFmpeg");
-        }
-
-        return CreateFfmpegDecoder();
-    }
-
-    /// <summary>
     /// Creates an FFmpeg-based H264 decoder.
     /// </summary>
     /// <returns>An FFmpeg H264 decoder instance.</returns>

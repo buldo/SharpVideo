@@ -43,11 +43,11 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Encoded
 
     public DrmHost(
         [FromKeyedServices("h264-stream")] InMemoryPipeStreamAccessor h264Stream,
-        DecodersFactory decodersFactory,
+        V4l2H264StatelessDecoder decoder,
         ILoggerFactory loggerFactory,
         ILogger<DrmHost> logger,
         DrmHostConfiguration? configuration = null)
-        : base(h264Stream, decodersFactory, loggerFactory, logger)
+        : base(h264Stream, decoder, loggerFactory, logger)
     {
         _configuration = configuration ?? new DrmHostConfiguration();
         Logger.LogInformation("DrmHost initialized (dual-plane mode)");

@@ -1,4 +1,6 @@
-﻿namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
+﻿using SharpVideo.Decoding.V4l2.Stateless;
+
+namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
 internal class UiHostFactory
 {
@@ -32,18 +34,23 @@ internal class UiHostFactory
             }
         }
 
+        // TODO: bad hardcode
+        var v4l2Decoder = (V4l2H264StatelessDecoder)_decodersFactory.TryCreateV4l2Decoder();
+
         return new DrmHost(
             _h264Stream,
-            _decodersFactory,
+            v4l2Decoder,
             _loggerFactory,
             _loggerFactory.CreateLogger<DrmHost>());
     }
 
     private IUiHost CreateWindowed()
     {
+        var decoder = _decodersFactory.CreateFfmpegDecoder();
+
         return new WindowedHost(
             _h264Stream,
-            _decodersFactory,
+            decoder,
             _loggerFactory,
             _loggerFactory.CreateLogger<WindowedHost>());
     }
