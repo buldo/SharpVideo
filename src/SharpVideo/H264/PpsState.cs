@@ -35,12 +35,12 @@ public class PpsState
     public UInt32 redundant_pic_cnt_present_flag = 0;
     public UInt32 transform_8x8_mode_flag = 0;
     public UInt32 pic_scaling_matrix_present_flag = 0;
-    public List<UInt32> pic_scaling_list_present_flag = new List<uint>();
+    public List<UInt32> pic_scaling_list_present_flag = new();
     // scaling_list()
-    public List<UInt32> ScalingList4x4;
-    public List<UInt32> UseDefaultScalingMatrix4x4Flag;
-    public List<UInt32> ScalingList8x8;
-    public List<UInt32> UseDefaultScalingMatrix8x8Flag;
+    public List<UInt32> ScalingList4x4 = new();
+    public List<UInt32> UseDefaultScalingMatrix4x4Flag = new();
+    public List<UInt32> ScalingList8x8 = new();
+    public List<UInt32> UseDefaultScalingMatrix8x8Flag = new();
     public Int32 delta_scale = 0;
     public Int32 second_chroma_qp_index_offset = 0;
 
