@@ -1,23 +1,39 @@
+using System.Runtime.Versioning;
+
 using SharpVideo.H264;
+using SharpVideo.V4L2;
 
 namespace SharpVideo.Decoding.V4l2;
 
 /// <summary>
 /// Encoded buffer for V4L2 decoder input containing H264 NAL units.
+/// Wraps a V4L2MMapMPlaneBuffer for zero-copy data transfer to the decoder.
 /// </summary>
+[SupportedOSPlatform("linux")]
 public class V4l2EncodedBuffer : UniversalEncodedBuffer
 {
-    private readonly byte[] _buffer;
+    private readonly V4L2MMapMPlaneBuffer _mmapBuffer;
     private int _usedBytes;
 
     /// <summary>
-    /// Creates a new V4L2 encoded buffer with the specified size.
+    /// Creates a new V4L2 encoded buffer wrapping the specified mmap buffer.
     /// </summary>
-    /// <param name="size">Maximum buffer size in bytes.</param>
-    public V4l2EncodedBuffer(int size) : base(size)
+    /// <param name="mmapBuffer">The underlying V4L2 memory-mapped buffer.</param>
+    public V4l2EncodedBuffer(V4L2MMapMPlaneBuffer mmapBuffer)
+        : base((int)mmapBuffer.Planes[0].Length)
     {
-        _buffer = GC.AllocateArray<byte>(size, pinned: true);
+        _mmapBuffer = mmapBuffer;
     }
+
+    /// <summary>
+    /// The underlying V4L2 memory-mapped buffer.
+    /// </summary>
+    public V4L2MMapMPlaneBuffer MMapBuffer => _mmapBuffer;
+
+    /// <summary>
+    /// The buffer index in the V4L2 queue.
+    /// </summary>
+    public uint Index => _mmapBuffer.Index;
 
     /// <summary>
     /// The offset in the buffer where NALU payload starts (after start code).
@@ -38,7 +54,7 @@ public class V4l2EncodedBuffer : UniversalEncodedBuffer
         ReadOnlySpan<byte> fourByteStart = stackalloc byte[] { 0x00, 0x00, 0x00, 0x01 };
         var payloadStart = nalu.Length >= 4 && nalu.Slice(0, 4).SequenceEqual(fourByteStart) ? 4 : 3;
 
-        nalu.CopyTo(_buffer);
+        _mmapBuffer.CopyDataToPlane(nalu, 0);
         _usedBytes = nalu.Length;
         NaluPayloadStart = payloadStart;
     }
@@ -48,7 +64,7 @@ public class V4l2EncodedBuffer : UniversalEncodedBuffer
     /// </summary>
     public void CopyFromNalu(H264Nalu nalu)
     {
-        nalu.Data.CopyTo(_buffer);
+        _mmapBuffer.CopyDataToPlane(nalu.Data, 0);
         _usedBytes = nalu.Data.Length;
         NaluPayloadStart = nalu.PayloadStart;
     }
@@ -56,12 +72,12 @@ public class V4l2EncodedBuffer : UniversalEncodedBuffer
     /// <summary>
     /// Gets the currently used portion of the buffer.
     /// </summary>
-    public ReadOnlySpan<byte> GetData() => _buffer.AsSpan(0, _usedBytes);
+    public ReadOnlySpan<byte> GetData() => _mmapBuffer.MappedPlanes[0].AsSpan().Slice(0, _usedBytes);
 
     /// <summary>
     /// Gets the NALU payload (data after start code).
     /// </summary>
-    public ReadOnlySpan<byte> GetPayload() => _buffer.AsSpan(NaluPayloadStart, _usedBytes - NaluPayloadStart);
+    public ReadOnlySpan<byte> GetPayload() => _mmapBuffer.MappedPlanes[0].AsSpan().Slice(NaluPayloadStart, _usedBytes - NaluPayloadStart);
 
     /// <summary>
     /// Resets the buffer for reuse.
