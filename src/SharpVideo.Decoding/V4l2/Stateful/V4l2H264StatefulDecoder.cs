@@ -2,6 +2,7 @@
 
 using Microsoft.Extensions.Logging;
 
+using SharpVideo.Decoding.V4l2.Discovery;
 using SharpVideo.Drm;
 using SharpVideo.Linux.Native.V4L2;
 using SharpVideo.Utils;

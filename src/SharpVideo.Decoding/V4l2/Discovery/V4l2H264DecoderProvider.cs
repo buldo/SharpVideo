@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
@@ -6,83 +5,35 @@ using Microsoft.Extensions.Logging;
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.C;
 using SharpVideo.Linux.Native.V4L2;
-using SharpVideo.V4L2;
 
-namespace SharpVideo.Decoding.V4l2;
-
-/// <summary>
-/// Describes the type of V4L2 H264 decoder detected.
-/// </summary>
-public enum V4l2H264DecoderType
-{
-    /// <summary>
-    /// No V4L2 H264 decoder found.
-    /// </summary>
-    None,
-
-    /// <summary>
-    /// Stateless H264 decoder (requires userspace to manage decoding state).
-    /// Examples: Raspberry Pi, Rockchip RK3588.
-    /// </summary>
-    Stateless,
-
-    /// <summary>
-    /// Stateful H264 decoder (decoder manages state internally).
-    /// Examples: Qualcomm Venus, some other SoCs.
-    /// </summary>
-    Stateful
-}
-
-/// <summary>
-/// Represents a discovered V4L2 H264 decoder device.
-/// </summary>
-public sealed class V4l2H264DecoderInfo
-{
-    /// <summary>
-    /// The device path (e.g., /dev/video10).
-    /// </summary>
-    public required string DevicePath { get; init; }
-
-    /// <summary>
-    /// The type of decoder.
-    /// </summary>
-    public required V4l2H264DecoderType DecoderType { get; init; }
-
-    /// <summary>
-    /// The driver name.
-    /// </summary>
-    public required string Driver { get; init; }
-
-    /// <summary>
-    /// The card/device name.
-    /// </summary>
-    public required string Card { get; init; }
-
-    /// <summary>
-    /// Path to the associated media device (for stateless decoders), if found.
-    /// </summary>
-    public string? MediaDevicePath { get; init; }
-}
+namespace SharpVideo.Decoding.V4l2.Discovery;
 
 /// <summary>
 /// Service for discovering V4L2 H264 hardware decoders.
 /// </summary>
 [SupportedOSPlatform("linux")]
-public static class V4l2H264DecoderDiscovery
+public class V4l2H264DecoderProvider
 {
+    private readonly ILogger<V4l2H264DecoderProvider> _logger;
+
+    public V4l2H264DecoderProvider(ILogger<V4l2H264DecoderProvider> logger)
+    {
+        _logger = logger;
+    }
+
     /// <summary>
     /// Discovers all available V4L2 H264 decoders on the system.
     /// </summary>
     /// <param name="logger">Optional logger for diagnostic output.</param>
     /// <returns>List of discovered decoder information.</returns>
-    public static IReadOnlyList<V4l2H264DecoderInfo> DiscoverDecoders(ILogger? logger = null)
+    public IReadOnlyList<V4l2H264DecoderInfo> DiscoverDecoders()
     {
         var results = new List<V4l2H264DecoderInfo>();
 
         // Scan /dev/video* devices
         if (!Directory.Exists("/dev"))
         {
-            logger?.LogDebug("No /dev directory found, skipping V4L2 discovery");
+            _logger.LogTrace("No /dev directory found, skipping V4L2 discovery");
             return results;
         }
 
@@ -90,15 +41,15 @@ public static class V4l2H264DecoderDiscovery
             .OrderBy(p => p)
             .ToList();
 
-        logger?.LogDebug("Found {Count} video devices to scan", videoDevices.Count);
+        _logger.LogTrace("Found {Count} video devices to scan", videoDevices.Count);
 
         foreach (var devicePath in videoDevices)
         {
-            var info = TryProbeDevice(devicePath, logger);
+            var info = TryProbeDevice(devicePath);
             if (info != null)
             {
                 results.Add(info);
-                logger?.LogInformation(
+                _logger.LogInformation(
                     "Discovered {DecoderType} H264 decoder at {Path} ({Driver}: {Card})",
                     info.DecoderType,
                     info.DevicePath,
@@ -114,11 +65,10 @@ public static class V4l2H264DecoderDiscovery
     /// Finds the best available H264 decoder, preferring hardware over software.
     /// Priority: Stateless > Stateful > None.
     /// </summary>
-    /// <param name="logger">Optional logger for diagnostic output.</param>
     /// <returns>The best decoder info, or null if no hardware decoder found.</returns>
-    public static V4l2H264DecoderInfo? FindBestDecoder(ILogger? logger = null)
+    public V4l2H264DecoderInfo? FindBestDecoder()
     {
-        var decoders = DiscoverDecoders(logger);
+        var decoders = DiscoverDecoders();
 
         // Prefer stateless decoders (more control, lower latency potential)
         var stateless = decoders.FirstOrDefault(d => d.DecoderType == V4l2H264DecoderType.Stateless);
@@ -131,12 +81,12 @@ public static class V4l2H264DecoderDiscovery
         return decoders.FirstOrDefault(d => d.DecoderType == V4l2H264DecoderType.Stateful);
     }
 
-    private static V4l2H264DecoderInfo? TryProbeDevice(string devicePath, ILogger? logger)
+    private V4l2H264DecoderInfo? TryProbeDevice(string devicePath)
     {
         int fd = Libc.open(devicePath, OpenFlags.O_RDWR | OpenFlags.O_NONBLOCK);
         if (fd < 0)
         {
-            logger?.LogTrace("Cannot open {Path}", devicePath);
+            _logger.LogTrace("Cannot open {Path}", devicePath);
             return null;
         }
 
@@ -146,7 +96,7 @@ public static class V4l2H264DecoderDiscovery
             var capResult = LibV4L2.QueryCapabilities(fd, out var capability);
             if (!capResult.Success)
             {
-                logger?.LogTrace("Cannot query capabilities for {Path}", devicePath);
+                _logger.LogTrace("Cannot query capabilities for {Path}", devicePath);
                 return null;
             }
 
@@ -162,22 +112,22 @@ public static class V4l2H264DecoderDiscovery
 
             if (!isM2M)
             {
-                logger?.LogTrace("{Path} is not a M2M device", devicePath);
+                _logger.LogTrace("{Path} is not a M2M device", devicePath);
                 return null;
             }
 
             // Check if it supports H264 input format
-            if (!SupportsH264Input(fd, logger))
+            if (!IsDeviceSupportsH264Input(fd))
             {
-                logger?.LogTrace("{Path} does not support H264 input", devicePath);
+                _logger.LogTrace("{Path} does not support H264 input", devicePath);
                 return null;
             }
 
             // Determine if stateless or stateful
-            var decoderType = DetermineDecoderType(fd, logger);
+            var decoderType = DetermineDecoderType(fd);
             if (decoderType == V4l2H264DecoderType.None)
             {
-                logger?.LogTrace("{Path} is not an H264 decoder", devicePath);
+                _logger.LogTrace("{Path} is not an H264 decoder", devicePath);
                 return null;
             }
 
@@ -185,7 +135,7 @@ public static class V4l2H264DecoderDiscovery
             string? mediaDevicePath = null;
             if (decoderType == V4l2H264DecoderType.Stateless)
             {
-                mediaDevicePath = TryFindMediaDevice(capability.BusInfoString, logger);
+                mediaDevicePath = TryFindMediaDevice(capability.BusInfoString);
             }
 
             return new V4l2H264DecoderInfo
@@ -203,7 +153,7 @@ public static class V4l2H264DecoderDiscovery
         }
     }
 
-    private static bool SupportsH264Input(int fd, ILogger? logger)
+    private bool IsDeviceSupportsH264Input(int fd)
     {
         // Check OUTPUT_MPLANE formats for H264 support
         var fmtDesc = new V4L2FmtDesc
@@ -219,7 +169,7 @@ public static class V4l2H264DecoderDiscovery
                 fmtDesc.PixelFormat == V4L2PixelFormats.V4L2_PIX_FMT_H264_NO_SC ||
                 fmtDesc.PixelFormat == V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE)
             {
-                logger?.LogTrace(
+                _logger.LogTrace(
                     "Found H264 format: {Format} ({Description})",
                     fmtDesc.PixelFormat,
                     fmtDesc.DescriptionString);
@@ -232,7 +182,7 @@ public static class V4l2H264DecoderDiscovery
         return false;
     }
 
-    private static V4l2H264DecoderType DetermineDecoderType(int fd, ILogger? logger)
+    private V4l2H264DecoderType DetermineDecoderType(int fd)
     {
         // Stateless decoders use H264_SLICE format and have stateless control IDs
         // Check for H264_SLICE support in output formats
@@ -250,20 +200,20 @@ public static class V4l2H264DecoderDiscovery
             if (fmtDesc.PixelFormat == V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE)
             {
                 hasSliceFormat = true;
-                logger?.LogTrace("Device supports H264_SLICE format (stateless indicator)");
+                _logger.LogTrace("Device supports H264_SLICE format (stateless indicator)");
             }
             else if (fmtDesc.PixelFormat == V4L2PixelFormats.V4L2_PIX_FMT_H264 ||
                      fmtDesc.PixelFormat == V4L2PixelFormats.V4L2_PIX_FMT_H264_NO_SC)
             {
                 hasStatefulFormat = true;
-                logger?.LogTrace("Device supports H264 format (stateful indicator)");
+                _logger.LogTrace("Device supports H264 format (stateful indicator)");
             }
 
             fmtDesc.Index++;
         }
 
         // Check for stateless controls as additional confirmation
-        bool hasStatelessControls = CheckStatelessControls(fd, logger);
+        bool hasStatelessControls = CheckStatelessControls(fd);
 
         if (hasSliceFormat && hasStatelessControls)
         {
@@ -278,14 +228,14 @@ public static class V4l2H264DecoderDiscovery
         // If has slice format but not controls, still consider it stateless
         if (hasSliceFormat)
         {
-            logger?.LogDebug("Device has H264_SLICE format but missing some stateless controls, treating as stateless");
+            _logger.LogDebug("Device has H264_SLICE format but missing some stateless controls, treating as stateless");
             return V4l2H264DecoderType.Stateless;
         }
 
         return V4l2H264DecoderType.None;
     }
 
-    private static bool CheckStatelessControls(int fd, ILogger? logger)
+    private bool CheckStatelessControls(int fd)
     {
         // Try to query stateless H264 decode mode control
         var qext = new V4L2QueryExtCtrl
@@ -296,7 +246,7 @@ public static class V4l2H264DecoderDiscovery
         var result = LibV4L2.QueryExtendedControl(fd, ref qext);
         if (result.Success)
         {
-            logger?.LogTrace("Device has V4L2_CID_STATELESS_H264_SPS control");
+            _logger.LogTrace("Device has V4L2_CID_STATELESS_H264_SPS control");
             return true;
         }
 
@@ -305,14 +255,14 @@ public static class V4l2H264DecoderDiscovery
         result = LibV4L2.QueryExtendedControl(fd, ref qext);
         if (result.Success)
         {
-            logger?.LogTrace("Device has V4L2_CID_STATELESS_H264_DECODE_MODE control");
+            _logger.LogTrace("Device has V4L2_CID_STATELESS_H264_DECODE_MODE control");
             return true;
         }
 
         return false;
     }
 
-    private static string? TryFindMediaDevice(string busInfo, ILogger? logger)
+    private string? TryFindMediaDevice(string busInfo)
     {
         // Media devices are at /dev/media*
         // We need to find the one that matches our video device's bus info
@@ -330,7 +280,7 @@ public static class V4l2H264DecoderDiscovery
             // to verify the association
             if (File.Exists(mediaPath))
             {
-                logger?.LogTrace("Found potential media device: {Path}", mediaPath);
+                _logger.LogTrace("Found potential media device: {Path}", mediaPath);
                 return mediaPath;
             }
         }

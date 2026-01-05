@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
 
+using SharpVideo.Decoding.V4l2.Discovery;
 using SharpVideo.Decoding.V4l2.H264;
 using SharpVideo.Drm;
 using SharpVideo.H264;

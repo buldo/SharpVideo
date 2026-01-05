@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "SharpVideo.Decoding.OhdDemo": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
