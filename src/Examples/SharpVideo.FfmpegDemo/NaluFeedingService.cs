@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using SharpVideo.Decoding;
+using SharpVideo.Decoding.Ffmpeg;
 using SharpVideo.FfmpegDemo.NaluSources;
 using SharpVideo.H264;
 
@@ -11,7 +12,7 @@ namespace SharpVideo.FfmpegDemo;
 internal class NaluFeedingService : IDisposable
 {
     private readonly StreamNaluSource _naluSource;
-    private readonly BaseDecoder _decoder;
+    private readonly FfmpegH264Decoder _decoder;
     private readonly ILogger<NaluFeedingService> _logger;
     private Task? _feedingTask;
     private CancellationTokenSource? _cts;
@@ -19,7 +20,7 @@ internal class NaluFeedingService : IDisposable
 
     public NaluFeedingService(
         StreamNaluSource naluSource,
-        BaseDecoder decoder,
+        FfmpegH264Decoder decoder,
         ILogger<NaluFeedingService> logger)
     {
         _naluSource = naluSource ?? throw new ArgumentNullException(nameof(naluSource));

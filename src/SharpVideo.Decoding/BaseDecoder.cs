@@ -23,14 +23,15 @@ namespace SharpVideo.Decoding;
 ///
 /// Always use `GetEncodedBuffersForReuse` and `ReuseDecodedBuffer` because it covers all cases - then decoders allocates frames by themselves or uses pre-allocated buffers.
 /// </remarks>
-public abstract class BaseDecoder : IDisposable
+public abstract class BaseDecoder<TInputBuffer, TOutputBuffer> : IDisposable, IDecoder
+    where TInputBuffer: class
 {
     private readonly ILogger _logger;
 
-    private readonly BlockingCollection<UniversalEncodedBuffer> _encodedBuffersInput = new();
-    private readonly BlockingCollection<UniversalEncodedBuffer> _encodedBuffersOutput = new();
+    private readonly BlockingCollection<TInputBuffer> _encodedBuffersInput = new();
+    private readonly BlockingCollection<TInputBuffer> _encodedBuffersOutput = new();
 
-    private readonly BlockingCollection<UniversalDecodedFrame> _decodedFramesOutput = new();
+    private readonly BlockingCollection<TOutputBuffer> _decodedFramesOutput = new();
 
     private Thread? _decodingThread;
     private CancellationTokenSource? _cts;
@@ -92,7 +93,7 @@ public abstract class BaseDecoder : IDisposable
     /// <param name="encodedBuffer">
     /// Buffer with encoded data. Usually NALU(now we have only h264 support...)
     /// </param>
-    public void AddBufferForDecode(UniversalEncodedBuffer encodedBuffer)
+    public void AddBufferForDecode(TInputBuffer encodedBuffer)
     {
         _encodedBuffersInput.Add(encodedBuffer);
     }
@@ -101,7 +102,7 @@ public abstract class BaseDecoder : IDisposable
     /// Client uses this method to get free buffers that can be uses for <see cref="AddBufferForDecode"/>
     /// </summary>
     /// <returns>Free buffer or null if there is no free buffers</returns>
-    public UniversalEncodedBuffer? GetEncodedBuffersForReuse()
+    public TInputBuffer? GetEncodedBuffersForReuse()
     {
         if (_encodedBuffersOutput.TryTake(out var item))
         {
@@ -117,7 +118,7 @@ public abstract class BaseDecoder : IDisposable
     /// <returns>
     /// Frame with decoded data
     /// </returns>
-    public UniversalDecodedFrame WaitForDecodedFrames()
+    public TOutputBuffer WaitForDecodedFrames()
     {
         return _decodedFramesOutput.Take();
     }
@@ -127,7 +128,7 @@ public abstract class BaseDecoder : IDisposable
     /// </summary>
     /// <param name="decodedFrame">
     /// </param>
-    public abstract void ReuseDecodedFrame(UniversalDecodedFrame decodedFrame);
+    public abstract void ReuseDecodedFrame(TOutputBuffer decodedFrame);
 
     /// <summary>
     /// Implementations of this methods will pass buffers to real decoders(ffmpeg, v4l2, va-api)
@@ -135,7 +136,7 @@ public abstract class BaseDecoder : IDisposable
     /// <param name="encodedBuffer">
     /// Buffer with encoded data
     /// </param>
-    protected abstract void ProcessEncodedDataBuffer(UniversalEncodedBuffer encodedBuffer);
+    protected abstract void ProcessEncodedDataBuffer(TInputBuffer encodedBuffer);
 
     protected abstract void FlushDecoder();
 
@@ -145,7 +146,7 @@ public abstract class BaseDecoder : IDisposable
     /// <param name="encodedBuffer">
     /// Free encoded buffer
     /// </param>
-    protected void AddEncodedBufferToReuse(UniversalEncodedBuffer encodedBuffer)
+    protected void AddEncodedBufferToReuse(TInputBuffer encodedBuffer)
     {
         _encodedBuffersOutput.Add(encodedBuffer);
     }
@@ -156,7 +157,7 @@ public abstract class BaseDecoder : IDisposable
     /// <param name="decodedFrame">
     /// Decoded frame
     /// </param>
-    protected void AddDecodedFrameToOutput(UniversalDecodedFrame decodedFrame)
+    protected void AddDecodedFrameToOutput(TOutputBuffer decodedFrame)
     {
         _decodedFramesOutput.Add(decodedFrame);
     }
@@ -201,4 +202,9 @@ public abstract class BaseDecoder : IDisposable
             _logger.LogError(e, "Decoding error");
         }
     }
+}
+
+public interface IDecoder
+{
+
 }

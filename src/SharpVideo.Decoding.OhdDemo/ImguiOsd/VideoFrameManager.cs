@@ -4,18 +4,21 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// Manages video frame synchronization between decoder and renderer threads.
 /// Provides thread-safe access to decoded frames with automatic frame dropping.
 /// </summary>
-internal sealed class VideoFrameManager : IDisposable
+internal sealed class VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer> : IDisposable
+    where TDecoder : BaseDecoder<TDecoderInputBuffer, TDecoderOutputBuffer>, IDecoder
+    where TDecoderInputBuffer : class
+    where TDecoderOutputBuffer : class
 {
-    private readonly BaseDecoder _decoder;
-    private readonly ILogger<VideoFrameManager> _logger;
+    private readonly TDecoder _decoder;
+    private readonly ILogger<VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer>> _logger;
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly object _frameLock = new();
-    
-    private UniversalDecodedFrame? _currentFrame;
+
+    private TDecoderOutputBuffer? _currentFrame;
     private Task? _frameFetchThread;
     private bool _disposed;
 
-    public VideoFrameManager(BaseDecoder decoder, ILogger<VideoFrameManager> logger)
+    public VideoFrameManager(TDecoder decoder, ILogger<VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer>> logger)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -27,7 +30,7 @@ internal sealed class VideoFrameManager : IDisposable
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         if (_frameFetchThread != null)
         {
             throw new InvalidOperationException("VideoFrameManager is already started");
@@ -35,7 +38,7 @@ internal sealed class VideoFrameManager : IDisposable
 
         _logger.LogInformation("Starting frame fetching loop");
         _frameFetchThread = Task.Factory.StartNew(
-            FrameFetchingLoop, 
+            FrameFetchingLoop,
             TaskCreationOptions.LongRunning);
     }
 
@@ -70,7 +73,7 @@ internal sealed class VideoFrameManager : IDisposable
     /// Returns null if no frame is available.
     /// The caller is responsible for calling ReleaseFrame() after rendering.
     /// </summary>
-    public UniversalDecodedFrame? AcquireCurrentFrame()
+    public TDecoderOutputBuffer? AcquireCurrentFrame()
     {
         lock (_frameLock)
         {
@@ -83,10 +86,10 @@ internal sealed class VideoFrameManager : IDisposable
     /// <summary>
     /// Releases a frame back to the decoder for reuse.
     /// </summary>
-    public void ReleaseFrame(UniversalDecodedFrame frame)
+    public void ReleaseFrame(TDecoderOutputBuffer frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        
+
         _logger.LogTrace("Returning frame to decoder");
         _decoder.ReuseDecodedFrame(frame);
         _logger.LogTrace("Frame returned to decoder");
@@ -107,14 +110,14 @@ internal sealed class VideoFrameManager : IDisposable
 
                 _logger.LogTrace("Received decoded frame #{Count}", frameCount + 1);
 
-                UniversalDecodedFrame? frameToReturn = null;
+                TDecoderOutputBuffer? frameToReturn = null;
 
                 lock (_frameLock)
                 {
                     if (_currentFrame != null)
                     {
                         _logger.LogWarning(
-                            "Overwriting unrendered frame! Frame #{Count} - returning old frame", 
+                            "Overwriting unrendered frame! Frame #{Count} - returning old frame",
                             frameCount);
                         frameToReturn = _currentFrame;
                     }
@@ -152,7 +155,7 @@ internal sealed class VideoFrameManager : IDisposable
 
         _cancellationTokenSource.Cancel();
         _cancellationTokenSource.Dispose();
-        
+
         lock (_frameLock)
         {
             if (_currentFrame != null)

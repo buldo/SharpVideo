@@ -5,7 +5,7 @@ using SharpVideo.Drm;
 
 namespace SharpVideo.Decoding.Ffmpeg;
 
-public sealed unsafe class FfmpegH264Decoder : BaseDecoder
+public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedBuffer, FfmpegDecodedFrame>
 {
     private AVCodec* _codec;
     private AVCodecContext* _codecContext;
@@ -15,7 +15,7 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
     private bool _disposed;
     private readonly FfmpegFramesStorage _framesStorage;
     private readonly BlockingCollection<FfmpegDecodedFrame> _unusedFrames = new();
-    private FfmpegH264Parser? _parser;
+    private FfmpegH264Parser _parser;
 
     private FfmpegH264Decoder(
         AVCodec* codec,
@@ -95,29 +95,16 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder
         return new FfmpegH264Decoder(codec, codecContext, packet, parser, logger);
     }
 
-    public override void ReuseDecodedFrame(UniversalDecodedFrame decodedFrame)
+    public override void ReuseDecodedFrame(FfmpegDecodedFrame decodedFrame)
     {
-        if (decodedFrame is FfmpegDecodedFrame ffmpegFrame)
-        {
-            ffmpeg.av_frame_unref(ffmpegFrame.Frame);
-            _unusedFrames.Add(ffmpegFrame);
-        }
+        ffmpeg.av_frame_unref(decodedFrame.Frame);
+        _unusedFrames.Add(decodedFrame);
     }
 
     /// <param name="encodedBuffer">Only ManagedMemoryBuffer</param>
-    protected override void ProcessEncodedDataBuffer(UniversalEncodedBuffer encodedBuffer)
+    protected override void ProcessEncodedDataBuffer(ManagedMemoryEncodedBuffer encodedBuffer)
     {
-        var memoryBuffer = encodedBuffer as ManagedMemoryEncodedBuffer;
-
-        if (_codecContext == null ||
-            _packet == null ||
-            _parser == null ||
-            memoryBuffer == null)
-        {
-            return;
-        }
-
-        var parseResult = _parser.Parse(memoryBuffer, _codecContext);
+        var parseResult = _parser.Parse(encodedBuffer, _codecContext);
         if (parseResult == null)
         {
             // Parser hasn't accumulated enough data yet

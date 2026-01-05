@@ -3,6 +3,7 @@ using Hexa.NET.ImGui.Backends.OpenGL3;
 using Hexa.NET.ImGui.Backends.SDL3;
 using Hexa.NET.OpenGL;
 
+using SharpVideo.Decoding.Ffmpeg;
 using SharpVideo.Decoding.OhdDemo.Configuration;
 
 using SDLWindow = Hexa.NET.SDL3.SDLWindow;
@@ -14,7 +15,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// <summary>
 /// When we run application as desktop application, we use SDL3 with OpenGL3
 /// </summary>
-internal sealed class WindowedHost : UiHostBase
+internal sealed class WindowedHost : UiHostBase<FfmpegH264Decoder, ManagedMemoryEncodedBuffer, FfmpegDecodedFrame>
 {
     private readonly WindowedHostConfiguration _configuration;
 

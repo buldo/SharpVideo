@@ -19,7 +19,7 @@ namespace SharpVideo.Decoding.V4l2.Stateless;
 /// (e.g., Raspberry Pi, Rockchip RK3588).
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class V4l2H264StatelessDecoder : BaseDecoder
+public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2DecodedFrame>
 {
     private readonly ILogger<V4l2H264StatelessDecoder> _logger;
     private readonly string _devicePath;
@@ -65,13 +65,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder
         _configuration = configuration;
         _drmBufferManager = drmBufferManager;
         _outputPixelFormat = configuration.GetPixelFormat();
-
-        // Preallocate buffers for encoded data
-        for (int i = 0; i < 3; i++)
-        {
-            var buf = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
-            AddEncodedBufferToReuse(buf);
-        }
     }
 
     /// <summary>
@@ -154,30 +147,25 @@ public class V4l2H264StatelessDecoder : BaseDecoder
     }
 
     /// <inheritdoc />
-    public override void ReuseDecodedFrame(UniversalDecodedFrame decodedFrame)
+    public override void ReuseDecodedFrame(V4l2DecodedFrame decodedFrame)
     {
-        if (decodedFrame is not V4l2DecodedFrame v4l2Frame)
-        {
-            throw new ArgumentException("Expected V4l2DecodedFrame", nameof(decodedFrame));
-        }
-
         if (_device == null)
         {
             throw new InvalidOperationException("Decoder not initialized");
         }
 
-        if (v4l2Frame.IsDmaBuf && v4l2Frame.DmaBuffer is not null)
+        if (decodedFrame.IsDmaBuf && decodedFrame.DmaBuffer is not null)
         {
-            _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(v4l2Frame.DmaBuffer.V4L2Buffer);
+            _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(decodedFrame.DmaBuffer.V4L2Buffer);
         }
         else
         {
-            _device.CaptureMPlaneQueue.ReuseBuffer(v4l2Frame.BufferIndex);
+            _device.CaptureMPlaneQueue.ReuseBuffer(decodedFrame.BufferIndex);
         }
     }
 
     /// <inheritdoc />
-    protected override void ProcessEncodedDataBuffer(UniversalEncodedBuffer encodedBuffer)
+    protected override void ProcessEncodedDataBuffer(V4l2EncodedBuffer encodedBuffer)
     {
         if (_device == null)
         {
@@ -186,20 +174,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder
 
         ReadOnlySpan<byte> fullData;
 
-        if (encodedBuffer is V4l2EncodedBuffer v4l2Buffer)
-        {
-            fullData = v4l2Buffer.GetData();
-        }
-        else if (encodedBuffer is ManagedMemoryEncodedBuffer managedBuffer)
-        {
-            fullData = managedBuffer.Get();
-        }
-        else
-        {
-            _logger.LogWarning("Unsupported encoded buffer type: {Type}", encodedBuffer.GetType().Name);
-            AddEncodedBufferToReuse(encodedBuffer);
-            return;
-        }
+        fullData = encodedBuffer.GetData();
 
         if (fullData.Length < 4)
         {
@@ -228,22 +203,24 @@ public class V4l2H264StatelessDecoder : BaseDecoder
             {
                 int naluStart = offset;
                 int payloadStart = offset + startCodeLength;
-                
+
                 // Find next start code to determine end of this NALU
                 int nextOffset = payloadStart;
                 int naluEnd = fullData.Length;
-                
+
                 while (nextOffset <= fullData.Length - 3)
                 {
                     if (fullData[nextOffset] == 0x00 && fullData[nextOffset + 1] == 0x00)
                     {
-                        if (fullData[nextOffset + 2] == 0x01 || 
-                            (nextOffset + 3 < fullData.Length && fullData[nextOffset + 2] == 0x00 && fullData[nextOffset + 3] == 0x01))
+                        if (fullData[nextOffset + 2] == 0x01 ||
+                            (nextOffset + 3 < fullData.Length && fullData[nextOffset + 2] == 0x00 &&
+                             fullData[nextOffset + 3] == 0x01))
                         {
                             naluEnd = nextOffset;
                             break;
                         }
                     }
+
                     nextOffset++;
                 }
 
@@ -297,7 +274,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder
             _mediaDevice = MediaDevice.Open(_mediaDevicePath);
             if (_mediaDevice == null)
             {
-                throw new InvalidOperationException($"Failed to open media device at {_mediaDevicePath}. Stateless decoding requires a media device for requests.");
+                throw new InvalidOperationException(
+                    $"Failed to open media device at {_mediaDevicePath}. Stateless decoding requires a media device for requests.");
             }
         }
         else
@@ -474,8 +452,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder
         _captureCts = new CancellationTokenSource();
         _captureThread = new Thread(ProcessCaptureBuffersThreadProc)
         {
-            Name = "V4L2CaptureBufferProcessor",
-            IsBackground = true
+            Name = "V4L2CaptureBufferProcessor", IsBackground = true
         };
         _captureThread.Start();
         _logger.LogInformation("Started capture buffer processing thread");
@@ -536,6 +513,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder
                         (spsData.pic_width_in_mbs_minus1 + 1) * 16,
                         (spsData.pic_height_in_map_units_minus1 + 1) * 16);
                 }
+
                 break;
 
             case NalUnitType.PPS_NUT:
@@ -547,6 +525,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder
                         ppsData.pic_parameter_set_id,
                         ppsData.seq_parameter_set_id);
                 }
+
                 break;
 
             case NalUnitType.AUD_NUT:
@@ -561,6 +540,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder
                     _logger.LogWarning("Failed to parse slice data for NALU type {NaluType}, skipping", naluType);
                     break;
                 }
+
                 HandleSliceNalu(naluData, sliceData, naluType);
                 break;
 
@@ -613,8 +593,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder
         var timestampNs = _timestampCounter * 1000000; // Simplified unique timestamp
         var timestamp = new TimeVal
         {
-            TvSec = (long)(timestampNs / 1_000_000_000),
-            TvUsec = (long)((timestampNs % 1_000_000_000) / 1000)
+            TvSec = (long)(timestampNs / 1_000_000_000), TvUsec = (long)((timestampNs % 1_000_000_000) / 1000)
         };
 
         MediaRequest? request = null;
@@ -673,7 +652,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder
         }
     }
 
-    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps, ulong timestamp)
+    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps,
+        ulong timestamp)
     {
         // Calculate full POC (Pic Order Count)
         int picOrderCnt = _pocCalculator.CalculatePOC(header, sps, isIdr);
@@ -725,7 +705,10 @@ public class V4l2H264StatelessDecoder : BaseDecoder
             DeltaPicOrderCnt0 = header.delta_pic_order_cnt.Count > 0 ? header.delta_pic_order_cnt[0] : 0,
             DeltaPicOrderCnt1 = header.delta_pic_order_cnt.Count > 1 ? header.delta_pic_order_cnt[1] : 0,
             DecRefPicMarkingBitSize = header.dec_ref_pic_marking?.bit_size ?? 0,
-            PicOrderCntBitSize = (uint)(sps.sps_data.pic_order_cnt_type == 0 ? sps.sps_data.log2_max_pic_order_cnt_lsb_minus4 + 4 : 0),
+            PicOrderCntBitSize =
+                (uint)(sps.sps_data.pic_order_cnt_type == 0
+                    ? sps.sps_data.log2_max_pic_order_cnt_lsb_minus4 + 4
+                    : 0),
             SliceGroupChangeCycle = header.slice_group_change_cycle,
             Reserved = 0,
             Flags = DetermineDecodeFlags(header, isIdr)
@@ -742,7 +725,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder
                 Timestamp = timestamp
             };
             _dpb.Add(newEntry);
-            _logger.LogTrace("Added reference frame to DPB: frame_num={FrameNum}, POC={POC}, timestamp={Timestamp}, DPB size={Size}",
+            _logger.LogTrace(
+                "Added reference frame to DPB: frame_num={FrameNum}, POC={POC}, timestamp={Timestamp}, DPB size={Size}",
                 header.frame_num, picOrderCnt, timestamp, _dpb.Count);
         }
 
@@ -786,11 +770,9 @@ public class V4l2H264StatelessDecoder : BaseDecoder
         var dpb = new V4L2H264DpbEntry[V4L2H264Constants.V4L2_H264_NUM_DPB_ENTRIES];
         for (int i = 0; i < dpb.Length; i++)
         {
-            dpb[i] = new V4L2H264DpbEntry
-            {
-                Reserved = new byte[5]
-            };
+            dpb[i] = new V4L2H264DpbEntry { Reserved = new byte[5] };
         }
+
         return dpb;
     }
 

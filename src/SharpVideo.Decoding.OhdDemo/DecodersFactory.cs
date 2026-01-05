@@ -39,7 +39,7 @@ public class DecodersFactory
     /// On other platforms, uses FFmpeg.
     /// </summary>
     /// <returns>A configured H264 decoder instance.</returns>
-    public BaseDecoder CreateH264Decoder()
+    public IDecoder CreateH264Decoder()
     {
         // Try V4L2 hardware decoder on Linux
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -60,7 +60,7 @@ public class DecodersFactory
     /// Creates an FFmpeg-based H264 decoder.
     /// </summary>
     /// <returns>An FFmpeg H264 decoder instance.</returns>
-    public BaseDecoder CreateFfmpegDecoder()
+    public FfmpegH264Decoder CreateFfmpegDecoder()
     {
         EnsureFfmpegLoaded();
         return FfmpegH264Decoder.Create(_loggerFactory);
@@ -70,7 +70,7 @@ public class DecodersFactory
     /// Attempts to create a V4L2 hardware decoder.
     /// </summary>
     /// <returns>A V4L2 decoder if available, null otherwise.</returns>
-    public BaseDecoder? TryCreateV4l2Decoder()
+    public IDecoder? TryCreateV4l2Decoder()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
@@ -139,12 +139,12 @@ public class DecodersFactory
         return _cachedV4l2DecoderInfo;
     }
 
-    private BaseDecoder CreateV4l2DecoderFromInfo(V4l2H264DecoderInfo decoderInfo)
+    private IDecoder CreateV4l2DecoderFromInfo(V4l2H264DecoderInfo decoderInfo)
     {
         return decoderInfo.DecoderType switch
         {
             V4l2H264DecoderType.Stateless => V4l2H264StatelessDecoder.Create(_loggerFactory, decoderInfo),
-            V4l2H264DecoderType.Stateful => V4l2H264StatefulDecoder.Create(_loggerFactory, decoderInfo),
+            //V4l2H264DecoderType.Stateful => V4l2H264StatefulDecoder.Create(_loggerFactory, decoderInfo),
             _ => throw new InvalidOperationException($"Unexpected decoder type: {decoderInfo.DecoderType}")
         };
     }

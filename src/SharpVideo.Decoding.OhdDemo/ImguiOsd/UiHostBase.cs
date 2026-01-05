@@ -2,17 +2,20 @@
 
 namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
-internal abstract class UiHostBase : IHostedService
+internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer> : IUiHost
+    where TDecoder: BaseDecoder<TDecoderInputBuffer, TDecoderOutputBuffer>, IDecoder
+    where TDecoderInputBuffer: class
+    where TDecoderOutputBuffer : class
 {
     private readonly H264Depacketiser _h264Depacketiser = new();
 
     protected readonly CancellationTokenSource CancellationTokenSource = new();
     protected readonly ILoggerFactory LoggerFactory;
     protected readonly ILogger Logger;
-    protected readonly BaseDecoder H264Decoder;
+    protected readonly TDecoder H264Decoder;
 
     protected Task? DrawThread;
-    protected VideoFrameManager? VideoFrameManager;
+    protected VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer>? VideoFrameManager;
     protected ImGuiUiRenderer? UiRenderer;
 
     protected abstract bool ShowDemoWindow { get; }
@@ -26,7 +29,7 @@ internal abstract class UiHostBase : IHostedService
         LoggerFactory = loggerFactory;
         Logger = logger;
 
-        H264Decoder = decodersFactory.CreateH264Decoder();
+        H264Decoder = (TDecoder)decodersFactory.CreateH264Decoder();
         H264Decoder.Start();
 
         h264Stream.SetReceiveAction(ReceiveH624);
@@ -36,9 +39,9 @@ internal abstract class UiHostBase : IHostedService
     {
         Logger.LogInformation("Starting {HostType}", GetType().Name);
 
-        VideoFrameManager = new VideoFrameManager(
+        VideoFrameManager = new VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer>(
             H264Decoder,
-            LoggerFactory.CreateLogger<VideoFrameManager>());
+            LoggerFactory.CreateLogger<VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer>>());
 
         UiRenderer = new ImGuiUiRenderer(
             LoggerFactory.CreateLogger<ImGuiUiRenderer>(),

@@ -21,7 +21,7 @@ internal class Program
         builder.Services.AddSingleton<DecodersFactory>();
 
         builder.Services.AddSingleton<UiHostFactory>();
-        builder.Services.AddHostedService<UiHostBase>(CreateUiHost);
+        builder.Services.AddHostedService<IUiHost>(CreateUiHost);
 
         builder.Services.AddHostedService<RemoteOpenHdConnector>();
 
@@ -30,7 +30,7 @@ internal class Program
         host.Run();
     }
 
-    private static UiHostBase CreateUiHost(IServiceProvider sp)
+    private static IUiHost CreateUiHost(IServiceProvider sp)
     {
         var factory = sp.GetRequiredService<UiHostFactory>();
         return factory.CreateHost();

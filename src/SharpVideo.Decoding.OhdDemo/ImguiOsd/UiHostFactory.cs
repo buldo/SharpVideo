@@ -16,7 +16,7 @@ internal class UiHostFactory
         _loggerFactory = loggerFactory;
     }
 
-    public UiHostBase CreateHost()
+    public IUiHost CreateHost()
     {
         if (OperatingSystem.IsWindows())
         {
@@ -31,7 +31,7 @@ internal class UiHostFactory
                 return CreateWindowed();
             }
         }
-        
+
         return new DrmHost(
             _h264Stream,
             _decodersFactory,
@@ -39,7 +39,7 @@ internal class UiHostFactory
             _loggerFactory.CreateLogger<DrmHost>());
     }
 
-    private UiHostBase CreateWindowed()
+    private IUiHost CreateWindowed()
     {
         return new WindowedHost(
             _h264Stream,

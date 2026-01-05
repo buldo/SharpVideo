@@ -1,10 +1,15 @@
 using System.Numerics;
+
 using Hexa.NET.ImGui;
+
 using Microsoft.Extensions.Logging;
+
+using SharpVideo.Decoding;
+using SharpVideo.Decoding.Ffmpeg;
+
 using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Silk.NET.Windowing;
-using SharpVideo.Decoding;
 
 namespace SharpVideo.FfmpegDemo;
 
@@ -14,7 +19,7 @@ namespace SharpVideo.FfmpegDemo;
 internal unsafe class WindowManager : IDisposable
 {
     private readonly ILogger<WindowManager> _logger;
-    private readonly BaseDecoder _decoder;
+    private readonly FfmpegH264Decoder _decoder;
     private readonly ILoggerFactory _loggerFactory;
 
     private IWindow? _window;
@@ -34,7 +39,7 @@ internal unsafe class WindowManager : IDisposable
 
     private bool _disposed;
 
-    public WindowManager(BaseDecoder decoder, ILoggerFactory loggerFactory)
+    public WindowManager(FfmpegH264Decoder decoder, ILoggerFactory loggerFactory)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
         _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));

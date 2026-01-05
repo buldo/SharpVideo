@@ -6,6 +6,7 @@ using Hexa.NET.ImGui;
 
 using SharpVideo.Decoding.OhdDemo.Configuration;
 using SharpVideo.Decoding.V4l2;
+using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Gbm;
@@ -23,7 +24,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// - Overlay plane (DMA buffers): Video frames from decoder
 /// </summary>
 [SupportedOSPlatform("linux")]
-internal sealed class DrmHost : UiHostBase
+internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2EncodedBuffer, V4l2DecodedFrame>
 {
     private readonly DrmHostConfiguration _configuration;
 
@@ -36,7 +37,7 @@ internal sealed class DrmHost : UiHostBase
     private InputManager? _inputManager;
     private ImGuiManager? _imguiManager;
     private VideoPlaneRenderer? _videoPlaneRenderer;
-    private readonly Dictionary<SharedDmaBuffer, UniversalDecodedFrame> _framesInUseByDrm = new();
+    private readonly Dictionary<SharedDmaBuffer, V4l2DecodedFrame> _framesInUseByDrm = new();
 
     protected override bool ShowDemoWindow => _configuration.ShowDemoWindow;
 
@@ -371,7 +372,7 @@ internal sealed class DrmHost : UiHostBase
                 _videoPlaneRenderer?.RenderFrame(frame);
                 VideoFrameManager?.ReleaseFrame(frame);
             }
-            
+
             Logger.LogTrace("Video frame presented");
         }
     }
@@ -396,31 +397,14 @@ internal sealed class DrmHost : UiHostBase
         }
     }
 
-    private unsafe void UpdateFrameStatistics(UniversalDecodedFrame frame)
+    private unsafe void UpdateFrameStatistics(V4l2DecodedFrame frame)
     {
-        switch (frame)
-        {
-            case FfmpegDecodedFrame ffmpegFrame:
-                var avFrame = ffmpegFrame.Frame;
-                if (avFrame != null)
-                {
-                    UiRenderer?.UpdateFrameStatistics(
-                        avFrame->width,
-                        avFrame->height,
-                        avFrame->format,
-                        avFrame->pts,
-                        (avFrame->flags & ffmpeg.AV_FRAME_FLAG_KEY) != 0);
-                }
-                break;
-            case V4l2DecodedFrame v4l2Frame:
-                UiRenderer?.UpdateFrameStatistics(
-                    (int)v4l2Frame.Width,
-                    (int)v4l2Frame.Height,
-                    0, // V4L2 doesn't use AVPixelFormat
-                    0, // No PTS available from V4L2
-                    false); // Key frame detection not available
-                break;
-        }
+        UiRenderer?.UpdateFrameStatistics(
+            (int)frame.Width,
+            (int)frame.Height,
+            0, // V4L2 doesn't use AVPixelFormat
+            0, // No PTS available from V4L2
+            false); // Key frame detection not available
     }
 
     private void RenderOsdFrame(float deltaTime)
