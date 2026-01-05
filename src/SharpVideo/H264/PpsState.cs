@@ -35,7 +35,7 @@ public class PpsState
     public UInt32 redundant_pic_cnt_present_flag = 0;
     public UInt32 transform_8x8_mode_flag = 0;
     public UInt32 pic_scaling_matrix_present_flag = 0;
-    public List<UInt32> pic_scaling_list_present_flag;
+    public List<UInt32> pic_scaling_list_present_flag = new List<uint>();
     // scaling_list()
     public List<UInt32> ScalingList4x4;
     public List<UInt32> UseDefaultScalingMatrix4x4Flag;
