@@ -22,7 +22,6 @@
     <ProjectReference Include="..\SharpVideo.Decoding\SharpVideo.Decoding.csproj" />
     <ProjectReference Include="..\SharpVideo.FfmpegBin\SharpVideo.FfmpegBin.csproj" />
     <ProjectReference Include="..\SharpVideo.ImGui\SharpVideo.ImGui.csproj" />
-    <ProjectReference Include="..\SharpVideo.Rtp\SharpVideo.Rtp.csproj" />
   </ItemGroup>
 
 </Project>

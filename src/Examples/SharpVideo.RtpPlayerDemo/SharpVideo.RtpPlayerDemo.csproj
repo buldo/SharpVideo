@@ -12,7 +12,6 @@
   <ItemGroup>
     <ProjectReference Include="../../SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
     <ProjectReference Include="../../SharpVideo/SharpVideo.csproj" />
-    <ProjectReference Include="..\..\SharpVideo.Rtp\SharpVideo.Rtp.csproj" />
     <ProjectReference Include="..\..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
     <ProjectReference Include="..\..\SharpVideo.ImGui\SharpVideo.ImGui.csproj" />
     <ProjectReference Include="..\SharpVideo.V4L2Decoding\SharpVideo.V4L2Decoding.csproj" />

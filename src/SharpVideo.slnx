@@ -29,7 +29,6 @@
   <Project Path="SharpVideo.ImGui/SharpVideo.ImGui.csproj" Id="560ee6bc-5eb1-42ca-8b18-b0e4b668c5fc" />
   <Project Path="SharpVideo.Linux.Native.Tests/SharpVideo.Linux.Native.Tests.csproj" />
   <Project Path="SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
-  <Project Path="SharpVideo.Rtp/SharpVideo.Rtp.csproj" Id="19fa3633-f7c3-4395-ad73-a21b5edd7c89" />
   <Project Path="SharpVideo.Tests/SharpVideo.Tests.csproj" />
   <Project Path="SharpVideo.Utils/SharpVideo.Utils.csproj" Id="6e04e87c-aa49-4d50-bb15-dd6a884fe1fc" />
   <Project Path="SharpVideo/SharpVideo.csproj" />
