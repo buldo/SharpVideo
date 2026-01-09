@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
-using SharpVideo.Rtp;
+
+using Rtsp.Rtp;
 
 namespace SharpVideo.RtpPlayerDemo;
 
@@ -11,18 +11,17 @@ namespace SharpVideo.RtpPlayerDemo;
 /// </summary>
 public class RtpReceiverService : IDisposable
 {
-    private readonly Receiver _receiver;
+    private readonly H264UdpReceiver _receiver;
     private readonly ILogger<RtpReceiverService> _logger;
-    private readonly BlockingCollection<byte[]> _nalUnitsQueue = new(boundedCapacity: 30);
+    private readonly BlockingCollection<byte[]> _nalUnitsQueue = new(boundedCapacity: 100);
     private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
 
     public RtpReceiverService(IPEndPoint bindEndPoint, ILoggerFactory loggerFactory)
     {
         _logger = loggerFactory.CreateLogger<RtpReceiverService>();
-        var receiverLogger = loggerFactory.CreateLogger<Receiver>();
-        _receiver = new Receiver(bindEndPoint, receiverLogger);
-        _receiver.OnVideoFrameReceivedByIndex += OnVideoFrameReceived;
+        _receiver = new(bindEndPoint.Port);
+        _receiver.FrameReceived += OnVideoFrameReceived;
 
         _logger.LogInformation("RTP receiver initialized on {EndPoint}", bindEndPoint);
     }
@@ -62,31 +61,13 @@ public class RtpReceiverService : IDisposable
         }
     }
 
-    private void OnVideoFrameReceived(int streamIndex, IPEndPoint remoteEndPoint, uint timestamp, byte[] nalUnit)
+    private void OnVideoFrameReceived(object? sender, RawMediaFrame frame)
     {
         ReceivedFramesCount++;
 
-        if (_logger.IsEnabled(LogLevel.Debug))
+        foreach (ReadOnlyMemory<byte> memory in frame.Data)
         {
-            _logger.LogDebug("Received RTP frame: stream={Stream}, remote={Remote}, timestamp={Timestamp}, size={Size}",
-                streamIndex, remoteEndPoint, timestamp, nalUnit.Length);
-        }
-
-        // Try to add to queue without blocking
-        if (!_nalUnitsQueue.TryAdd(nalUnit, 0))
-        {
-            DroppedFramesCount++;
-            if (_logger.IsEnabled(LogLevel.Warning))
-            {
-                _logger.LogWarning("NAL unit queue full, dropping frame (total dropped: {Count})", DroppedFramesCount);
-            }
-        }
-        else
-        {
-            if (_logger.IsEnabled(LogLevel.Trace))
-            {
-                _logger.LogTrace("Frame queued successfully, queue size: {Size}", _nalUnitsQueue.Count);
-            }
+            _nalUnitsQueue.Add(memory.ToArray());
         }
     }
 
