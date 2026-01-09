@@ -16,6 +16,7 @@
     <PackageReference Include="Hexa.NET.OpenGL3" Version="1.1.0" />
     <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
     <PackageReference Include="Silk.NET.OpenGLES" Version="2.22.0" />
+    <PackageReference Include="SharpRTSP" Version="1.10.2" />
   </ItemGroup>
 
 	<ItemGroup>

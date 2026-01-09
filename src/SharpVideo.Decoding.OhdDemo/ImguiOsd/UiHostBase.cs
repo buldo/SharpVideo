@@ -1,4 +1,4 @@
-﻿using SharpVideo.Rtp;
+﻿using Rtsp.Rtp;
 
 namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
@@ -7,7 +7,7 @@ internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutput
     where TDecoderInputBuffer: UniversalEncodedBuffer
     where TDecoderOutputBuffer : class
 {
-    private readonly H264Depacketiser _h264Depacketiser = new();
+    private readonly H264Payload _h264Depacketiser = new();
 
     protected readonly CancellationTokenSource CancellationTokenSource = new();
     protected readonly ILoggerFactory LoggerFactory;
@@ -91,27 +91,27 @@ internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutput
 
     private void ReceiveH624(ReadOnlyMemory<byte> payload)
     {
-        var packet = new RTPPacket(payload.Span);
-        var hdr = packet.Header;
-        var frame = _h264Depacketiser.ProcessRTPPayload(packet.Payload, hdr.SequenceNumber, hdr.Timestamp, hdr.MarkerBit, out var isKeyFrame);
-        if (frame != null)
+        var packet = new RtpPacket(payload.Span);
+        var frame = _h264Depacketiser.ProcessPacket(packet);
+        if (frame.Any())
         {
             ProcessNalu(frame);
         }
     }
 
-    private void ProcessNalu(MemoryStream frame)
+    private void ProcessNalu(RawMediaFrame frame)
     {
-        var buffer = H264Decoder.GetEncodedBuffersForReuse();
-        if (buffer == null)
+        foreach (var nalu in frame.Data)
         {
-            Logger.LogWarning("Skipping frame");
-            return;
+            var buffer = H264Decoder.GetEncodedBuffersForReuse();
+            if (buffer == null)
+            {
+                Logger.LogWarning("Skipping frame");
+                return;
+            }
+
+            buffer.CopyFromSpan(nalu.Span);
+            H264Decoder.AddBufferForDecode(buffer);
         }
-
-        var internalBuffer = frame.ToArray();
-        buffer.CopyFromSpan(internalBuffer.AsSpan(0, (int)frame.Length));
-
-        H264Decoder.AddBufferForDecode(buffer);
     }
 }
