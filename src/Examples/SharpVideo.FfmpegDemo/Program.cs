@@ -42,6 +42,7 @@ internal class Program
         // Initialize decoder
         Logger.LogInformation("=== Initializing Decoder ===");
         using var decoder = FfmpegH264Decoder.Create(LoggerFactory);
+        decoder.Initialize();
         Logger.LogInformation("Decoder initialized successfully");
 
         // Open video file and create NALU source

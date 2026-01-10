@@ -125,10 +125,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
     /// <inheritdoc />
     public override PixelFormat OutputPixelFormat => _outputPixelFormat;
 
-    /// <summary>
-    /// Initializes the decoder. Must be called before <see cref="Decode"/>.
-    /// </summary>
-    public void Initialize()
+    /// <inheritdoc />
+    public override void Initialize()
     {
         if (!_isInitialized)
         {

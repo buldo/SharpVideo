@@ -9,19 +9,24 @@ namespace SharpVideo.Decoding;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Decoder has a simple synchronous input API and manages output frames:
+/// Decoder lifecycle:
 /// </para>
-/// <list type="bullet">
+/// <list type="number">
 ///   <item>
-///     <description>
-///       <b>Input:</b> Call <see cref="Decode"/> to decode a NALU. The decoder manages input buffers internally.
-///     </description>
+///     <description>Create decoder instance via factory method.</description>
 ///   </item>
 ///   <item>
-///     <description>
-///       <b>Output:</b> Call <see cref="WaitForDecodedFrames"/> to get decoded frames.
-///       After displaying, return frames via <see cref="ReuseDecodedFrame"/>.
-///     </description>
+///     <description>Call <see cref="Initialize"/> to prepare the decoder for use.</description>
+///   </item>
+///   <item>
+///     <description>Call <see cref="Decode"/> to decode NALUs. The decoder manages input buffers internally.</description>
+///   </item>
+///   <item>
+///     <description>Call <see cref="WaitForDecodedFrames"/> to get decoded frames.
+///       After displaying, return frames via <see cref="ReuseDecodedFrame"/>.</description>
+///   </item>
+///   <item>
+///     <description>Dispose the decoder when done.</description>
 ///   </item>
 /// </list>
 /// </remarks>
@@ -44,6 +49,19 @@ public abstract class BaseDecoder<TInputBuffer, TOutputBuffer> : IDisposable, ID
     /// Gets the logger instance.
     /// </summary>
     protected ILogger Logger => _logger;
+
+    /// <summary>
+    /// Initializes the decoder. Must be called before <see cref="Decode"/>.
+    /// </summary>
+    /// <remarks>
+    /// This method prepares the decoder for use, allocating necessary resources.
+    /// Some decoders may require hardware initialization or device setup.
+    /// </remarks>
+    public virtual void Initialize()
+    {
+        // Default implementation does nothing.
+        // Derived classes can override to perform initialization.
+    }
 
     /// <summary>
     /// Decodes a single NALU synchronously.
@@ -137,6 +155,19 @@ public abstract class BaseDecoder<TInputBuffer, TOutputBuffer> : IDisposable, ID
     }
 }
 
-public interface IDecoder
+/// <summary>
+/// Interface for video decoders.
+/// </summary>
+public interface IDecoder : IDisposable
 {
+    /// <summary>
+    /// Initializes the decoder. Must be called before <see cref="Decode"/>.
+    /// </summary>
+    void Initialize();
+
+    /// <summary>
+    /// Decodes a single NALU synchronously.
+    /// </summary>
+    /// <param name="nalu">The NALU data including start code (Annex-B format).</param>
+    void Decode(ReadOnlySpan<byte> nalu);
 }

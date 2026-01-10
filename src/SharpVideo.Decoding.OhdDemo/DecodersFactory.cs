@@ -44,7 +44,9 @@ public class DecodersFactory
     public FfmpegH264Decoder CreateFfmpegDecoder()
     {
         EnsureFfmpegLoaded();
-        return FfmpegH264Decoder.Create(_loggerFactory);
+        var decoder = FfmpegH264Decoder.Create(_loggerFactory);
+        decoder.Initialize();
+        return decoder;
     }
 
     /// <summary>
@@ -153,13 +155,16 @@ public class DecodersFactory
             throw new InvalidOperationException("DrmBufferManager is required for V4L2 stateless decoder");
         }
 
-        return decoderInfo.DecoderType switch
+        IDecoder decoder = decoderInfo.DecoderType switch
         {
             V4l2H264DecoderType.Stateless => V4l2H264StatelessDecoder.Create(
                 _loggerFactory, decoderInfo, null, effectiveBufferManager),
             //V4l2H264DecoderType.Stateful => V4l2H264StatefulDecoder.Create(_loggerFactory, decoderInfo),
             _ => throw new InvalidOperationException($"Unexpected decoder type: {decoderInfo.DecoderType}")
         };
+
+        decoder.Initialize();
+        return decoder;
     }
 
     private void EnsureFfmpegLoaded()
