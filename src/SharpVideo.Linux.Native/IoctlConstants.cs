@@ -93,7 +93,7 @@ public static class IoctlConstants
 
     // Media controller ioctl constants
     public const uint MEDIA_IOC_MAGIC = (uint)'|';
-    public static readonly uint MEDIA_IOC_DEVICE_INFO = IOWR(MEDIA_IOC_MAGIC, 0x00, 200); // sizeof(struct media_device_info)
+    public static readonly uint MEDIA_IOC_DEVICE_INFO = IOR(MEDIA_IOC_MAGIC, 0x00, 256); // sizeof(struct media_device_info) = 256
     public static readonly uint MEDIA_IOC_ENUM_ENTITIES = IOWR(MEDIA_IOC_MAGIC, 0x01, 0);
     public static readonly uint MEDIA_IOC_ENUM_LINKS = IOWR(MEDIA_IOC_MAGIC, 0x02, 0);
     public static readonly uint MEDIA_IOC_SETUP_LINK = IOWR(MEDIA_IOC_MAGIC, 0x03, 0);
