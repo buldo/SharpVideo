@@ -113,5 +113,7 @@ internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutput
             buffer.CopyFromSpan(nalu.Span);
             H264Decoder.AddBufferForDecode(buffer);
         }
+
+        frame.Dispose();
     }
 }

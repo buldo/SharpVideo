@@ -69,6 +69,8 @@ public class RtpReceiverService : IDisposable
         {
             _nalUnitsQueue.Add(memory.ToArray());
         }
+
+        frame.Dispose();
     }
 
     public void Dispose()
