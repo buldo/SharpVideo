@@ -21,10 +21,10 @@ internal sealed unsafe class FfmpegH264Parser : IDisposable
             throw new InvalidOperationException($"Failed to initialize parser for codec {codecId}");
         }
 
-        _parserContext->flags |= ffmpeg.PARSER_FLAG_COMPLETE_FRAMES;
+        //_parserContext->flags |= ffmpeg.PARSER_FLAG_COMPLETE_FRAMES;
         _aggregationBuffer = GC.AllocateArray<byte>(2 * 1024 * 1024, pinned: true);
 
-        _logger.LogInformation("H264 parser initialized with PARSER_FLAG_COMPLETE_FRAMES");
+        _logger.LogDebug("H264 parser initialized");
     }
 
     /// <summary>
@@ -73,10 +73,20 @@ internal sealed unsafe class FfmpegH264Parser : IDisposable
                 return new ParsedPacketResult(null, 0);
             }
 
+            // Remove consumed bytes from the aggregation buffer
+            if (parsedBytes > 0)
+            {
+                var remaining = _aggregationBufferUsed - parsedBytes;
+                if (remaining > 0)
+                {
+                    Buffer.BlockCopy(_aggregationBuffer, parsedBytes, _aggregationBuffer, 0, remaining);
+                }
+                _aggregationBufferUsed = remaining;
+            }
+
             if (outSize > 0)
             {
-                // Parser produced output, reset aggregation buffer
-                _aggregationBufferUsed = 0;
+                // Parser produced output, data pointer is valid until next Parse() call
                 return new ParsedPacketResult(outData, outSize);
             }
 
