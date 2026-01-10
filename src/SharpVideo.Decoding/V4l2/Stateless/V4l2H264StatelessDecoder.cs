@@ -39,6 +39,9 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     // DPB (Decoded Picture Buffer) tracking - using Queue for O(1) operations
     private readonly Queue<DpbEntry> _dpb = new();
 
+    // Frame counter for generating unique timestamps
+    private ulong _frameCounter;
+
     // H264 bitstream parsing state
     private readonly H264BitstreamParserState _streamState = new();
     private readonly ParsingOptions _parsingOptions = new() { add_checksum = false };
@@ -399,7 +402,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     {
         _logger.LogInformation("Setting up and mapping buffers...");
 
-// Setup OUTPUT buffers for encoded data (MMAP)
+        // Setup OUTPUT buffers for encoded data (MMAP)
         SetupOutputMMapBuffers();
 
         // Setup CAPTURE buffers for decoded frames (DMA-BUF)
@@ -496,6 +499,10 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
         SliceHeaderState header,
         bool isKeyFrame)
     {
+        // Generate unique timestamp for this frame (used for DPB reference tracking)
+        _frameCounter++;
+        var timestamp = new TimeVal { TvSec = (nint)(_frameCounter / 1000000), TvUsec = (nint)(_frameCounter % 1000000) };
+
         // First, ensure there's a free buffer available before acquiring media request
         _device!.OutputMPlaneQueue.EnsureFreeBuffer();
 
@@ -504,18 +511,19 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
         if (_mediaDevice != null)
         {
             request = _device.OutputMPlaneQueue.AcquireMediaRequest();
-            SubmitFrameControls(header, isKeyFrame, request);
+            SubmitFrameControls(header, isKeyFrame, request, _frameCounter);
         }
 
-        // Write buffer and enqueue
-        _device.OutputMPlaneQueue.WriteBufferAndEnqueue(frameData, request);
+        // Write buffer and enqueue with timestamp
+        _device.OutputMPlaneQueue.WriteBufferAndEnqueue(frameData, request, timestamp);
         request?.Queue();
     }
 
     private void SubmitFrameControls(
         SliceHeaderState header,
         bool isKeyFrame,
-        MediaRequest request)
+        MediaRequest request,
+        ulong frameTimestamp)
     {
         var pps = _streamState.pps[header.pic_parameter_set_id];
         var ppsV4L2 = PpsMapper.ConvertPpsStateToV4L2(pps);
@@ -540,14 +548,14 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
                 request);
         }
 
-        var decodeParams = BuildDecodeParams(header, isKeyFrame, sps);
+        var decodeParams = BuildDecodeParams(header, isKeyFrame, sps, frameTimestamp);
         _device.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
             decodeParams,
             request);
     }
 
-    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps)
+    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps, ulong currentFrameTimestamp)
     {
         // Handle IDR frames - they reset the DPB
         if (isIdr)
@@ -565,6 +573,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
             if (dpbIndex >= dpbArray.Length)
                 break;
 
+            dpbArray[dpbIndex].ReferenceTimestamp = entry.Timestamp;
             dpbArray[dpbIndex].FrameNum = (ushort)entry.FrameNum;
             dpbArray[dpbIndex].PicNum = (ushort)entry.FrameNum;
             dpbArray[dpbIndex].TopFieldOrderCnt = (int)entry.PicOrderCnt;
@@ -610,12 +619,13 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
             {
                 FrameNum = (uint)header.frame_num,
                 PicOrderCnt = header.pic_order_cnt_lsb,
+                Timestamp = currentFrameTimestamp,
                 IsReference = true,
                 IsLongTerm = false
             };
             _dpb.Enqueue(newEntry);
-            _logger.LogTrace("Added reference frame to DPB: frame_num={FrameNum}, DPB size={Size}", header.frame_num,
-                _dpb.Count);
+            _logger.LogTrace("Added reference frame to DPB: frame_num={FrameNum}, timestamp={Timestamp}, DPB size={Size}",
+                header.frame_num, currentFrameTimestamp, _dpb.Count);
         }
 
         // Manage DPB size - remove oldest frames if we exceed max size (now O(1) with Queue)
@@ -651,9 +661,17 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
         }
 
         var sliceType = (uint)(header.slice_type % 5);
-        if (sliceType == 0 || sliceType == 3) // P or SP slice
+        switch (sliceType)
         {
-            flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
+            case 0: // P slice
+            case 3: // SP slice
+                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
+                break;
+            case 1: // B slice
+                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BFRAME;
+                break;
+            // case 2: I slice - no flag needed
+            // case 4: SI slice - no flag needed
         }
 
         return flags;
