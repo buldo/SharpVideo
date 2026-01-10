@@ -237,6 +237,13 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
 
         var header = sliceData.slice_header;
 
+        // Skip non-initial slices in frame-based mode
+        if (header.first_mb_in_slice != 0)
+        {
+            _logger.LogDebug("Skipping non-initial slice for frame {FrameNum} in frame-based mode", header.frame_num);
+            return;
+        }
+
         // Check if PPS/SPS are available
         if (!_streamState.pps.TryGetValue(header.pic_parameter_set_id, out var pps) || pps == null)
         {
@@ -392,7 +399,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     {
         _logger.LogInformation("Setting up and mapping buffers...");
 
-        // Setup OUTPUT buffers for encoded data (MMAP)
+// Setup OUTPUT buffers for encoded data (MMAP)
         SetupOutputMMapBuffers();
 
         // Setup CAPTURE buffers for decoded frames (DMA-BUF)
