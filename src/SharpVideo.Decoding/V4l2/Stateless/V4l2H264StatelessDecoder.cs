@@ -125,22 +125,52 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
     /// <inheritdoc />
     public override PixelFormat OutputPixelFormat => _outputPixelFormat;
 
-    /// <inheritdoc />
-    public override void Start()
+    /// <summary>
+    /// Initializes the decoder. Must be called before <see cref="Decode"/>.
+    /// </summary>
+    public void Initialize()
     {
         if (!_isInitialized)
         {
             InitializeDecoder();
         }
-
-        base.Start();
     }
 
     /// <inheritdoc />
-    public override void Stop()
+    public override void Decode(ReadOnlySpan<byte> nalu)
     {
-        base.Stop();
-        Cleanup();
+        if (_device == null)
+        {
+            throw new InvalidOperationException("Decoder not initialized. Call Initialize() first.");
+        }
+
+        if (nalu.Length < 4)
+        {
+            return;
+        }
+
+        // Reclaim any processed OUTPUT buffers and return them to free pool
+        _device.OutputMPlaneQueue.ReclaimProcessed(ReclaimEncodedBuffer);
+
+        // Get a free buffer (may block if all buffers are in use)
+        var encodedBuffer = GetFreeEncodedBuffer();
+
+        // Copy NALU data to the buffer
+        encodedBuffer.CopyFromSpan(nalu);
+
+        // Get payload (data after start code) for parsing
+        var naluPayload = encodedBuffer.GetPayload();
+
+        // Parse the NALU
+        var naluState = H264NalUnitParser.ParseNalUnit(naluPayload, _streamState, _parsingOptions);
+        if (naluState == null)
+        {
+            _logger.LogWarning("Failed to parse NALU");
+            ReturnEncodedBuffer(encodedBuffer);
+            return;
+        }
+
+        ProcessNaluByType(encodedBuffer, naluState);
     }
 
     /// <inheritdoc />
@@ -155,37 +185,11 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
     }
 
     /// <inheritdoc />
-    protected override void ProcessEncodedDataBuffer(V4l2EncodedBuffer encodedBuffer)
+    protected override void FlushDecoder()
     {
-        if (_device == null)
-        {
-            throw new InvalidOperationException("Decoder not initialized");
-        }
-
-        // Reclaim any processed OUTPUT buffers and return them to reuse queue
-        _device.OutputMPlaneQueue.ReclaimProcessed(ReclaimEncodedBuffer);
-
-        ReadOnlySpan<byte> fullData = encodedBuffer.GetData();
-
-        if (fullData.Length < 4)
-        {
-            AddEncodedBufferToReuse(encodedBuffer);
-            return;
-        }
-
-        // Get payload (data after start code) for parsing
-        var naluPayload = encodedBuffer.GetPayload();
-
-        // Parse the NALU
-        var naluState = H264NalUnitParser.ParseNalUnit(naluPayload, _streamState, _parsingOptions);
-        if (naluState == null)
-        {
-            _logger.LogWarning("Failed to parse NALU");
-            AddEncodedBufferToReuse(encodedBuffer);
-            return;
-        }
-
-        ProcessNaluByType(encodedBuffer, naluState);
+        _logger.LogInformation("Flushing decoder...");
+        _dpb.Clear();
+        _pocCalculator.Reset();
     }
 
     private void ReclaimEncodedBuffer(uint bufferIndex)
@@ -194,16 +198,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         {
             var buffer = _encodedBuffers[(int)bufferIndex];
             buffer.Reset();
-            AddEncodedBufferToReuse(buffer);
+            ReturnEncodedBuffer(buffer);
         }
-    }
-
-    /// <inheritdoc />
-    protected override void FlushDecoder()
-    {
-        _logger.LogInformation("Flushing decoder...");
-        _dpb.Clear();
-        _pocCalculator.Reset();
     }
 
     private void InitializeDecoder()
@@ -343,13 +339,13 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
             _device.OutputMPlaneQueue.AssociateMediaRequests(_mediaDevice.OpenedRequests);
         }
 
-        // Create V4l2EncodedBuffer wrappers for OUTPUT buffers and add them to reuse queue
+        // Create V4l2EncodedBuffer wrappers for OUTPUT buffers and add them to free pool
         _encodedBuffers = new List<V4l2EncodedBuffer>();
         foreach (var mmapBuffer in _device.OutputMPlaneQueue.BuffersPool.Buffers)
         {
             var encodedBuffer = new V4l2EncodedBuffer(mmapBuffer);
             _encodedBuffers.Add(encodedBuffer);
-            AddEncodedBufferToReuse(encodedBuffer);
+            ReturnEncodedBuffer(encodedBuffer);
         }
     }
 
@@ -441,8 +437,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
                         (spsData.pic_width_in_mbs_minus1 + 1) * 16,
                         (spsData.pic_height_in_map_units_minus1 + 1) * 16);
                 }
-                // SPS/PPS buffers are not submitted to device, return to reuse queue
-                AddEncodedBufferToReuse(encodedBuffer);
+                // SPS/PPS buffers are not submitted to device, return to free pool
+                ReturnEncodedBuffer(encodedBuffer);
                 break;
 
             case NalUnitType.PPS_NUT:
@@ -454,12 +450,12 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
                         ppsData.pic_parameter_set_id,
                         ppsData.seq_parameter_set_id);
                 }
-                // SPS/PPS buffers are not submitted to device, return to reuse queue
-                AddEncodedBufferToReuse(encodedBuffer);
+                // SPS/PPS buffers are not submitted to device, return to free pool
+                ReturnEncodedBuffer(encodedBuffer);
                 break;
 
             case NalUnitType.AUD_NUT:
-                AddEncodedBufferToReuse(encodedBuffer);
+                ReturnEncodedBuffer(encodedBuffer);
                 break;
 
             case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT:
@@ -469,7 +465,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
                 if (sliceData == null)
                 {
                     _logger.LogWarning("Failed to parse slice data for NALU type {NaluType}, skipping", naluType);
-                    AddEncodedBufferToReuse(encodedBuffer);
+                    ReturnEncodedBuffer(encodedBuffer);
                     break;
                 }
 
@@ -478,7 +474,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
 
             default:
                 _logger.LogTrace("Skipping NALU type {NaluType}", naluType);
-                AddEncodedBufferToReuse(encodedBuffer);
+                ReturnEncodedBuffer(encodedBuffer);
                 break;
         }
     }
@@ -495,7 +491,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         {
             _logger.LogWarning("Cannot decode frame: PPS {PpsId} not received yet, skipping frame {FrameNum}",
                 header.pic_parameter_set_id, header.frame_num);
-            AddEncodedBufferToReuse(encodedBuffer);
+            ReturnEncodedBuffer(encodedBuffer);
             return;
         }
 
@@ -503,7 +499,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         {
             _logger.LogWarning("Cannot decode frame: SPS {SpsId} not received yet, skipping frame {FrameNum}",
                 pps.seq_parameter_set_id, header.frame_num);
-            AddEncodedBufferToReuse(encodedBuffer);
+            ReturnEncodedBuffer(encodedBuffer);
             return;
         }
 
@@ -541,7 +537,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         request?.Queue();
 
         // Buffer is now owned by the kernel, will be returned via ReclaimProcessed
-        // Don't add to reuse queue here - it will be reclaimed when dequeued
+        // Don't add to free pool here - it will be reclaimed when dequeued
     }
 
     private void SubmitFrameControls(

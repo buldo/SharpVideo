@@ -1,8 +1,6 @@
 using Microsoft.Extensions.Logging;
-using SharpVideo.Decoding;
 using SharpVideo.Decoding.Ffmpeg;
 using SharpVideo.FfmpegDemo.NaluSources;
-using SharpVideo.H264;
 
 namespace SharpVideo.FfmpegDemo;
 
@@ -80,44 +78,8 @@ internal class NaluFeedingService : IDisposable
 
                 _logger.LogTrace("Processing NALU #{Count}", naluCount + 1);
 
-                // Get a free buffer from the decoder
-                ManagedMemoryEncodedBuffer? buffer = null;
-                int retryCount = 0;
-                while (buffer == null && !cancellationToken.IsCancellationRequested)
-                {
-                    buffer = _decoder.GetEncodedBuffersForReuse() as ManagedMemoryEncodedBuffer;
-                    if (buffer == null)
-                    {
-                        retryCount++;
-                        if (retryCount % 100 == 0)
-                        {
-                            _logger.LogWarning("Waiting for free buffer, retry count: {RetryCount}", retryCount);
-                        }
-                        // No free buffers available, wait a bit
-                        Thread.Sleep(1);
-                    }
-                    else
-                    {
-                        if (retryCount > 0)
-                        {
-                            _logger.LogDebug("Got free buffer after {RetryCount} retries", retryCount);
-                        }
-                    }
-                }
-
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    _logger.LogDebug("Cancellation requested after waiting for buffer");
-                    break;
-                }
-
-                // Copy NALU data WITH start codes (Annex-B format required by FFmpeg)
-                _logger.LogTrace("Writing NALU data to buffer ({Size} bytes)", nalu.Data.Length);
-                buffer!.CopyFromSpan(nalu.Data);
-
-                // Send buffer to decoder
-                _logger.LogTrace("Sending buffer to decoder (NALU #{Count})", naluCount + 1);
-                _decoder.AddBufferForDecode(buffer);
+                // Directly decode the NALU - decoder manages buffers internally
+                _decoder.Decode(nalu.Data);
 
                 naluCount++;
                 _logger.LogTrace("Successfully fed NALU #{Count}", naluCount);

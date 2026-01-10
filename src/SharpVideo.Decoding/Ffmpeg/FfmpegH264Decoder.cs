@@ -31,14 +31,6 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedB
         _parser = parser;
         _logger = logger;
 
-        // Preallocate some buffers for encoded data
-        for (int i = 0; i < 3; i++)
-        {
-            // Allocate 2MB
-            var buf = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
-            AddEncodedBufferToReuse(buf);
-        }
-
         // Preallocate some buffers for decoded data
         var framesCount = 3;
         _framesStorage = new FfmpegFramesStorage(framesCount);
@@ -69,11 +61,6 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedB
 
         logger.LogInformation("Codec context allocated");
 
-        // TODO: maybe needed. Now use default
-        // codecContext->thread_count = configuration.ThreadCount;
-        // codecContext->thread_type = configuration.ThreadType;
-        // logger.LogDebug("Opening codec with thread_count={ThreadCount}, thread_type={ThreadType}", codecContext->thread_count, codecContext->thread_type);
-
         var ret = ffmpeg.avcodec_open2(codecContext, codec, null);
         if (ret < 0)
         {
@@ -95,29 +82,19 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedB
         return new FfmpegH264Decoder(codec, codecContext, packet, parser, logger);
     }
 
-    public override void ReuseDecodedFrame(FfmpegDecodedFrame decodedFrame)
+    /// <inheritdoc />
+    public override void Decode(ReadOnlySpan<byte> nalu)
     {
-        ffmpeg.av_frame_unref(decodedFrame.Frame);
-        _unusedFrames.Add(decodedFrame);
-    }
-
-    /// <param name="encodedBuffer">Only ManagedMemoryBuffer</param>
-    protected override void ProcessEncodedDataBuffer(ManagedMemoryEncodedBuffer encodedBuffer)
-    {
-        var parseResult = _parser.Parse(encodedBuffer, _codecContext);
+        var parseResult = _parser.Parse(nalu, _codecContext);
         if (parseResult == null)
         {
             // Parser hasn't accumulated enough data yet
             return;
         }
 
-        // If parser returned error or empty packet, return buffers to reuse
+        // If parser returned error or empty packet, skip
         if (parseResult.Data == null || parseResult.Size == 0)
         {
-            foreach (var buffer in parseResult.Buffers)
-            {
-                AddEncodedBufferToReuse(buffer);
-            }
             return;
         }
 
@@ -135,36 +112,18 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedB
             _logger.LogTrace("Packet sent");
         }
 
-        // Return buffers to reuse after packet has been sent
-        foreach (var buffer in parseResult.Buffers)
-        {
-            AddEncodedBufferToReuse(buffer);
-        }
-
         // Receive frames from decoder
-        while (true)
-        {
-            var frameWrapper = _unusedFrames.Take();
-            ret = ffmpeg.avcodec_receive_frame(_codecContext, frameWrapper.Frame);
-            if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
-            {
-                // No data. Frame can be reused
-                _unusedFrames.Add(frameWrapper);
-                break;
-            }
-
-            if (ret < 0)
-            {
-                // Error. Frame can be reused
-                _unusedFrames.Add(frameWrapper);
-                _logger.LogError("Error receiving frame: {Error}", GetErrorString(ret));
-                break;
-            }
-
-            AddDecodedFrameToOutput(frameWrapper);
-        }
+        ReceiveFrames();
     }
 
+    /// <inheritdoc />
+    public override void ReuseDecodedFrame(FfmpegDecodedFrame decodedFrame)
+    {
+        ffmpeg.av_frame_unref(decodedFrame.Frame);
+        _unusedFrames.Add(decodedFrame);
+    }
+
+    /// <inheritdoc />
     protected override void FlushDecoder()
     {
         if (_codecContext == null)
@@ -199,6 +158,7 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedB
                 break;
             }
 
+            flushedFrames++;
             AddDecodedFrameToOutput(frameWrapper);
         }
 
@@ -209,6 +169,31 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedB
     /// FFmpeg software H.264 decoder always outputs YUV420P format.
     /// </summary>
     public override PixelFormat OutputPixelFormat => KnownPixelFormats.DRM_FORMAT_YUV420;
+
+    private void ReceiveFrames()
+    {
+        while (true)
+        {
+            var frameWrapper = _unusedFrames.Take();
+            var ret = ffmpeg.avcodec_receive_frame(_codecContext, frameWrapper.Frame);
+            if (ret == ffmpeg.AVERROR(ffmpeg.EAGAIN) || ret == ffmpeg.AVERROR_EOF)
+            {
+                // No data. Frame can be reused
+                _unusedFrames.Add(frameWrapper);
+                break;
+            }
+
+            if (ret < 0)
+            {
+                // Error. Frame can be reused
+                _unusedFrames.Add(frameWrapper);
+                _logger.LogError("Error receiving frame: {Error}", GetErrorString(ret));
+                break;
+            }
+
+            AddDecodedFrameToOutput(frameWrapper);
+        }
+    }
 
     private static string GetErrorString(int errorCode)
     {

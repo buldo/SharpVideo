@@ -23,20 +23,24 @@ public class V4l2H264StatefulDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decode
     {
     }
 
+    /// <inheritdoc />
+    public override void Decode(ReadOnlySpan<byte> nalu)
+    {
+        throw new NotImplementedException();
+    }
+
+    /// <inheritdoc />
     public override void ReuseDecodedFrame(V4l2DecodedFrame decodedFrame)
     {
         throw new NotImplementedException();
     }
 
-    protected override void ProcessEncodedDataBuffer(V4l2EncodedBuffer encodedBuffer)
-    {
-        throw new NotImplementedException();
-    }
-
+    /// <inheritdoc />
     protected override void FlushDecoder()
     {
         throw new NotImplementedException();
     }
 
+    /// <inheritdoc />
     public override PixelFormat OutputPixelFormat { get; }
 }

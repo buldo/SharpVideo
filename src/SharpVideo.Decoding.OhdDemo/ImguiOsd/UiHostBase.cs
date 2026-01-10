@@ -30,7 +30,6 @@ internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutput
         Logger = logger;
 
         H264Decoder = decoder;
-        H264Decoder.Start();
 
         h264Stream.SetReceiveAction(ReceiveH624);
     }
@@ -103,15 +102,8 @@ internal abstract class UiHostBase<TDecoder, TDecoderInputBuffer, TDecoderOutput
     {
         foreach (var nalu in frame.Data)
         {
-            var buffer = H264Decoder.GetEncodedBuffersForReuse();
-            if (buffer == null)
-            {
-                Logger.LogWarning("Skipping frame");
-                return;
-            }
-
-            buffer.CopyFromSpan(nalu.Span);
-            H264Decoder.AddBufferForDecode(buffer);
+            // Directly decode the NALU - decoder manages buffers internally
+            H264Decoder.Decode(nalu.Span);
         }
 
         frame.Dispose();

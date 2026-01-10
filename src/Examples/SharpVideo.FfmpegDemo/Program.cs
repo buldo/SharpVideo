@@ -44,10 +44,6 @@ internal class Program
         using var decoder = FfmpegH264Decoder.Create(LoggerFactory);
         Logger.LogInformation("Decoder initialized successfully");
 
-        // Start decoder
-        decoder.Start();
-        Logger.LogInformation("Decoder started");
-
         // Open video file and create NALU source
         Logger.LogInformation("Opening video file: {FilePath}", videoFilePath);
         var stream = File.OpenRead(videoFilePath);
@@ -75,7 +71,6 @@ internal class Program
         // Cleanup
         Logger.LogInformation("=== Cleaning Up ===");
         await naluFeeder.StopAsync();
-        decoder.Stop();
         await naluSource.StopAsync();
 
         Logger.LogInformation("Cleanup complete");

@@ -1,4 +1,3 @@
-using System.Buffers;
 using FFmpeg.AutoGen;
 using Microsoft.Extensions.Logging;
 
@@ -8,8 +7,8 @@ internal sealed unsafe class FfmpegH264Parser : IDisposable
 {
     private readonly AVCodecParserContext* _parserContext;
     private readonly ILogger _logger;
-    private readonly List<ManagedMemoryEncodedBuffer> _accumulatedBuffers = new();
-    private readonly ManagedMemoryEncodedBuffer _aggregationBuffer;
+    private readonly byte[] _aggregationBuffer;
+    private int _aggregationBufferUsed;
     private bool _disposed;
 
     public FfmpegH264Parser(AVCodecID codecId, ILogger logger)
@@ -23,26 +22,35 @@ internal sealed unsafe class FfmpegH264Parser : IDisposable
         }
 
         _parserContext->flags |= ffmpeg.PARSER_FLAG_COMPLETE_FRAMES;
-        _aggregationBuffer = new ManagedMemoryEncodedBuffer(2 * 1024 * 1024);
+        _aggregationBuffer = GC.AllocateArray<byte>(2 * 1024 * 1024, pinned: true);
 
         _logger.LogInformation("H264 parser initialized with PARSER_FLAG_COMPLETE_FRAMES");
     }
 
-    public ParsedPacketResult? Parse(ManagedMemoryEncodedBuffer buffer, AVCodecContext* codecContext)
+    /// <summary>
+    /// Parses NALU data and returns parsed packet result when a complete frame is available.
+    /// </summary>
+    /// <param name="nalu">NALU data including start code.</param>
+    /// <param name="codecContext">FFmpeg codec context.</param>
+    /// <returns>Parsed packet result if complete frame available, null otherwise.</returns>
+    public ParsedPacketResult? Parse(ReadOnlySpan<byte> nalu, AVCodecContext* codecContext)
     {
-        ArgumentNullException.ThrowIfNull(buffer);
-
         if (_disposed)
         {
             throw new ObjectDisposedException(nameof(FfmpegH264Parser));
         }
 
-        _accumulatedBuffers.Add(buffer);
-        _aggregationBuffer.AggregateInCurrent(_accumulatedBuffers);
+        // Copy incoming NALU to aggregation buffer
+        if (_aggregationBufferUsed + nalu.Length > _aggregationBuffer.Length)
+        {
+            _logger.LogWarning("Aggregation buffer overflow, resetting");
+            _aggregationBufferUsed = 0;
+        }
 
-        var dataSpan = _aggregationBuffer.Get();
+        nalu.CopyTo(_aggregationBuffer.AsSpan(_aggregationBufferUsed));
+        _aggregationBufferUsed += nalu.Length;
 
-        fixed (byte* dataPtr = dataSpan)
+        fixed (byte* dataPtr = _aggregationBuffer)
         {
             byte* outData = null;
             int outSize = 0;
@@ -53,7 +61,7 @@ internal sealed unsafe class FfmpegH264Parser : IDisposable
                 &outData,
                 &outSize,
                 dataPtr,
-                dataSpan.Length,
+                _aggregationBufferUsed,
                 ffmpeg.AV_NOPTS_VALUE,
                 ffmpeg.AV_NOPTS_VALUE,
                 0);
@@ -61,16 +69,15 @@ internal sealed unsafe class FfmpegH264Parser : IDisposable
             if (parsedBytes < 0)
             {
                 _logger.LogWarning("Parser error: {Error}", GetErrorString(parsedBytes));
-                var buffersToReturn = _accumulatedBuffers.ToList();
-                _accumulatedBuffers.Clear();
-                return new ParsedPacketResult(null, 0, buffersToReturn);
+                _aggregationBufferUsed = 0;
+                return new ParsedPacketResult(null, 0);
             }
 
             if (outSize > 0)
             {
-                var buffersToReturn = _accumulatedBuffers.ToList();
-                _accumulatedBuffers.Clear();
-                return new ParsedPacketResult(outData, outSize, buffersToReturn);
+                // Parser produced output, reset aggregation buffer
+                _aggregationBufferUsed = 0;
+                return new ParsedPacketResult(outData, outSize);
             }
 
             // Parser didn't return a packet yet, continue accumulating
@@ -93,7 +100,7 @@ internal sealed unsafe class FfmpegH264Parser : IDisposable
             ffmpeg.av_parser_close(ctx);
         }
 
-        _accumulatedBuffers.Clear();
+        _aggregationBufferUsed = 0;
     }
 
     private static string GetErrorString(int errorCode)
@@ -108,12 +115,10 @@ internal sealed class ParsedPacketResult
 {
     public unsafe byte* Data { get; }
     public int Size { get; }
-    public List<ManagedMemoryEncodedBuffer> Buffers { get; }
 
-    public unsafe ParsedPacketResult(byte* data, int size, List<ManagedMemoryEncodedBuffer> buffers)
+    public unsafe ParsedPacketResult(byte* data, int size)
     {
         Data = data;
         Size = size;
-        Buffers = buffers;
     }
 }
