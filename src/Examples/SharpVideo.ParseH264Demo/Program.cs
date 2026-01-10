@@ -15,7 +15,7 @@ internal class Program
         await foreach (var nalu in provider.NaluReader.ReadAllAsync())
         {
             var naluState = H264NalUnitParser.ParseNalUnit(nalu.WithoutHeader, streamState, parsingOptions);
-            var naluType = (NalUnitType)naluState.nal_unit_header.nal_unit_type;
+            var naluType = naluState.nal_unit_header.NalUnitType;
             Console.Write($"Nalu Type: {naluType}, Size: {nalu.Data.Length} bytes");
             if (naluType == NalUnitType.PPS_NUT)
             {

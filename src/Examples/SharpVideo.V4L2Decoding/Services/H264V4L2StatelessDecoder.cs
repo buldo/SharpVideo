@@ -266,7 +266,7 @@ public class H264V4L2StatelessDecoder
     /// </summary>
     private void ProcessNaluByType(H264Nalu naluData, NalUnitState naluState, H264BitstreamParserState streamState)
     {
-        var naluType = (NalUnitType)naluState.nal_unit_header.nal_unit_type;
+        var naluType = naluState.nal_unit_header.NalUnitType;
 
         switch (naluType)
         {

@@ -147,28 +147,134 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
             return;
         }
 
+        // Determine start code length and get NALU type from first byte after start code
+        int startCodeLength = GetStartCodeLength(nalu);
+        if (startCodeLength == 0 || nalu.Length <= startCodeLength)
+        {
+            return;
+        }
+
+        // Parse the NALU to update stream state (SPS/PPS) or get slice header
+        var naluState = H264NalUnitParser.ParseNalUnit(nalu.Slice(startCodeLength), _streamState, _parsingOptions);
+        if (naluState == null)
+        {
+            _logger.LogWarning("Failed to parse NALU");
+            return;
+        }
+
+        // Process based on NALU type - only copy to V4L2 buffer for slice data
+        switch (naluState.nal_unit_header.NalUnitType)
+        {
+            case NalUnitType.SPS_NUT:
+                ProcessSpsNalu(naluState);
+                break;
+
+            case NalUnitType.PPS_NUT:
+                ProcessPpsNalu(naluState);
+                break;
+
+            case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT:
+            case NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT:
+                ProcessSliceNalu(nalu, naluState, naluState.nal_unit_header.NalUnitType);
+                break;
+
+            default:
+                _logger.LogTrace("Skipping NALU type {NaluType}", naluState.nal_unit_header.NalUnitType);
+                break;
+        }
+    }
+
+    private static int GetStartCodeLength(ReadOnlySpan<byte> nalu)
+    {
+        // Check for 4-byte start code: 0x00 0x00 0x00 0x01
+        if (nalu.Length >= 4 &&
+            nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x00 && nalu[3] == 0x01)
+        {
+            return 4;
+        }
+
+        // Check for 3-byte start code: 0x00 0x00 0x01
+        if (nalu.Length >= 3 &&
+            nalu[0] == 0x00 && nalu[1] == 0x00 && nalu[2] == 0x01)
+        {
+            return 3;
+        }
+
+        return 0;
+    }
+
+    private void ProcessSpsNalu(NalUnitState naluState)
+    {
+        var spsData = naluState.nal_unit_payload.sps?.sps_data;
+        if (spsData != null)
+        {
+            _logger.LogInformation(
+                "SPS RECEIVED: id={SpsId}, profile={Profile}, level={Level}, size={Width}x{Height}",
+                spsData.seq_parameter_set_id,
+                spsData.profile_idc,
+                spsData.level_idc,
+                (spsData.pic_width_in_mbs_minus1 + 1) * 16,
+                (spsData.pic_height_in_map_units_minus1 + 1) * 16);
+        }
+        // SPS is stored in _streamState by the parser, no V4L2 buffer needed
+    }
+
+    private void ProcessPpsNalu(NalUnitState naluState)
+    {
+        var ppsData = naluState.nal_unit_payload.pps;
+        if (ppsData != null)
+        {
+            _logger.LogInformation(
+                "PPS RECEIVED: id={PpsId}, references SPS={SpsId}",
+                ppsData.pic_parameter_set_id,
+                ppsData.seq_parameter_set_id);
+        }
+        // PPS is stored in _streamState by the parser, no V4L2 buffer needed
+    }
+
+    private void ProcessSliceNalu(ReadOnlySpan<byte> nalu, NalUnitState naluState, NalUnitType naluType)
+    {
+        _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
+
+        var sliceData = naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp;
+        if (sliceData == null)
+        {
+            _logger.LogWarning("Failed to parse slice data for NALU type {NaluType}, skipping", naluType);
+            return;
+        }
+
+        var header = sliceData.slice_header;
+
+        // Check if PPS/SPS are available
+        if (!_streamState.pps.TryGetValue(header.pic_parameter_set_id, out var pps) || pps == null)
+        {
+            _logger.LogWarning("Cannot decode frame: PPS {PpsId} not received yet, skipping frame {FrameNum}",
+                header.pic_parameter_set_id, header.frame_num);
+            return;
+        }
+
+        if (!_streamState.sps.TryGetValue(pps.seq_parameter_set_id, out var sps) || sps == null)
+        {
+            _logger.LogWarning("Cannot decode frame: SPS {SpsId} not received yet, skipping frame {FrameNum}",
+                pps.seq_parameter_set_id, header.frame_num);
+            return;
+        }
+
         // Reclaim any processed OUTPUT buffers and return them to free pool
-        _device.OutputMPlaneQueue.ReclaimProcessed(ReclaimEncodedBuffer);
+        _device!.OutputMPlaneQueue.ReclaimProcessed(ReclaimEncodedBuffer);
 
         // Get a free buffer (may block if all buffers are in use)
         var encodedBuffer = GetFreeEncodedBuffer();
 
-        // Copy NALU data to the buffer
+        // Copy NALU data to the V4L2 buffer - only for slice data
         encodedBuffer.CopyFromSpan(nalu);
 
-        // Get payload (data after start code) for parsing
-        var naluPayload = encodedBuffer.GetPayload();
+        bool isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 
-        // Parse the NALU
-        var naluState = H264NalUnitParser.ParseNalUnit(naluPayload, _streamState, _parsingOptions);
-        if (naluState == null)
-        {
-            _logger.LogWarning("Failed to parse NALU");
-            ReturnEncodedBuffer(encodedBuffer);
-            return;
-        }
+        _logger.LogDebug("Submitting frame: frame_num={FrameNum}, PPS={PpsId}, SPS={SpsId}, KeyFrame={IsKeyFrame}",
+            header.frame_num, header.pic_parameter_set_id, pps.seq_parameter_set_id, isKeyFrame);
 
-        ProcessNaluByType(encodedBuffer, naluState);
+        SubmitFrameToDevice(encodedBuffer, header, isKeyFrame);
     }
 
     /// <inheritdoc />
@@ -415,98 +521,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         }
 
         _logger.LogInformation("Capture buffer processing thread stopped");
-    }
-
-    private void ProcessNaluByType(V4l2EncodedBuffer encodedBuffer, NalUnitState naluState)
-    {
-        var naluType = (NalUnitType)naluState.nal_unit_header.nal_unit_type;
-
-        switch (naluType)
-        {
-            case NalUnitType.SPS_NUT:
-                var spsData = naluState.nal_unit_payload.sps?.sps_data;
-                if (spsData != null)
-                {
-                    _logger.LogInformation(
-                        "SPS RECEIVED: id={SpsId}, profile={Profile}, level={Level}, size={Width}x{Height}",
-                        spsData.seq_parameter_set_id,
-                        spsData.profile_idc,
-                        spsData.level_idc,
-                        (spsData.pic_width_in_mbs_minus1 + 1) * 16,
-                        (spsData.pic_height_in_map_units_minus1 + 1) * 16);
-                }
-                // SPS/PPS buffers are not submitted to device, return to free pool
-                ReturnEncodedBuffer(encodedBuffer);
-                break;
-
-            case NalUnitType.PPS_NUT:
-                var ppsData = naluState.nal_unit_payload.pps;
-                if (ppsData != null)
-                {
-                    _logger.LogInformation(
-                        "PPS RECEIVED: id={PpsId}, references SPS={SpsId}",
-                        ppsData.pic_parameter_set_id,
-                        ppsData.seq_parameter_set_id);
-                }
-                // SPS/PPS buffers are not submitted to device, return to free pool
-                ReturnEncodedBuffer(encodedBuffer);
-                break;
-
-            case NalUnitType.AUD_NUT:
-                ReturnEncodedBuffer(encodedBuffer);
-                break;
-
-            case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT:
-            case NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT:
-                _logger.LogTrace("Processing slice NALU type {NaluType}", naluType);
-                var sliceData = naluState.nal_unit_payload.slice_layer_without_partitioning_rbsp;
-                if (sliceData == null)
-                {
-                    _logger.LogWarning("Failed to parse slice data for NALU type {NaluType}, skipping", naluType);
-                    ReturnEncodedBuffer(encodedBuffer);
-                    break;
-                }
-
-                HandleSliceNalu(encodedBuffer, sliceData, naluType);
-                break;
-
-            default:
-                _logger.LogTrace("Skipping NALU type {NaluType}", naluType);
-                ReturnEncodedBuffer(encodedBuffer);
-                break;
-        }
-    }
-
-    private void HandleSliceNalu(
-        V4l2EncodedBuffer encodedBuffer,
-        SliceLayerWithoutPartitioningRbspState sliceData,
-        NalUnitType naluType)
-    {
-        var header = sliceData.slice_header;
-
-        // Check if PPS/SPS are available
-        if (!_streamState.pps.TryGetValue(header.pic_parameter_set_id, out var pps) || pps == null)
-        {
-            _logger.LogWarning("Cannot decode frame: PPS {PpsId} not received yet, skipping frame {FrameNum}",
-                header.pic_parameter_set_id, header.frame_num);
-            ReturnEncodedBuffer(encodedBuffer);
-            return;
-        }
-
-        if (!_streamState.sps.TryGetValue(pps.seq_parameter_set_id, out var sps) || sps == null)
-        {
-            _logger.LogWarning("Cannot decode frame: SPS {SpsId} not received yet, skipping frame {FrameNum}",
-                pps.seq_parameter_set_id, header.frame_num);
-            ReturnEncodedBuffer(encodedBuffer);
-            return;
-        }
-
-        bool isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
-
-        _logger.LogDebug("Submitting frame: frame_num={FrameNum}, PPS={PpsId}, SPS={SpsId}, KeyFrame={IsKeyFrame}",
-            header.frame_num, header.pic_parameter_set_id, pps.seq_parameter_set_id, isKeyFrame);
-
-        SubmitFrameToDevice(encodedBuffer, header, isKeyFrame);
     }
 
     private void SubmitFrameToDevice(
