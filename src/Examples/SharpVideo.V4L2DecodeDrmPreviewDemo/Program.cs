@@ -168,7 +168,7 @@ internal class Program
 
     private static FileStream GetFileStream()
     {
-        var testVideoName = "test_video.h264";
+        var testVideoName = "ohd_video.h264";
         var filePath = File.Exists(testVideoName) ? testVideoName : Path.Combine(AppContext.BaseDirectory, testVideoName);
         if (!File.Exists(filePath))
         {

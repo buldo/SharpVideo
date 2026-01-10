@@ -4,11 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
-	<ItemGroup>
-	  <None Update="test_video.h264">
-	    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-	  </None>
-	</ItemGroup>
+  <ItemGroup>
+    <None Update="test_video.h264">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="ohd_video.h264">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 
 	<!--<ItemGroup>
 		<FilesToCopy Include="files/**" />
