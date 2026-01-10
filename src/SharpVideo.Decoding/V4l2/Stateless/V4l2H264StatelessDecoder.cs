@@ -1,6 +1,4 @@
-﻿using System.Collections.Concurrent;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
 
@@ -32,31 +30,21 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     private MediaDevice? _mediaDevice;
     private List<SharedDmaBuffer>? _drmBuffers;
 
-    // Encoded buffer wrappers for OUTPUT queue
-    private List<V4l2EncodedBuffer>? _encodedBuffers;
-
-    // Free encoded buffers pool managed by this decoder
-    private readonly BlockingCollection<V4l2EncodedBuffer> _freeEncodedBuffers = new();
-
     private bool _supportsSliceParamsControl;
-    private bool _supportsScalingMatrix;
 
     // Thread for capture buffer processing
     private Thread? _captureThread;
     private CancellationTokenSource? _captureCts;
 
-    // DPB (Decoded Picture Buffer) tracking
-    private readonly List<DpbEntry> _dpb = new();
+    // DPB (Decoded Picture Buffer) tracking - using Queue for O(1) operations
+    private readonly Queue<DpbEntry> _dpb = new();
 
     // H264 bitstream parsing state
     private readonly H264BitstreamParserState _streamState = new();
     private readonly ParsingOptions _parsingOptions = new() { add_checksum = false };
-    private readonly H264PicOrderCountCalculator _pocCalculator = new();
 
     private PixelFormat _outputPixelFormat;
     private bool _isInitialized;
-
-    private ulong _timestampCounter;
 
     private V4l2H264StatelessDecoder(
         ILogger<V4l2H264StatelessDecoder> logger,
@@ -264,21 +252,12 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
             return;
         }
 
-        // Reclaim any processed OUTPUT buffers and return them to free pool
-        _device!.OutputMPlaneQueue.ReclaimProcessed(ReclaimEncodedBuffer);
-
-        // Get a free buffer (may block if all buffers are in use)
-        var encodedBuffer = _freeEncodedBuffers.Take();
-
-        // Copy NALU data to the V4L2 buffer - only for slice data
-        encodedBuffer.CopyFromSpan(nalu);
-
         bool isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 
         _logger.LogDebug("Submitting frame: frame_num={FrameNum}, PPS={PpsId}, SPS={SpsId}, KeyFrame={IsKeyFrame}",
             header.frame_num, header.pic_parameter_set_id, pps.seq_parameter_set_id, isKeyFrame);
 
-        SubmitFrameToDevice(encodedBuffer, header, isKeyFrame);
+        SubmitFrameToDevice(nalu, header, isKeyFrame);
     }
 
     /// <inheritdoc />
@@ -297,17 +276,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     {
         _logger.LogInformation("Flushing decoder...");
         _dpb.Clear();
-        _pocCalculator.Reset();
-    }
-
-    private void ReclaimEncodedBuffer(uint bufferIndex)
-    {
-        if (_encodedBuffers != null && bufferIndex < _encodedBuffers.Count)
-        {
-            var buffer = _encodedBuffers[(int)bufferIndex];
-            buffer.Reset();
-            _freeEncodedBuffers.Add(buffer);
-        }
     }
 
     private void InitializeDecoder()
@@ -342,8 +310,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
         // Check if device supports slice params control
         _supportsSliceParamsControl =
             _device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
-        _supportsScalingMatrix =
-            _device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SCALING_MATRIX);
 
         // Configure formats
         ConfigureFormats();
@@ -446,15 +412,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
             _mediaDevice.AllocateMediaRequests(_configuration.RequestPoolSize);
             _device.OutputMPlaneQueue.AssociateMediaRequests(_mediaDevice.OpenedRequests);
         }
-
-        // Create V4l2EncodedBuffer wrappers for OUTPUT buffers and add them to free pool
-        _encodedBuffers = new List<V4l2EncodedBuffer>();
-        foreach (var mmapBuffer in _device.OutputMPlaneQueue.BuffersPool.Buffers)
-        {
-            var encodedBuffer = new V4l2EncodedBuffer(mmapBuffer);
-            _encodedBuffers.Add(encodedBuffer);
-            _freeEncodedBuffers.Add(encodedBuffer);
-        }
     }
 
     private void SetupDmaBufCaptureQueue()
@@ -528,39 +485,30 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     }
 
     private void SubmitFrameToDevice(
-        V4l2EncodedBuffer encodedBuffer,
+        ReadOnlySpan<byte> frameData,
         SliceHeaderState header,
         bool isKeyFrame)
     {
-        // Generate a unique timestamp in nanoseconds for this frame.
-        // V4L2 stateless decoders use this to match reference frames in the DPB.
-        _timestampCounter++;
-        var timestampNs = _timestampCounter * 1000000; // Simplified unique timestamp
-        var timestamp = new TimeVal
-        {
-            TvSec = (long)(timestampNs / 1_000_000_000), TvUsec = (long)((timestampNs % 1_000_000_000) / 1000)
-        };
+        // First, ensure there's a free buffer available before acquiring media request
+        _device!.OutputMPlaneQueue.EnsureFreeBuffer();
 
+        // Now acquire media request if needed (buffer is guaranteed to be available)
         MediaRequest? request = null;
         if (_mediaDevice != null)
         {
-            request = _device!.OutputMPlaneQueue.AcquireMediaRequest();
-            SubmitFrameControls(header, isKeyFrame, request, timestampNs);
+            request = _device.OutputMPlaneQueue.AcquireMediaRequest();
+            SubmitFrameControls(header, isKeyFrame, request);
         }
 
-        // Zero-copy: enqueue the buffer directly without copying data
-        _device!.OutputMPlaneQueue.EnqueueBuffer(encodedBuffer.MMapBuffer, request, timestamp);
+        // Write buffer and enqueue
+        _device.OutputMPlaneQueue.WriteBufferAndEnqueue(frameData, request);
         request?.Queue();
-
-        // Buffer is now owned by the kernel, will be returned via ReclaimProcessed
-        // Don't add to free pool here - it will be reclaimed when dequeued
     }
 
     private void SubmitFrameControls(
         SliceHeaderState header,
         bool isKeyFrame,
-        MediaRequest request,
-        ulong timestamp)
+        MediaRequest request)
     {
         var pps = _streamState.pps[header.pic_parameter_set_id];
         var ppsV4L2 = PpsMapper.ConvertPpsStateToV4L2(pps);
@@ -576,37 +524,25 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
             spsV4L2,
             request);
 
-        if (_supportsScalingMatrix)
-        {
-            var scalingMatrix = ScalingMatrixMapper.MapScalingMatrix(sps, pps);
-            _device.SetSingleExtendedControl(
-                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SCALING_MATRIX,
-                scalingMatrix,
-                request);
-        }
-
-        var decodeParams = BuildDecodeParams(header, isKeyFrame, sps, timestamp);
-        _device.SetSingleExtendedControl(
-            V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
-            decodeParams,
-            request);
-
         if (_supportsSliceParamsControl)
         {
-            var sliceParams = SliceParamsMapper.BuildSliceParams(header, decodeParams.Dpb);
+            var sliceParams = SliceParamsMapper.BuildSliceParams(header);
             _device.SetSingleExtendedControl(
                 V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS,
                 sliceParams,
                 request);
         }
+
+        var decodeParams = BuildDecodeParams(header, isKeyFrame, sps);
+        _device.SetSingleExtendedControl(
+            V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
+            decodeParams,
+            request);
     }
 
-    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps,
-        ulong timestamp)
+    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps)
     {
-        // Calculate full POC (Pic Order Count)
-        int picOrderCnt = _pocCalculator.CalculatePOC(header, sps, isIdr);
-
+        // Handle IDR frames - they reset the DPB
         if (isIdr)
         {
             _dpb.Clear();
@@ -615,13 +551,13 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
 
         var dpbArray = CreateEmptyDpb();
 
+        // Populate DPB with current reference frames
         int dpbIndex = 0;
         foreach (var entry in _dpb)
         {
             if (dpbIndex >= dpbArray.Length)
                 break;
 
-            dpbArray[dpbIndex].ReferenceTimestamp = entry.Timestamp;
             dpbArray[dpbIndex].FrameNum = (ushort)entry.FrameNum;
             dpbArray[dpbIndex].PicNum = (ushort)entry.FrameNum;
             dpbArray[dpbIndex].TopFieldOrderCnt = (int)entry.PicOrderCnt;
@@ -646,72 +582,45 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
             Dpb = dpbArray,
             NalRefIdc = (ushort)Math.Min(header.nal_ref_idc, ushort.MaxValue),
             FrameNum = (ushort)Math.Min(header.frame_num, ushort.MaxValue),
-            TopFieldOrderCnt = picOrderCnt,
-            BottomFieldOrderCnt = picOrderCnt,
+            TopFieldOrderCnt = (int)header.pic_order_cnt_lsb,
+            BottomFieldOrderCnt = (int)header.pic_order_cnt_lsb,
             IdrPicId = (ushort)Math.Min(header.idr_pic_id, ushort.MaxValue),
             PicOrderCntLsb = (ushort)Math.Min(header.pic_order_cnt_lsb, ushort.MaxValue),
             DeltaPicOrderCntBottom = header.delta_pic_order_cnt_bottom,
             DeltaPicOrderCnt0 = header.delta_pic_order_cnt.Count > 0 ? header.delta_pic_order_cnt[0] : 0,
             DeltaPicOrderCnt1 = header.delta_pic_order_cnt.Count > 1 ? header.delta_pic_order_cnt[1] : 0,
-            DecRefPicMarkingBitSize = header.dec_ref_pic_marking?.bit_size ?? 0,
-            PicOrderCntBitSize =
-                (uint)(sps.sps_data.pic_order_cnt_type == 0
-                    ? sps.sps_data.log2_max_pic_order_cnt_lsb_minus4 + 4
-                    : 0),
+            DecRefPicMarkingBitSize = 0,
+            PicOrderCntBitSize = 0,
             SliceGroupChangeCycle = header.slice_group_change_cycle,
             Reserved = 0,
             Flags = DetermineDecodeFlags(header, isIdr)
         };
 
+        // Add current frame to DPB if it's a reference frame
         if (header.nal_ref_idc > 0)
         {
             var newEntry = new DpbEntry
             {
                 FrameNum = (uint)header.frame_num,
-                PicOrderCnt = (uint)picOrderCnt,
+                PicOrderCnt = header.pic_order_cnt_lsb,
                 IsReference = true,
-                IsLongTerm = false,
-                Timestamp = timestamp
+                IsLongTerm = false
             };
-            _dpb.Add(newEntry);
-            _logger.LogTrace(
-                "Added reference frame to DPB: frame_num={FrameNum}, POC={POC}, timestamp={Timestamp}, DPB size={Size}",
-                header.frame_num, picOrderCnt, timestamp, _dpb.Count);
+            _dpb.Enqueue(newEntry);
+            _logger.LogTrace("Added reference frame to DPB: frame_num={FrameNum}, DPB size={Size}", header.frame_num,
+                _dpb.Count);
         }
 
-        // Apply MMCO or Sliding Window
-        if (header.dec_ref_pic_marking != null && header.dec_ref_pic_marking.adaptive_ref_pic_marking_mode_flag != 0)
+        // Manage DPB size - remove oldest frames if we exceed max size (now O(1) with Queue)
+        var maxDpbSize = sps.sps_data.max_num_ref_frames;
+
+        while (_dpb.Count > maxDpbSize)
         {
-            ApplyMmco(header.dec_ref_pic_marking);
-        }
-        else
-        {
-            var maxDpbSize = sps.sps_data.max_num_ref_frames;
-            while (_dpb.Count > maxDpbSize)
-            {
-                _dpb.RemoveAt(0);
-                _logger.LogTrace("Removed oldest DPB entry (sliding window), new size={Size}", _dpb.Count);
-            }
+            _dpb.Dequeue(); // O(1) operation
+            _logger.LogTrace("Removed oldest DPB entry, new size={Size}", _dpb.Count);
         }
 
         return decodeParams;
-    }
-
-    private void ApplyMmco(DecRefPicMarkingState mmco)
-    {
-        int mmcoCount = mmco.memory_management_control_operation.Count;
-        for (int i = 0; i < mmcoCount; i++)
-        {
-            var op = mmco.memory_management_control_operation[i];
-            if (op == 0) break;
-
-            if (op == 5) // Reset DPB
-            {
-                _dpb.Clear();
-                _logger.LogDebug("MMCO 5: DPB cleared");
-            }
-            // Other MMCOs can be implemented here if needed
-        }
     }
 
     private static V4L2H264DpbEntry[] CreateEmptyDpb()
@@ -747,8 +656,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     {
         _logger.LogInformation("Cleaning up decoder resources...");
 
-        _pocCalculator.Reset();
-
         if (_captureCts != null)
         {
             _captureCts.Cancel();
@@ -779,8 +686,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
 
         _mediaDevice?.Dispose();
         _mediaDevice = null;
-
-        _freeEncodedBuffers.Dispose();
 
         _isInitialized = false;
         _logger.LogInformation("Decoder cleanup completed");
