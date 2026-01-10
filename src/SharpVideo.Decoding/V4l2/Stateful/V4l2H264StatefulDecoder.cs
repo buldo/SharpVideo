@@ -17,7 +17,7 @@ namespace SharpVideo.Decoding.V4l2.Stateful;
 /// This is simpler than stateless decoders but offers less control.
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public class V4l2H264StatefulDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2DecodedFrame>
+public class V4l2H264StatefulDecoder : BaseDecoder<V4l2DecodedFrame>
 {
     public V4l2H264StatefulDecoder(ILogger logger) : base(logger)
     {

@@ -15,7 +15,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// <summary>
 /// When we run application as desktop application, we use SDL3 with OpenGL3
 /// </summary>
-internal sealed class WindowedHost : UiHostBase<FfmpegH264Decoder, ManagedMemoryEncodedBuffer, FfmpegDecodedFrame>
+internal sealed class WindowedHost : UiHostBase<FfmpegH264Decoder, FfmpegDecodedFrame>
 {
     private readonly WindowedHostConfiguration _configuration;
 

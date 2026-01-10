@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
@@ -19,7 +20,7 @@ namespace SharpVideo.Decoding.V4l2.Stateless;
 /// (e.g., Raspberry Pi, Rockchip RK3588).
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2DecodedFrame>
+public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
 {
     private readonly ILogger<V4l2H264StatelessDecoder> _logger;
     private readonly string _devicePath;
@@ -33,6 +34,9 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
 
     // Encoded buffer wrappers for OUTPUT queue
     private List<V4l2EncodedBuffer>? _encodedBuffers;
+
+    // Free encoded buffers pool managed by this decoder
+    private readonly BlockingCollection<V4l2EncodedBuffer> _freeEncodedBuffers = new();
 
     private bool _supportsSliceParamsControl;
     private bool _supportsScalingMatrix;
@@ -264,7 +268,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         _device!.OutputMPlaneQueue.ReclaimProcessed(ReclaimEncodedBuffer);
 
         // Get a free buffer (may block if all buffers are in use)
-        var encodedBuffer = GetFreeEncodedBuffer();
+        var encodedBuffer = _freeEncodedBuffers.Take();
 
         // Copy NALU data to the V4L2 buffer - only for slice data
         encodedBuffer.CopyFromSpan(nalu);
@@ -302,7 +306,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         {
             var buffer = _encodedBuffers[(int)bufferIndex];
             buffer.Reset();
-            ReturnEncodedBuffer(buffer);
+            _freeEncodedBuffers.Add(buffer);
         }
     }
 
@@ -449,7 +453,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
         {
             var encodedBuffer = new V4l2EncodedBuffer(mmapBuffer);
             _encodedBuffers.Add(encodedBuffer);
-            ReturnEncodedBuffer(encodedBuffer);
+            _freeEncodedBuffers.Add(encodedBuffer);
         }
     }
 
@@ -775,6 +779,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2EncodedBuffer, V4l2Decod
 
         _mediaDevice?.Dispose();
         _mediaDevice = null;
+
+        _freeEncodedBuffers.Dispose();
 
         _isInitialized = false;
         _logger.LogInformation("Decoder cleanup completed");

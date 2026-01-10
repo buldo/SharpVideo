@@ -4,13 +4,12 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// Manages video frame synchronization between decoder and renderer threads.
 /// Provides thread-safe access to decoded frames with automatic frame dropping.
 /// </summary>
-internal sealed class VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer> : IDisposable
-    where TDecoder : BaseDecoder<TDecoderInputBuffer, TDecoderOutputBuffer>, IDecoder
-    where TDecoderInputBuffer : UniversalEncodedBuffer
+internal sealed class VideoFrameManager<TDecoder, TDecoderOutputBuffer> : IDisposable
+    where TDecoder : BaseDecoder<TDecoderOutputBuffer>, IDecoder
     where TDecoderOutputBuffer : class
 {
     private readonly TDecoder _decoder;
-    private readonly ILogger<VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer>> _logger;
+    private readonly ILogger<VideoFrameManager<TDecoder, TDecoderOutputBuffer>> _logger;
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly object _frameLock = new();
 
@@ -18,7 +17,7 @@ internal sealed class VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderO
     private Task? _frameFetchThread;
     private bool _disposed;
 
-    public VideoFrameManager(TDecoder decoder, ILogger<VideoFrameManager<TDecoder, TDecoderInputBuffer, TDecoderOutputBuffer>> logger)
+    public VideoFrameManager(TDecoder decoder, ILogger<VideoFrameManager<TDecoder, TDecoderOutputBuffer>> logger)
     {
         _decoder = decoder ?? throw new ArgumentNullException(nameof(decoder));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));

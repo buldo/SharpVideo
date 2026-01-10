@@ -16,7 +16,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// - Overlay plane (DMA buffers): Video frames from decoder
 /// </summary>
 [SupportedOSPlatform("linux")]
-internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2EncodedBuffer, V4l2DecodedFrame>
+internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2DecodedFrame>
 {
     /// <summary>
     /// Delay after warmup frame submission, in milliseconds.

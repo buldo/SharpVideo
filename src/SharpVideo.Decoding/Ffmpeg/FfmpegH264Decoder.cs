@@ -5,7 +5,7 @@ using SharpVideo.Drm;
 
 namespace SharpVideo.Decoding.Ffmpeg;
 
-public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedBuffer, FfmpegDecodedFrame>
+public sealed unsafe class FfmpegH264Decoder : BaseDecoder<FfmpegDecodedFrame>
 {
     private AVCodec* _codec;
     private AVCodecContext* _codecContext;
@@ -200,14 +200,6 @@ public sealed unsafe class FfmpegH264Decoder : BaseDecoder<ManagedMemoryEncodedB
         byte* buffer = stackalloc byte[ffmpeg.AV_ERROR_MAX_STRING_SIZE];
         ffmpeg.av_strerror(errorCode, buffer, (ulong)ffmpeg.AV_ERROR_MAX_STRING_SIZE);
         return new string((sbyte*)buffer);
-    }
-
-    private static string GetPixelFormatName(AVPixelFormat format)
-    {
-        var name = ffmpeg.av_get_pix_fmt_name(format);
-        if (string.IsNullOrEmpty(name))
-            return "Unknown";
-        return name;
     }
 
     protected override void Dispose(bool disposing)

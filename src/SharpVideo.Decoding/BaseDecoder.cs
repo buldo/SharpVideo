@@ -30,14 +30,11 @@ namespace SharpVideo.Decoding;
 ///   </item>
 /// </list>
 /// </remarks>
-/// <typeparam name="TInputBuffer">Type of internal encoded data buffer.</typeparam>
 /// <typeparam name="TOutputBuffer">Type of decoded frame buffer.</typeparam>
-public abstract class BaseDecoder<TInputBuffer, TOutputBuffer> : IDisposable, IDecoder
-    where TInputBuffer : UniversalEncodedBuffer
+public abstract class BaseDecoder<TOutputBuffer> : IDisposable, IDecoder
 {
     private readonly ILogger _logger;
 
-    private readonly BlockingCollection<TInputBuffer> _freeEncodedBuffers = new();
     private readonly BlockingCollection<TOutputBuffer> _decodedFramesOutput = new();
 
     protected BaseDecoder(ILogger logger)
@@ -101,35 +98,6 @@ public abstract class BaseDecoder<TInputBuffer, TOutputBuffer> : IDisposable, ID
     protected abstract void FlushDecoder();
 
     /// <summary>
-    /// Gets a free encoded buffer from the internal pool.
-    /// Blocks until a buffer is available.
-    /// </summary>
-    /// <returns>A free buffer for encoding data.</returns>
-    protected TInputBuffer GetFreeEncodedBuffer()
-    {
-        return _freeEncodedBuffers.Take();
-    }
-
-    /// <summary>
-    /// Tries to get a free encoded buffer from the internal pool.
-    /// </summary>
-    /// <param name="buffer">The buffer if available.</param>
-    /// <returns>True if a buffer was available, false otherwise.</returns>
-    protected bool TryGetFreeEncodedBuffer(out TInputBuffer? buffer)
-    {
-        return _freeEncodedBuffers.TryTake(out buffer);
-    }
-
-    /// <summary>
-    /// Returns an encoded buffer to the free pool for reuse.
-    /// </summary>
-    /// <param name="encodedBuffer">The buffer to return.</param>
-    protected void ReturnEncodedBuffer(TInputBuffer encodedBuffer)
-    {
-        _freeEncodedBuffers.Add(encodedBuffer);
-    }
-
-    /// <summary>
     /// Adds a decoded frame to the output queue.
     /// </summary>
     /// <param name="decodedFrame">The decoded frame.</param>
@@ -143,7 +111,6 @@ public abstract class BaseDecoder<TInputBuffer, TOutputBuffer> : IDisposable, ID
         if (disposing)
         {
             FlushDecoder();
-            _freeEncodedBuffers.Dispose();
             _decodedFramesOutput.Dispose();
         }
     }

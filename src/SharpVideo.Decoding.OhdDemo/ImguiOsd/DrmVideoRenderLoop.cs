@@ -38,7 +38,7 @@ internal sealed class DrmVideoRenderLoop : IDisposable
 
     private readonly VideoPlaneRenderer _videoPlaneRenderer;
     private readonly DrmFrameTracker<V4l2DecodedFrame> _frameTracker;
-    private readonly VideoFrameManager<V4l2H264StatelessDecoder, V4l2EncodedBuffer, V4l2DecodedFrame> _videoFrameManager;
+    private readonly VideoFrameManager<V4l2H264StatelessDecoder, V4l2DecodedFrame> _videoFrameManager;
     private readonly Action<V4l2DecodedFrame>? _onFrameRendered;
     private readonly ILogger _logger;
 
@@ -64,7 +64,7 @@ internal sealed class DrmVideoRenderLoop : IDisposable
         DrmPlaneLastDmaBufferPresenter overlayPresenter,
         DrmBufferManager bufferManager,
         PixelFormat videoPixelFormat,
-        VideoFrameManager<V4l2H264StatelessDecoder, V4l2EncodedBuffer, V4l2DecodedFrame> videoFrameManager,
+        VideoFrameManager<V4l2H264StatelessDecoder, V4l2DecodedFrame> videoFrameManager,
         Action<V4l2DecodedFrame>? onFrameRendered,
         ILoggerFactory loggerFactory)
     {
