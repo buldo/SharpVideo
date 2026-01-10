@@ -46,20 +46,6 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
         Enqueue(buffer, request, timestamp);
     }
 
-    /// <summary>
-    /// Enqueues an already filled mmap buffer to the OUTPUT queue.
-    /// Use this for zero-copy scenarios where data is already in the buffer.
-    /// </summary>
-    /// <param name="buffer">The mmap buffer that already contains data.</param>
-    /// <param name="request">Optional media request for stateless decoding.</param>
-    /// <param name="timestamp">Optional timestamp for the buffer.</param>
-    public void EnqueueBuffer(V4L2MMapMPlaneBuffer buffer, MediaRequest? request = null, TimeVal? timestamp = null)
-    {
-        EnsureInitialised();
-        _associatedMediaRequests[buffer.Index] = request;
-        Enqueue(buffer, request, timestamp);
-    }
-
     public void ReclaimProcessed()
     {
         while (true)
@@ -79,34 +65,6 @@ public class V4L2DeviceOutputQueue : V4L2DeviceQueue
                 _associatedMediaRequests[dequeuedBuffer.Index] = null;
                 _requestsPool?.Release(mediaRequest);
             }
-        }
-    }
-
-    /// <summary>
-    /// Reclaims processed buffers and invokes callback for each released buffer index.
-    /// Use this to return V4l2EncodedBuffer wrappers to reuse queue.
-    /// </summary>
-    /// <param name="onBufferReleased">Callback invoked with buffer index when a buffer is released.</param>
-    public void ReclaimProcessed(Action<uint> onBufferReleased)
-    {
-        while (true)
-        {
-            var dequeuedBuffer = Dequeue();
-            if (dequeuedBuffer == null)
-            {
-                break;
-            }
-
-            BuffersPool.Release(dequeuedBuffer.Index);
-
-            var mediaRequest = _associatedMediaRequests[dequeuedBuffer.Index];
-            if (mediaRequest != null)
-            {
-                _associatedMediaRequests[dequeuedBuffer.Index] = null;
-                _requestsPool?.Release(mediaRequest);
-            }
-
-            onBufferReleased(dequeuedBuffer.Index);
         }
     }
 
