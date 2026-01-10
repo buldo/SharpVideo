@@ -17,8 +17,12 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
 /// <summary>
 /// Encapsulates DRM/KMS resource initialization and management.
-/// Handles device setup, plane configuration, and ImGui integration.
+/// Handles device setup, dual-plane configuration, and ImGui integration.
 /// </summary>
+/// <remarks>
+/// Uses DualPlanePresenter for unified management of OSD and video planes.
+/// OSD plane renders on top of video plane via zpos configuration.
+/// </remarks>
 [SupportedOSPlatform("linux")]
 internal sealed class DrmRenderingContext : IDisposable
 {
@@ -27,7 +31,7 @@ internal sealed class DrmRenderingContext : IDisposable
     private readonly bool _ownsBufferManager;
 
     private GbmDevice? _gbmDevice;
-    private DrmPresenter? _presenter;
+    private DualPlanePresenter? _presenter;
     private InputManager? _inputManager;
     private ImGuiManager? _imguiManager;
 
@@ -40,16 +44,10 @@ internal sealed class DrmRenderingContext : IDisposable
     public DrmBufferManager BufferManager => _drmBufferManager;
 
     /// <summary>
-    /// Gets the DRM presenter for plane management.
+    /// Gets the dual-plane presenter for OSD and video rendering.
     /// </summary>
-    public DrmPresenter Presenter =>
+    public DualPlanePresenter Presenter =>
         _presenter ?? throw new InvalidOperationException("Context not initialized");
-
-    /// <summary>
-    /// Gets the overlay plane presenter for video rendering.
-    /// </summary>
-    public DrmPlaneLastDmaBufferPresenter OverlayPresenter =>
-        _presenter?.OverlayPlanePresenter ?? throw new InvalidOperationException("Context not initialized");
 
     /// <summary>
     /// Gets the ImGui manager for OSD rendering.
@@ -113,19 +111,18 @@ internal sealed class DrmRenderingContext : IDisposable
 
         _logger.LogInformation("Rendering warmup frame...");
 
-        var gbmAtomicPresenter = _presenter?.AsGbmAtomicPresenter();
-        if (gbmAtomicPresenter == null)
+        if (_presenter == null || _imguiManager == null)
         {
-            _logger.LogWarning("GBM atomic presenter not available for warmup");
+            _logger.LogWarning("Presenter or ImGui manager not available for warmup");
             return false;
         }
 
-        if (!_imguiManager!.WarmupFrame(renderCallback))
+        if (!_imguiManager.WarmupFrame(renderCallback))
         {
             return false;
         }
 
-        if (!gbmAtomicPresenter.SubmitFrame())
+        if (!_presenter.SubmitOsdFrame())
         {
             return false;
         }
@@ -173,25 +170,24 @@ internal sealed class DrmRenderingContext : IDisposable
     }
 
     /// <summary>
-    /// Renders an OSD frame using ImGui.
+    /// Renders an OSD frame using ImGui and submits it to the display.
     /// </summary>
     /// <returns>True if frame was rendered and submitted successfully.</returns>
     public bool RenderOsdFrame(ImGuiRenderDelegate renderCallback)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var gbmAtomicPresenter = _presenter?.AsGbmAtomicPresenter();
-        if (gbmAtomicPresenter == null)
+        if (_presenter == null || _imguiManager == null)
         {
             return false;
         }
 
-        if (!_imguiManager!.RenderFrame(renderCallback))
+        if (!_imguiManager.RenderFrame(renderCallback))
         {
             return false;
         }
 
-        return gbmAtomicPresenter.SubmitFrame();
+        return _presenter.SubmitOsdFrame();
     }
 
     private void Initialize(
@@ -210,25 +206,20 @@ internal sealed class DrmRenderingContext : IDisposable
         _gbmDevice = GbmDevice.CreateFromDrmDevice(drmDevice);
         _logger.LogInformation("Created GBM device for ImGui rendering");
 
-        // Create unified DRM presenter
-        _presenter = DrmPresenter.CreateWithGbmAtomicAndDmaOverlay(
+        // Create dual-plane presenter
+        _presenter = DualPlanePresenter.Create(
             drmDevice,
-            configuration.DisplayWidth,
-            configuration.DisplayHeight,
             _gbmDevice,
             _drmBufferManager,
+            configuration.DisplayWidth,
+            configuration.DisplayHeight,
             KnownPixelFormats.DRM_FORMAT_ARGB8888,
             videoPixelFormat,
-            _logger);
-
-        if (_presenter == null)
-        {
-            throw new InvalidOperationException("Failed to create DRM presenter");
-        }
+            loggerFactory);
 
         // Get actual display dimensions
-        DisplayWidth = _presenter.PrimaryPlanePresenter.Width;
-        DisplayHeight = _presenter.PrimaryPlanePresenter.Height;
+        DisplayWidth = _presenter.Width;
+        DisplayHeight = _presenter.Height;
 
         if (DisplayWidth != configuration.DisplayWidth || DisplayHeight != configuration.DisplayHeight)
         {
@@ -237,10 +228,7 @@ internal sealed class DrmRenderingContext : IDisposable
                 configuration.DisplayWidth, configuration.DisplayHeight, DisplayWidth, DisplayHeight);
         }
 
-        _logger.LogInformation("Created dual-plane DRM presenter ({Width}x{Height})", DisplayWidth, DisplayHeight);
-
-        // Configure z-order
-        ConfigurePlaneZOrder();
+        _logger.LogInformation("Created dual-plane presenter ({Width}x{Height})", DisplayWidth, DisplayHeight);
 
         // Initialize input manager
         if (configuration.EnableInput)
@@ -260,19 +248,13 @@ internal sealed class DrmRenderingContext : IDisposable
 
     private void InitializeImGui(DrmDevice drmDevice, DrmHostConfiguration configuration, ILoggerFactory loggerFactory)
     {
-        var gbmAtomicPresenter = _presenter!.AsGbmAtomicPresenter();
-        if (gbmAtomicPresenter == null)
-        {
-            throw new InvalidOperationException("Failed to get GBM atomic presenter");
-        }
-
         var imguiConfig = new ImGuiDrmConfiguration
         {
             Width = DisplayWidth,
             Height = DisplayHeight,
             DrmDevice = drmDevice,
             GbmDevice = _gbmDevice!,
-            GbmSurfaceHandle = gbmAtomicPresenter.GetNativeGbmSurfaceHandle(),
+            GbmSurfaceHandle = _presenter!.GbmSurfaceHandle,
             PixelFormat = KnownPixelFormats.DRM_FORMAT_ARGB8888,
             ConfigFlags = ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable,
             DrawCursor = true,
@@ -287,63 +269,6 @@ internal sealed class DrmRenderingContext : IDisposable
             loggerFactory.CreateLogger<ImGuiManager>());
 
         _logger.LogInformation("ImGui manager initialized");
-    }
-
-    private void ConfigurePlaneZOrder()
-    {
-        if (_presenter == null)
-        {
-            return;
-        }
-
-        _logger.LogInformation("Configuring plane z-order...");
-
-        var primaryZposRange = _presenter.PrimaryPlane.GetPlaneZPositionRange();
-        var overlayZposRange = _presenter.OverlayPlane.GetPlaneZPositionRange();
-
-        if (primaryZposRange.HasValue)
-        {
-            _logger.LogInformation("Primary plane zpos range: [{Min}, {Max}], current: {Current}",
-                primaryZposRange.Value.min, primaryZposRange.Value.max, primaryZposRange.Value.current);
-        }
-        else
-        {
-            _logger.LogWarning("Primary plane does not support zpos property");
-        }
-
-        if (overlayZposRange.HasValue)
-        {
-            _logger.LogInformation("Overlay plane zpos range: [{Min}, {Max}], current: {Current}",
-                overlayZposRange.Value.min, overlayZposRange.Value.max, overlayZposRange.Value.current);
-        }
-        else
-        {
-            _logger.LogWarning("Overlay plane does not support zpos property");
-        }
-
-        if (!primaryZposRange.HasValue || !overlayZposRange.HasValue)
-        {
-            return;
-        }
-
-        var primaryZpos = primaryZposRange.Value.max;
-        var overlayZpos = overlayZposRange.Value.min;
-
-        _logger.LogInformation(
-            "Setting Primary zpos={PrimaryZpos} (OSD on top), Overlay zpos={OverlayZpos} (video below)",
-            primaryZpos, overlayZpos);
-
-        var primarySuccess = _presenter.PrimaryPlane.SetPlaneZPosition(primaryZpos);
-        var overlaySuccess = _presenter.OverlayPlane.SetPlaneZPosition(overlayZpos);
-
-        if (primarySuccess && overlaySuccess)
-        {
-            _logger.LogInformation("Z-positioning successful: OSD will render on top of video");
-        }
-        else
-        {
-            _logger.LogWarning("Failed to set z-positions - OSD may not appear on top of video");
-        }
     }
 
     public void Dispose()

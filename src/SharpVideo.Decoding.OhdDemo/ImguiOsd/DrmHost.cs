@@ -11,10 +11,17 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
 /// <summary>
 /// DRM/KMS host for ImGui-based OSD rendering with hardware video plane.
-/// Uses dual-plane architecture:
-/// - Primary plane (GBM/OpenGL ES): ImGui OSD with transparency
-/// - Overlay plane (DMA buffers): Video frames from decoder
+/// Uses dual-plane architecture via DualPlanePresenter:
+/// - OSD plane (GBM/OpenGL ES): ImGui interface with transparency, rendered on top
+/// - Video plane (DMA buffers): Video frames from decoder, rendered below OSD
 /// </summary>
+/// <remarks>
+/// Architecture:
+/// - Single render loop manages both OSD rendering and video frame submission
+/// - DualPlanePresenter handles atomic commits and z-ordering
+/// - VideoOverlayManager bridges VideoFrameManager with the presenter
+/// - OSD remains responsive even when no video frames are available
+/// </remarks>
 [SupportedOSPlatform("linux")]
 internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2DecodedFrame>
 {
@@ -27,7 +34,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Decoded
     private readonly DrmBufferManager _drmBufferManager;
 
     private DrmRenderingContext? _renderingContext;
-    private DrmVideoRenderLoop? _videoRenderLoop;
+    private VideoOverlayManager? _videoOverlayManager;
 
     protected override bool ShowDemoWindow => _configuration.ShowDemoWindow;
 
@@ -94,15 +101,11 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Decoded
             _drmBufferManager,
             LoggerFactory);
 
-        _videoRenderLoop = new DrmVideoRenderLoop(
-            _renderingContext.OverlayPresenter,
-            _renderingContext.BufferManager,
-            videoPixelFormat,
+        _videoOverlayManager = new VideoOverlayManager(
+            _renderingContext.Presenter,
             VideoFrameManager!,
             UpdateFrameStatistics,
             LoggerFactory);
-
-        _videoRenderLoop.Start();
 
         Logger.LogInformation("DRM resources initialized successfully (dual-plane mode)");
     }
@@ -115,6 +118,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Decoded
         {
             try
             {
+                // Process input events
                 _renderingContext.ProcessInput();
 
                 if (_renderingContext.ExitRequested)
@@ -122,6 +126,13 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Decoded
                     break;
                 }
 
+                // Submit latest video frame to the video plane (if available)
+                _videoOverlayManager!.TrySubmitLatestFrame();
+
+                // Process completed video frames (return to decoder)
+                _videoOverlayManager.ProcessCompletedFrames();
+
+                // Render and submit OSD frame
                 if (_renderingContext.RenderOsdFrame(RenderOsdFrame))
                 {
                     frameCount++;
@@ -134,7 +145,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Decoded
             }
         }
 
-        Logger.LogInformation("Render loop exited after {FrameCount} frames", frameCount);
+        Logger.LogInformation("Render loop exited after {FrameCount} OSD frames", frameCount);
     }
 
     private void UpdateFrameStatistics(V4l2DecodedFrame frame)
@@ -156,8 +167,8 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Decoded
     {
         Logger.LogInformation("Cleaning up DRM resources");
 
-        _videoRenderLoop?.Dispose();
-        _videoRenderLoop = null;
+        _videoOverlayManager?.Dispose();
+        _videoOverlayManager = null;
 
         _renderingContext?.Dispose();
         _renderingContext = null;

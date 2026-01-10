@@ -29,6 +29,8 @@ public class AtomicPlaneProperties
         
         // Optional properties for alpha blending/compositing
         PixelBlendModePropertyId = GetPropId("pixel blend mode");
+        ZposPropertyId = GetPropId("zpos");
+        AlphaPropertyId = GetPropId("alpha");
 
         uint GetPropId(string name)
         {
@@ -56,18 +58,28 @@ public class AtomicPlaneProperties
     /// Not all hardware supports this property - use HasPixelBlendMode() to check availability.
     /// </summary>
     public uint PixelBlendModePropertyId { get; }
+    
+    /// <summary>
+    /// Optional property for configuring z-position (layer ordering).
+    /// Not all hardware supports this property - use HasZpos() to check availability.
+    /// </summary>
+    public uint ZposPropertyId { get; }
+    
+    /// <summary>
+    /// Optional property for configuring global alpha (transparency).
+    /// Not all hardware supports this property - use HasAlpha() to check availability.
+    /// </summary>
+    public uint AlphaPropertyId { get; }
 
     // -------------------- Validation Methods --------------------
     
     /// <summary>
     /// Checks if all mandatory atomic properties are available.
-    /// Does NOT check optional properties like PixelBlendMode.
+    /// Does NOT check optional properties like PixelBlendMode, Zpos, or Alpha.
     /// </summary>
     /// <returns>True if all mandatory properties are present, false otherwise</returns>
     public bool IsValid()
     {
-        // Note: PixelBlendMode is optional and NOT checked here
-        // Use HasPixelBlendMode() to check for blend support separately
         if (FbIdPropertyId == 0 || CrtcIdPropertyId == 0 ||
             CrtcXPropertyId == 0 || CrtcYPropertyId == 0 ||
             CrtcWPropertyId == 0 || CrtcHPropertyId == 0 ||
@@ -84,6 +96,17 @@ public class AtomicPlaneProperties
     /// Checks if pixel blend mode property is available for configuring transparency.
     /// This is an optional feature - the plane can still work without it.
     /// </summary>
-    /// <returns>True if pixel blend mode is supported, false otherwise</returns>
     public bool HasPixelBlendMode() => PixelBlendModePropertyId != 0;
+    
+    /// <summary>
+    /// Checks if zpos property is available for layer ordering.
+    /// This is an optional feature - the plane can still work without it.
+    /// </summary>
+    public bool HasZpos() => ZposPropertyId != 0;
+    
+    /// <summary>
+    /// Checks if alpha property is available for global transparency.
+    /// This is an optional feature - the plane can still work without it.
+    /// </summary>
+    public bool HasAlpha() => AlphaPropertyId != 0;
 }
