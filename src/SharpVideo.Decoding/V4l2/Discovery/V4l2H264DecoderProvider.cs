@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.C;
+using SharpVideo.Linux.Native.Media;
 using SharpVideo.Linux.Native.V4L2;
 
 namespace SharpVideo.Decoding.V4l2.Discovery;
@@ -275,16 +276,53 @@ public class V4l2H264DecoderProvider
 
         foreach (var mediaPath in mediaDevices)
         {
-            // For now, use a simple heuristic - match the first media device
-            // A more robust implementation would use the media controller API
-            // to verify the association
-            if (File.Exists(mediaPath))
+            if (!File.Exists(mediaPath))
             {
-                _logger.LogTrace("Found potential media device: {Path}", mediaPath);
-                return mediaPath;
+                continue;
+            }
+
+            // Open the media device and query its info to match bus_info
+            int mediaFd = Libc.open(mediaPath, OpenFlags.O_RDWR | OpenFlags.O_NONBLOCK);
+            if (mediaFd < 0)
+            {
+                _logger.LogTrace("Cannot open media device {Path}", mediaPath);
+                continue;
+            }
+
+            try
+            {
+                var mediaInfo = new MediaDeviceInfo();
+                var result = LibMedia.QueryDeviceInfo(mediaFd, ref mediaInfo);
+                if (!result.Success)
+                {
+                    _logger.LogTrace("Cannot query media device info for {Path}", mediaPath);
+                    continue;
+                }
+
+                _logger.LogTrace(
+                    "Media device {Path}: driver={Driver}, model={Model}, bus_info={BusInfo}",
+                    mediaPath,
+                    mediaInfo.DriverString,
+                    mediaInfo.ModelString,
+                    mediaInfo.BusInfoString);
+
+                // Match by bus_info - this associates the media device with the video device
+                if (string.Equals(mediaInfo.BusInfoString, busInfo, StringComparison.Ordinal))
+                {
+                    _logger.LogDebug(
+                        "Found matching media device {Path} for bus_info {BusInfo}",
+                        mediaPath,
+                        busInfo);
+                    return mediaPath;
+                }
+            }
+            finally
+            {
+                Libc.close(mediaFd);
             }
         }
 
+        _logger.LogTrace("No media device found matching bus_info {BusInfo}", busInfo);
         return null;
     }
 }
