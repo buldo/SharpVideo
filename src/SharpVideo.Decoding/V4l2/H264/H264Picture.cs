@@ -37,6 +37,13 @@ public sealed class H264Picture : IDisposable
     public uint FrameNum { get; set; }
 
     /// <summary>
+    /// FrameNumWrap - accounts for wrap-around in frame_num.
+    /// Used for sliding window reference picture marking.
+    /// Calculated as per H.264 spec 8.2.4.1.
+    /// </summary>
+    public int FrameNumWrap { get; set; }
+
+    /// <summary>
     /// Picture number for short-term reference pictures.
     /// </summary>
     public int PicNum { get; set; }

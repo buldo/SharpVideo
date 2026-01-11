@@ -31,11 +31,14 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private readonly DrmBufferManager _drmBufferManager;
 
     private List<SharedDmaBuffer>? _drmBuffers;
+    // Map from V4L2 buffer index to SharedDmaBuffer for fast lookup during dequeue
+    private Dictionary<uint, SharedDmaBuffer>? _v4l2IndexToBuffer;
 
     private bool _supportsSliceParamsControl;
     private bool _supportsScalingMatrixControl;
 
     private readonly BlockingCollection<SharedDmaBuffer> _availableCaptureBuffers = new();
+    private readonly HashSet<SharedDmaBuffer> _pendingReuse = new();
     private readonly object _dpbLock = new();
 
     // Pending frame assembly for multi-slice frames in frame-based mode
@@ -44,6 +47,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private PpsState? _pendingPps;
     private SpsState? _pendingSps;
     private bool _pendingIsKeyFrame;
+    // Accumulated slice types for multi-slice frames (matching GStreamer's cumulative flags)
+    private HashSet<uint>? _pendingSliceTypes;
 
     // Thread for capture buffer processing
     private Thread? _captureThread;
@@ -206,7 +211,17 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 spsData.max_num_ref_frames);
 
             // Update DPB configuration based on SPS
-            _dpb.SetMaxNumRefFrames((int)spsData.max_num_ref_frames);
+            // Clamp to available capture buffers minus 1 (for current frame being decoded)
+            var maxRefs = (int)spsData.max_num_ref_frames;
+            var maxAvailableRefs = (int)_configuration.CaptureBufferCount - 1;
+            if (maxRefs > maxAvailableRefs)
+            {
+                _logger.LogWarning(
+                    "SPS max_num_ref_frames ({MaxRefs}) exceeds available capture buffers ({Available}), clamping to {Clamped}",
+                    maxRefs, _configuration.CaptureBufferCount, maxAvailableRefs);
+                maxRefs = maxAvailableRefs;
+            }
+            _dpb.SetMaxNumRefFrames(maxRefs);
         }
         // SPS is stored in _streamState by the parser, no V4L2 buffer needed
     }
@@ -268,6 +283,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 return;
             }
 
+            // Accumulate slice type for multi-slice frames (following GStreamer's |= approach)
+            _pendingSliceTypes?.Add(header.slice_type % 5);
             _pendingFrameData.Write(nalu);
         }
     }
@@ -281,6 +298,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _pendingPps = pps;
         _pendingSps = sps;
         _pendingIsKeyFrame = isKeyFrame;
+        // Initialize slice types with the first slice type
+        _pendingSliceTypes = new HashSet<uint> { header.slice_type % 5 };
 
         _logger.LogDebug("Started assembling frame: frame_num={FrameNum}, PPS={PpsId}, SPS={SpsId}, KeyFrame={IsKeyFrame}",
             header.frame_num, header.pic_parameter_set_id, pps.seq_parameter_set_id, isKeyFrame);
@@ -296,7 +315,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         try
         {
             var assembled = _pendingFrameData.ToArray();
-            SubmitFrameToDevice(assembled, _pendingSliceHeader, _pendingIsKeyFrame, _pendingPps, _pendingSps);
+            var sliceTypes = _pendingSliceTypes ?? new HashSet<uint> { _pendingSliceHeader.slice_type % 5 };
+            SubmitFrameToDevice(assembled, _pendingSliceHeader, _pendingIsKeyFrame, _pendingPps, _pendingSps, sliceTypes);
         }
         finally
         {
@@ -312,6 +332,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _pendingPps = null;
         _pendingSps = null;
         _pendingIsKeyFrame = false;
+        _pendingSliceTypes = null;
     }
 
     /// <inheritdoc />
@@ -327,12 +348,15 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             // Check if the buffer is still referenced by a picture in DPB
             if (_bufferToPicture.TryGetValue(decodedFrame, out var picture) && picture.IsRef)
             {
-                // Buffer is still used as reference, don't return it yet
+                // Buffer is still used as reference, mark for pending reuse
                 // It will be returned when the picture is marked as non-ref
+                _pendingReuse.Add(decodedFrame);
                 _logger.LogTrace("Buffer still referenced in DPB, deferring reuse");
                 return;
             }
 
+            // Remove from pending reuse if it was there
+            _pendingReuse.Remove(decodedFrame);
             // Remove from picture mapping if present
             _bufferToPicture.Remove(decodedFrame);
         }
@@ -350,6 +374,14 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         lock (_dpbLock)
         {
+            // Return all pending reuse buffers to the pool
+            foreach (var buffer in _pendingReuse)
+            {
+                buffer.V4L2Buffer.ResetPlanesUsed();
+                _availableCaptureBuffers.Add(buffer);
+            }
+            _pendingReuse.Clear();
+
             // Clear DPB and release all buffers
             foreach (var pic in _dpb.GetPictures())
             {
@@ -525,10 +557,16 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         var fds = _drmBuffers.Select(b => b.DmaBuffer.Fd).ToArray();
         _device.CaptureMPlaneQueue.InitDmaBuf(fds, negotiatedFormat.PlaneFormats[0].SizeImage, 0u);
 
+        // Build index mapping for fast dequeue lookup
+        _v4l2IndexToBuffer = new Dictionary<uint, SharedDmaBuffer>();
+
         foreach (var buffer in _drmBuffers)
         {
             buffer.V4L2Buffer = _device.CaptureMPlaneQueue.DmaBufBuffersPool.Buffers
                 .Single(b => b.DmaBufferFd == buffer.DmaBuffer.Fd);
+
+            // Map V4L2 buffer index to SharedDmaBuffer
+            _v4l2IndexToBuffer[buffer.V4L2Buffer.Index] = buffer;
 
             // Track availability for DPB management
             buffer.V4L2Buffer.ResetPlanesUsed();
@@ -572,7 +610,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 continue;
             }
 
-            var decodedFrame = _drmBuffers![(int)dequeuedBuffer.Index];
+            // Find the SharedDmaBuffer by V4L2 buffer index
+            var decodedFrame = _v4l2IndexToBuffer![dequeuedBuffer.Index];
             AddDecodedFrameToOutput(decodedFrame);
         }
 
@@ -590,7 +629,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         SliceHeaderState header,
         bool isKeyFrame,
         PpsState pps,
-        SpsState sps)
+        SpsState sps,
+        HashSet<uint> accumulatedSliceTypes)
     {
         // Increment system frame number for unique picture identification
         // Following GStreamer convention: system_frame_number is used to generate reference_ts
@@ -608,11 +648,20 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         {
             lock (_dpbLock)
             {
+                // Return all pending reuse buffers to the pool since they're no longer references
+                foreach (var buffer in _pendingReuse)
+                {
+                    buffer.V4L2Buffer.ResetPlanesUsed();
+                    _availableCaptureBuffers.Add(buffer);
+                    _logger.LogTrace("Released pending reuse buffer on IDR");
+                }
+                _pendingReuse.Clear();
+
                 // Mark all current references as non-ref before clearing
                 _dpb.MarkAllNonRef();
 
                 // Release buffers from pictures that are no longer needed
-                foreach (var pic in _dpb.GetPictures().Where(p => !p.IsRef))
+                foreach (var pic in _dpb.GetPictures())
                 {
                     if (pic.Buffer != null)
                     {
@@ -621,6 +670,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 }
 
                 _dpb.Clear();
+                _bufferToPicture.Clear();
             }
             _pocCalculator.Reset();
         }
@@ -664,7 +714,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         if (_mediaDevice != null)
         {
             request = _device.OutputMPlaneQueue.AcquireMediaRequest();
-            SubmitFrameControls(header, pps, sps, dpbSnapshot, picture, request);
+            SubmitFrameControls(header, pps, sps, dpbSnapshot, picture, accumulatedSliceTypes, request);
         }
 
         // Queue capture buffer WITHOUT timestamp - driver copies timestamp from output buffer
@@ -691,16 +741,38 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 {
                     if (removedPic.Buffer != null)
                     {
-                        _bufferToPicture.Remove(removedPic.Buffer);
-                        // Note: buffer will be returned to pool when ReuseDecodedFrame is called
-                        // since it's no longer tracked as referenced
+                        // If buffer was in pending reuse, return it to available pool now
+                        if (_pendingReuse.Remove(removedPic.Buffer))
+                        {
+                            _bufferToPicture.Remove(removedPic.Buffer);
+                            removedPic.Buffer.V4L2Buffer.ResetPlanesUsed();
+                            _availableCaptureBuffers.Add(removedPic.Buffer);
+                            _logger.LogTrace("Released pending reuse buffer from removed DPB picture frame_num={FrameNum}",
+                                removedPic.FrameNum);
+                        }
+                        else
+                        {
+                            _bufferToPicture.Remove(removedPic.Buffer);
+                        }
                     }
                 }
 
-                // Calculate PicNum for short-term reference
-                // For frames: PicNum = frame_num
-                // Following GStreamer's calculation
-                picture.PicNum = (int)picture.FrameNum;
+                // Calculate FrameNumWrap and PicNum for short-term reference per H.264 spec 8.2.4.1
+                // For newly added picture, FrameNumWrap = frame_num (no wrap-around yet)
+                // The wrap-around calculation is more complex for existing DPB entries,
+                // but for sliding window we only need consistent ordering.
+                picture.FrameNumWrap = (int)picture.FrameNum;
+
+                // PicNum for frames: PicNum = FrameNumWrap (H.264 spec 8.2.4.1)
+                // For fields: PicNum = 2 * FrameNumWrap + (bottom_field ? 1 : 0)
+                if (picture.FieldPicFlag)
+                {
+                    picture.PicNum = 2 * picture.FrameNumWrap + (picture.BottomFieldFlag ? 1 : 0);
+                }
+                else
+                {
+                    picture.PicNum = picture.FrameNumWrap;
+                }
 
                 _dpb.Add(picture);
                 _bufferToPicture[captureBuffer] = picture;
@@ -719,6 +791,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         SpsState sps,
         V4L2H264DpbEntry[] dpbSnapshot,
         H264Picture picture,
+        HashSet<uint> accumulatedSliceTypes,
         MediaRequest request)
     {
         var ppsV4L2 = PpsMapper.ConvertPpsStateToV4L2(pps);
@@ -760,7 +833,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 request);
         }
 
-        var decodeParams = BuildDecodeParams(header, picture, sps, dpbSnapshot);
+        var decodeParams = BuildDecodeParams(header, picture, sps, dpbSnapshot, accumulatedSliceTypes);
         _device.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
             decodeParams,
@@ -774,7 +847,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         SliceHeaderState header,
         H264Picture picture,
         SpsState sps,
-        V4L2H264DpbEntry[] dpbSnapshot)
+        V4L2H264DpbEntry[] dpbSnapshot,
+        HashSet<uint> accumulatedSliceTypes)
     {
         var decodeParams = new V4L2CtrlH264DecodeParams
         {
@@ -790,7 +864,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             PicOrderCntBitSize = SliceHeaderState.getPicOrderCntLsbLen(sps.sps_data.log2_max_pic_order_cnt_lsb_minus4),
             SliceGroupChangeCycle = header.slice_group_change_cycle,
             Reserved = 0,
-            Flags = BuildDecodeFlags(header, picture)
+            Flags = BuildDecodeFlags(picture, accumulatedSliceTypes)
         };
 
         // Set field order counts based on picture field type (matching GStreamer)
@@ -815,9 +889,9 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
     /// <summary>
     /// Build decode flags matching GStreamer's implementation.
-    /// In GStreamer, PFRAME/BFRAME flags are set in decode_slice based on slice_type.
+    /// In GStreamer, PFRAME/BFRAME flags are accumulated from all slices via |=.
     /// </summary>
-    private static uint BuildDecodeFlags(SliceHeaderState header, H264Picture picture)
+    private static uint BuildDecodeFlags(H264Picture picture, HashSet<uint> accumulatedSliceTypes)
     {
         uint flags = 0;
 
@@ -828,30 +902,32 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         }
 
         // Field picture flags
-        if (header.field_pic_flag != 0)
+        if (picture.FieldPicFlag)
         {
             flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_FIELD_PIC;
         }
 
-        if (header.bottom_field_flag != 0)
+        if (picture.BottomFieldFlag)
         {
             flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BOTTOM_FIELD;
         }
 
-        // Slice type flags - matching GStreamer's gst_v4l2_codec_h264_dec_decode_slice
+        // Slice type flags - matching GStreamer's cumulative |= approach
         // slice_type % 5 normalizes SI/SP/I/P/B to 0-4 range
-        var sliceType = header.slice_type % 5;
-        switch (sliceType)
+        foreach (var sliceType in accumulatedSliceTypes)
         {
-            case 0: // P slice
-            case 3: // SP slice
-                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
-                break;
-            case 1: // B slice
-                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BFRAME;
-                break;
-            // case 2: I slice - no flag needed
-            // case 4: SI slice - no flag needed
+            switch (sliceType)
+            {
+                case 0: // P slice
+                case 3: // SP slice
+                    flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
+                    break;
+                case 1: // B slice
+                    flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BFRAME;
+                    break;
+                // case 2: I slice - no flag needed
+                // case 4: SI slice - no flag needed
+            }
         }
 
         return flags;
@@ -886,6 +962,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         lock (_dpbLock)
         {
+            _pendingReuse.Clear();
             _dpb.Clear();
             _bufferToPicture.Clear();
         }

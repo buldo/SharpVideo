@@ -136,25 +136,32 @@ public sealed class H264Dpb
     /// <summary>
     /// Perform sliding window marking process.
     /// Removes the oldest short-term reference when DPB is full.
+    /// Following H.264 spec 8.2.5.3 and GStreamer's gst_h264_dpb_perform_sliding_window.
     /// </summary>
     public void PerformSlidingWindowMarking(int maxNumRefFrames)
     {
-        if (NumRefPics < maxNumRefFrames)
+        // Count short-term references only for sliding window
+        var numShortTermRefs = _pictures.Count(p => p.IsRef && !p.IsLongTermRef);
+        var numLongTermRefs = _pictures.Count(p => p.IsRef && p.IsLongTermRef);
+
+        // Sliding window applies when short-term + long-term refs >= max_num_ref_frames
+        if (numShortTermRefs + numLongTermRefs < maxNumRefFrames)
         {
             return;
         }
 
-        // Find the oldest short-term reference (smallest FrameNumWrap)
+        // Find the oldest short-term reference (smallest FrameNumWrap per H.264 spec 8.2.5.3)
         var shortTermRefs = _pictures
             .Where(p => p.IsRef && !p.IsLongTermRef)
-            .OrderBy(p => p.FrameNum)
+            .OrderBy(p => p.FrameNumWrap)
             .ToList();
 
         if (shortTermRefs.Count > 0)
         {
             var oldest = shortTermRefs[0];
             oldest.IsRef = false;
-            _logger?.LogTrace("Sliding window: marked picture frame_num={FrameNum} as non-ref", oldest.FrameNum);
+            _logger?.LogTrace("Sliding window: marked picture frame_num={FrameNum} (FrameNumWrap={FrameNumWrap}) as non-ref",
+                oldest.FrameNum, oldest.FrameNumWrap);
         }
     }
 
