@@ -2,7 +2,6 @@
 
 using Microsoft.Extensions.Logging;
 
-using SharpVideo.Decoding.V4l2.Discovery;
 using SharpVideo.Decoding.V4l2.H264;
 using SharpVideo.Drm;
 using SharpVideo.H264;
@@ -259,22 +258,22 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
     private void InitializeDecoder()
     {
-        _logger.LogInformation("Initializing V4L2 stateless H264 decoder");
+        _logger.LogInformation("Initializing H.264 stateless decoder...");
 
+        // Log device information for debugging
         _logger.LogInformation("Device fd: {Fd}, Controls: {ControlCount}, ExtControls: {ExtControlCount}",
             _device.fd, _device.Controls.Count, _device.ExtendedControls.Count);
 
-        // Check if device supports slice params control
-        _supportsSliceParamsControl =
-            _device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
+        // Configure decoder formats
+        ConfigureFormats();
 
-        // Set decode mode and start code
+        // For RK3566 I can only set FRAME_BASED + ANNEX_B
         var decodeMode = V4L2StatelessH264DecodeMode.FRAME_BASED;
         if (!_device.TrySetSimpleControl(
                 V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_MODE,
                 (int)decodeMode))
         {
-            throw new InvalidOperationException($"Failed to set decode mode to {decodeMode}");
+            throw new Exception($"Failed to set decode mode to {decodeMode}");
         }
 
         var startCode = V4L2StatelessH264StartCode.ANNEX_B;
@@ -282,24 +281,68 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 V4l2ControlsConstants.V4L2_CID_STATELESS_H264_START_CODE,
                 (int)startCode))
         {
-            throw new InvalidOperationException($"Failed to set start code to {startCode}");
+            throw new Exception($"Failed to set start code to {startCode}");
         }
 
-        // Setup buffers
+        // Setup and map buffers properly with real V4L2 mmap
         SetupAndMapBuffers();
 
-        // Start streaming
+        // Start streaming on both queues
         StartStreaming();
 
+        // Verify streaming is actually working
         var outputFormat = _device.GetOutputFormatMPlane();
         var captureFormat = _device.GetCaptureFormatMPlane();
 
         _logger.LogDebug("Streaming verification: Output {OutputFormat:X8}, Capture {CaptureFormat:X8}",
             outputFormat.PixelFormat, captureFormat.PixelFormat);
 
-        _isInitialized = true;
         _logger.LogInformation("Decoder initialization completed successfully");
     }
+
+    private void ConfigureFormats()
+    {
+        _logger.LogInformation("Configuring stateless decoder formats...");
+
+        var outputFormat = new V4L2PixFormatMplane
+        {
+            Width = _configuration.InitialWidth,
+            Height = _configuration.InitialHeight,
+            PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE,
+            NumPlanes = 1,
+            Field = (uint)V4L2Field.NONE,
+            Colorspace = 5, // V4L2_COLORSPACE_REC709
+            YcbcrEncoding = 1, // V4L2_YCBCR_ENC_DEFAULT
+            Quantization = 1, // V4L2_QUANTIZATION_DEFAULT
+            XferFunc = 1 // V4L2_XFER_FUNC_DEFAULT
+        };
+        _device.SetOutputFormatMPlane(outputFormat);
+
+        var confirmedOutputFormat = _device.GetOutputFormatMPlane();
+
+        _logger.LogInformation(
+            "Set output format: {Width}x{Height} H264 ({Planes} plane(s))",
+            confirmedOutputFormat.Width,
+            confirmedOutputFormat.Height,
+            confirmedOutputFormat.NumPlanes);
+
+        // Configure capture format (decoded output)
+        var captureFormat = new V4L2PixFormatMplane
+        {
+            Width = _configuration.InitialWidth,
+            Height = _configuration.InitialHeight,
+            PixelFormat = OutputPixelFormat.Fourcc, // Usually NV12
+            NumPlanes = 2, // NV12 typically has 2 planes
+            Field = (uint)V4L2Field.NONE,
+            Colorspace = 5,
+            YcbcrEncoding = 1,
+            Quantization = 1,
+            XferFunc = 1
+        };
+
+        _device.SetCaptureFormatMPlane(captureFormat);
+    }
+
 
     private void SetupAndMapBuffers()
     {
