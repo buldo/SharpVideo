@@ -56,7 +56,7 @@ internal class UiHostFactory
         // so V4L2 decoder can use it for zero-copy DMA buffer allocation
         var drmBufferManager = CreateDrmBufferManager();
 
-        var v4l2Decoder = _decodersFactory.TryCreateV4l2DecoderWithBufferManager(drmBufferManager);
+        var v4l2Decoder = _decodersFactory.CreateV4l2Decoder(drmBufferManager);
         if (v4l2Decoder == null)
         {
             throw new InvalidOperationException("Failed to create V4L2 decoder for DRM mode");

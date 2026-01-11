@@ -3,6 +3,7 @@
 using Microsoft.Extensions.Logging;
 
 using SharpVideo.Drm;
+using SharpVideo.V4L2;
 
 namespace SharpVideo.Decoding.V4l2.Stateful;
 
@@ -19,7 +20,7 @@ namespace SharpVideo.Decoding.V4l2.Stateful;
 [SupportedOSPlatform("linux")]
 public class V4l2H264StatefulDecoder : BaseDecoder<V4l2DecodedFrame>
 {
-    public V4l2H264StatefulDecoder(ILogger logger) : base(logger)
+    public V4l2H264StatefulDecoder(V4L2Device device, ILogger logger) : base(logger)
     {
     }
 

@@ -1,5 +1,9 @@
 using System.Runtime.Versioning;
+
 using Microsoft.Extensions.Logging;
+
+using SharpVideo.Decoding.V4l2;
+using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Utils;
@@ -80,23 +84,20 @@ internal class Program
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
         using var _ = v4L2Device; // Ensure disposal
 
-        var config = new DecoderConfiguration
+        var config = new V4l2DecoderConfiguration
         {
             // Use more buffers if streaming is supported for smoother playback
             OutputBufferCount = 3u,
             CaptureBufferCount = 6u,
-            RequestPoolSize = 6,
-            UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode for lowest latency
+            RequestPoolSize = 6
         };
 
-        var decoderLogger = LoggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
         using var mediaDevice = GetMediaDevice();
-        await using var decoder = new H264V4L2StatelessDecoder(
+        var decoder = V4l2H264StatelessDecoder.Create(
             v4L2Device,
             mediaDevice,
-            decoderLogger,
+            LoggerFactory,
             config,
-            processDecodedAction: null, // Not used in DMABUF mode
             drmBufferManager: drmBufferManager);
 
         var player = new Player(presenter, decoder, LoggerFactory);

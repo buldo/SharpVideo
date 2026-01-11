@@ -20,14 +20,13 @@ namespace SharpVideo.Decoding.V4l2.Stateless;
 [SupportedOSPlatform("linux")]
 public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
 {
+    private readonly V4L2Device _device;
+    private readonly MediaDevice _mediaDevice;
+
     private readonly ILogger<V4l2H264StatelessDecoder> _logger;
-    private readonly string _devicePath;
-    private readonly string? _mediaDevicePath;
     private readonly V4l2DecoderConfiguration _configuration;
     private readonly DrmBufferManager _drmBufferManager;
 
-    private V4L2Device? _device;
-    private MediaDevice? _mediaDevice;
     private List<SharedDmaBuffer>? _drmBuffers;
 
     private bool _supportsSliceParamsControl;
@@ -46,79 +45,49 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     private readonly H264BitstreamParserState _streamState = new();
     private readonly ParsingOptions _parsingOptions = new() { add_checksum = false };
 
-    private PixelFormat _outputPixelFormat;
     private bool _isInitialized;
 
     private V4l2H264StatelessDecoder(
-        ILogger<V4l2H264StatelessDecoder> logger,
-        string devicePath,
-        string? mediaDevicePath,
+        V4L2Device device,
+        MediaDevice mediaDevice,
         V4l2DecoderConfiguration configuration,
-        DrmBufferManager drmBufferManager)
+        DrmBufferManager drmBufferManager,
+        ILogger<V4l2H264StatelessDecoder> logger)
         : base(logger)
     {
         _logger = logger;
-        _devicePath = devicePath;
-        _mediaDevicePath = mediaDevicePath;
+        _device = device;
+        _mediaDevice = mediaDevice;
         _configuration = configuration;
         _drmBufferManager = drmBufferManager;
-        _outputPixelFormat = configuration.GetPixelFormat();
+
+        OutputPixelFormat = new PixelFormat(_device.GetCaptureFormatMPlane().PixelFormat);
     }
 
-    /// <summary>
-    /// Creates a stateless H264 decoder using the specified device.
-    /// </summary>
-    /// <param name="loggerFactory">Logger factory for creating loggers.</param>
-    /// <param name="decoderInfo">Decoder information from discovery.</param>
-    /// <param name="configuration">Decoder configuration settings.</param>
-    /// <param name="drmBufferManager">DRM buffer manager for zero-copy decoding (required).</param>
-    /// <returns>A new stateless decoder instance.</returns>
     public static V4l2H264StatelessDecoder Create(
+        V4L2Device device,
+        MediaDevice mediaDevice,
         ILoggerFactory loggerFactory,
-        V4l2H264DecoderInfo decoderInfo,
         V4l2DecoderConfiguration? configuration,
         DrmBufferManager drmBufferManager)
     {
         ArgumentNullException.ThrowIfNull(loggerFactory);
-        ArgumentNullException.ThrowIfNull(decoderInfo);
         ArgumentNullException.ThrowIfNull(drmBufferManager);
-
-        if (decoderInfo.DecoderType != V4l2H264DecoderType.Stateless)
-        {
-            throw new ArgumentException(
-                $"Expected stateless decoder info, got {decoderInfo.DecoderType}",
-                nameof(decoderInfo));
-        }
 
         configuration ??= new V4l2DecoderConfiguration();
 
         var logger = loggerFactory.CreateLogger<V4l2H264StatelessDecoder>();
-        logger.LogInformation(
-            "Creating V4L2 stateless H264 decoder at {DevicePath} ({Driver}: {Card})",
-            decoderInfo.DevicePath,
-            decoderInfo.Driver,
-            decoderInfo.Card);
 
         return new V4l2H264StatelessDecoder(
-            logger,
-            decoderInfo.DevicePath,
-            decoderInfo.MediaDevicePath,
+            device,
+            mediaDevice,
             configuration,
-            drmBufferManager);
+            drmBufferManager,
+            logger);
     }
 
-    /// <summary>
-    /// Gets the device path used by this decoder.
-    /// </summary>
-    public string DevicePath => _devicePath;
-
-    /// <summary>
-    /// Gets the media device path, if available.
-    /// </summary>
-    public string? MediaDevicePath => _mediaDevicePath;
-
     /// <inheritdoc />
-    public override PixelFormat OutputPixelFormat => _outputPixelFormat;
+    public override PixelFormat OutputPixelFormat { get; }
 
     /// <inheritdoc />
     public override void Initialize()
@@ -290,29 +259,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
 
     private void InitializeDecoder()
     {
-        _logger.LogInformation("Initializing V4L2 stateless H264 decoder at {DevicePath}", _devicePath);
-
-        // Open V4L2 device
-        _device = V4L2DeviceFactory.Open(_devicePath);
-        if (_device == null)
-        {
-            throw new InvalidOperationException($"Failed to open V4L2 device at {_devicePath}");
-        }
-
-        // Open media device if available (required for stateless)
-        if (!string.IsNullOrEmpty(_mediaDevicePath))
-        {
-            _mediaDevice = MediaDevice.Open(_mediaDevicePath);
-            if (_mediaDevice == null)
-            {
-                throw new InvalidOperationException(
-                    $"Failed to open media device at {_mediaDevicePath}. Stateless decoding requires a media device for requests.");
-            }
-        }
-        else
-        {
-            _logger.LogWarning("No media device path provided. Stateless decoding may fail on many platforms.");
-        }
+        _logger.LogInformation("Initializing V4L2 stateless H264 decoder");
 
         _logger.LogInformation("Device fd: {Fd}, Controls: {ControlCount}, ExtControls: {ExtControlCount}",
             _device.fd, _device.Controls.Count, _device.ExtendedControls.Count);
@@ -320,9 +267,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
         // Check if device supports slice params control
         _supportsSliceParamsControl =
             _device.ExtendedControls.Any(c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
-
-        // Configure formats
-        ConfigureFormats();
 
         // Set decode mode and start code
         var decodeMode = V4L2StatelessH264DecodeMode.FRAME_BASED;
@@ -349,53 +293,12 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
 
         var outputFormat = _device.GetOutputFormatMPlane();
         var captureFormat = _device.GetCaptureFormatMPlane();
-        _outputPixelFormat = new PixelFormat(captureFormat.PixelFormat);
 
         _logger.LogDebug("Streaming verification: Output {OutputFormat:X8}, Capture {CaptureFormat:X8}",
             outputFormat.PixelFormat, captureFormat.PixelFormat);
 
         _isInitialized = true;
         _logger.LogInformation("Decoder initialization completed successfully");
-    }
-
-    private void ConfigureFormats()
-    {
-        _logger.LogInformation("Configuring stateless decoder formats...");
-
-        var outputFormat = new V4L2PixFormatMplane
-        {
-            Width = _configuration.InitialWidth,
-            Height = _configuration.InitialHeight,
-            PixelFormat = V4L2PixelFormats.V4L2_PIX_FMT_H264_SLICE,
-            NumPlanes = 1,
-            Field = (uint)V4L2Field.NONE,
-            Colorspace = 5, // V4L2_COLORSPACE_REC709
-            YcbcrEncoding = 1,
-            Quantization = 1,
-            XferFunc = 1
-        };
-        _device!.SetOutputFormatMPlane(outputFormat);
-
-        var confirmedOutputFormat = _device.GetOutputFormatMPlane();
-        _logger.LogInformation(
-            "Set output format: {Width}x{Height} H264 ({Planes} plane(s))",
-            confirmedOutputFormat.Width,
-            confirmedOutputFormat.Height,
-            confirmedOutputFormat.NumPlanes);
-
-        var captureFormat = new V4L2PixFormatMplane
-        {
-            Width = _configuration.InitialWidth,
-            Height = _configuration.InitialHeight,
-            PixelFormat = _configuration.PreferredPixelFormat,
-            NumPlanes = 2,
-            Field = (uint)V4L2Field.NONE,
-            Colorspace = 5,
-            YcbcrEncoding = 1,
-            Quantization = 1,
-            XferFunc = 1
-        };
-        _device.SetCaptureFormatMPlane(captureFormat);
     }
 
     private void SetupAndMapBuffers()
@@ -698,19 +601,12 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
             _captureThread = null;
         }
 
-        if (_device != null)
-        {
-            _device.OutputMPlaneQueue.StreamOff();
-            _device.CaptureMPlaneQueue.StreamOff();
+        _device.OutputMPlaneQueue.StreamOff();
+        _device.CaptureMPlaneQueue.StreamOff();
+        UnmapOutputBuffers();
+        _device.Dispose();
 
-            UnmapOutputBuffers();
-
-            _device.Dispose();
-            _device = null;
-        }
-
-        _mediaDevice?.Dispose();
-        _mediaDevice = null;
+        _mediaDevice.Dispose();
 
         _isInitialized = false;
         _logger.LogInformation("Decoder cleanup completed");

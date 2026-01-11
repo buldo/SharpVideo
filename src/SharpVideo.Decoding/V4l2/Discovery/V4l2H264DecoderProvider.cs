@@ -62,11 +62,6 @@ public class V4l2H264DecoderProvider
         return results;
     }
 
-    /// <summary>
-    /// Finds the best available H264 decoder, preferring hardware over software.
-    /// Priority: Stateless > Stateful > None.
-    /// </summary>
-    /// <returns>The best decoder info, or null if no hardware decoder found.</returns>
     public V4l2H264DecoderInfo? FindBestDecoder()
     {
         var decoders = DiscoverDecoders();

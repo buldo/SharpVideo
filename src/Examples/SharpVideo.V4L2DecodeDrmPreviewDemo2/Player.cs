@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
 
+using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.Utils;
 using SharpVideo.V4L2Decoding.NaluSources;
 using SharpVideo.V4L2Decoding.Services;
@@ -14,7 +15,7 @@ namespace SharpVideo.V4L2DecodeDrmPreviewDemo2;
 public class Player
 {
     private readonly DrmPresenter _presenter;
-    private readonly H264V4L2StatelessDecoder _decoder;
+    private readonly V4l2H264StatelessDecoder _decoder;
     private readonly ILogger<Player> _logger;
     private readonly ILoggerFactory _loggerFactory;
     // Use bounded capacity to limit latency - max 3 frames in display queue
@@ -28,7 +29,7 @@ public class Player
 
     public Player(
         DrmPresenter presenter,
-        H264V4L2StatelessDecoder decoder,
+        V4l2H264StatelessDecoder decoder,
         ILoggerFactory loggerFactory)
     {
         _presenter = presenter;
@@ -41,7 +42,7 @@ public class Player
 
     public void Init()
     {
-        _decoder.InitializeDecoder(ProcessBuffer);
+        _decoder.Initialize();
     }
 
     public void StartPlay(FileStream fileStream)
@@ -55,7 +56,6 @@ public class Player
         _decodeCompleted.Wait();
         displayCts.Cancel(false);
         Task.WaitAll(_decodeTask, _displayTask);
-        Statistics.DecodeElapsed = _decoder.Statistics.DecodeElapsed;
     }
 
     private void ProcessBuffer(SharedDmaBuffer buffer)
@@ -76,12 +76,6 @@ public class Player
     {
         await using var naluSource = new StreamNaluSource(fileStream, _loggerFactory.CreateLogger<StreamNaluSource>());
         await naluSource.StartAsync();
-        _decoder.StartDecoding(naluSource);
-
-        // Wait for decoder thread to complete naturally (processes all NALUs from the queue)
-        // The decoder thread will exit when naluSource.NaluQueue.CompleteAdding() is called
-        // and all items are consumed
-        await _decoder.WaitForDecodingCompleteAsync();
         _decodeCompleted.Set();
     }
 
@@ -114,7 +108,8 @@ public class Player
             // Batch requeue for better performance
             for (int i = 0; i < toRequeue.Length; i++)
             {
-                _decoder.RequeueCaptureBuffer(toRequeue[i]);
+                // TODO
+                //_decoder.ReuseDecodedFrame(toRequeue[i]);
             }
         }
         displayStopwatch.Stop();
