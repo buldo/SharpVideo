@@ -1,6 +1,9 @@
 ﻿using System.Collections.Concurrent;
+
 using FFmpeg.AutoGen;
+
 using Microsoft.Extensions.Logging;
+
 using SharpVideo.Drm;
 
 namespace SharpVideo.Decoding.Ffmpeg;

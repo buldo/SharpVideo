@@ -3,6 +3,7 @@
 using Microsoft.Extensions.Logging;
 
 using SharpVideo.Drm;
+using SharpVideo.Utils;
 using SharpVideo.V4L2;
 
 namespace SharpVideo.Decoding.V4l2.Stateful;
@@ -18,7 +19,7 @@ namespace SharpVideo.Decoding.V4l2.Stateful;
 /// This is simpler than stateless decoders but offers less control.
 /// </remarks>
 [SupportedOSPlatform("linux")]
-public class V4l2H264StatefulDecoder : BaseDecoder<V4l2DecodedFrame>
+public class V4l2H264StatefulDecoder : BaseDecoder<SharedDmaBuffer>
 {
     public V4l2H264StatefulDecoder(V4L2Device device, ILogger logger) : base(logger)
     {
@@ -31,7 +32,7 @@ public class V4l2H264StatefulDecoder : BaseDecoder<V4l2DecodedFrame>
     }
 
     /// <inheritdoc />
-    public override void ReuseDecodedFrame(V4l2DecodedFrame decodedFrame)
+    public override void ReuseDecodedFrame(SharedDmaBuffer decodedFrame)
     {
         throw new NotImplementedException();
     }

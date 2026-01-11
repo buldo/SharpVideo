@@ -108,8 +108,7 @@ public class Player
             // Batch requeue for better performance
             for (int i = 0; i < toRequeue.Length; i++)
             {
-                // TODO
-                //_decoder.ReuseDecodedFrame(toRequeue[i]);
+                _decoder.ReuseDecodedFrame(toRequeue[i]);
             }
         }
         displayStopwatch.Stop();

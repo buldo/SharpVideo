@@ -23,11 +23,11 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 internal sealed class VideoOverlayManager : IDisposable
 {
     private readonly DualPlanePresenter _presenter;
-    private readonly VideoFrameManager<V4l2H264StatelessDecoder, V4l2DecodedFrame> _frameManager;
-    private readonly Action<V4l2DecodedFrame>? _onFrameSubmitted;
+    private readonly VideoFrameManager<V4l2H264StatelessDecoder, SharedDmaBuffer> _frameManager;
+    private readonly Action<SharedDmaBuffer>? _onFrameSubmitted;
     private readonly ILogger _logger;
 
-    private readonly Dictionary<SharedDmaBuffer, V4l2DecodedFrame> _framesInFlight = new();
+    private readonly Dictionary<SharedDmaBuffer, SharedDmaBuffer> _framesInFlight = new();
     private readonly object _lock = new();
 
     private int _submittedCount;
@@ -46,8 +46,8 @@ internal sealed class VideoOverlayManager : IDisposable
 
     public VideoOverlayManager(
         DualPlanePresenter presenter,
-        VideoFrameManager<V4l2H264StatelessDecoder, V4l2DecodedFrame> frameManager,
-        Action<V4l2DecodedFrame>? onFrameSubmitted,
+        VideoFrameManager<V4l2H264StatelessDecoder, SharedDmaBuffer> frameManager,
+        Action<SharedDmaBuffer>? onFrameSubmitted,
         ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(presenter);
@@ -84,24 +84,22 @@ internal sealed class VideoOverlayManager : IDisposable
     /// <summary>
     /// Submits a specific frame to the video overlay.
     /// </summary>
-    public void SubmitFrame(V4l2DecodedFrame frame)
+    public void SubmitFrame(SharedDmaBuffer buffer)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentNullException.ThrowIfNull(frame);
-
-        var dmaBuffer = frame.DmaBuffer;
+        ArgumentNullException.ThrowIfNull(buffer);
 
         lock (_lock)
         {
             // Track frame for later release
-            _framesInFlight[dmaBuffer] = frame;
+            _framesInFlight[buffer] = buffer;
         }
 
         // Submit to presenter (zero-copy)
-        _presenter.SubmitVideoFrame(dmaBuffer);
+        _presenter.SubmitVideoFrame(buffer);
 
         _submittedCount++;
-        _onFrameSubmitted?.Invoke(frame);
+        _onFrameSubmitted?.Invoke(buffer);
 
         _logger.LogTrace("Submitted video frame #{Count}", _submittedCount);
     }

@@ -23,7 +23,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// - OSD remains responsive even when no video frames are available
 /// </remarks>
 [SupportedOSPlatform("linux")]
-internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2DecodedFrame>
+internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, SharedDmaBuffer>
 {
     /// <summary>
     /// Delay after warmup frame submission, in milliseconds.
@@ -148,7 +148,7 @@ internal sealed class DrmHost : UiHostBase<V4l2H264StatelessDecoder, V4l2Decoded
         Logger.LogInformation("Render loop exited after {FrameCount} OSD frames", frameCount);
     }
 
-    private void UpdateFrameStatistics(V4l2DecodedFrame frame)
+    private void UpdateFrameStatistics(SharedDmaBuffer frame)
     {
         UiRenderer?.UpdateFrameStatistics(
             (int)frame.Width,

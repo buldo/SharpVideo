@@ -4,7 +4,6 @@ using Hexa.NET.ImGui;
 
 using Microsoft.Extensions.Logging;
 
-using SharpVideo.Decoding;
 using SharpVideo.Decoding.Ffmpeg;
 
 using Silk.NET.Maths;

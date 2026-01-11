@@ -1,8 +1,8 @@
 ﻿using FFmpeg.AutoGen;
 
-namespace SharpVideo.Decoding;
+namespace SharpVideo.Decoding.Ffmpeg;
 
-public unsafe class FfmpegDecodedFrame : UniversalDecodedFrame
+public unsafe class FfmpegDecodedFrame
 {
     public FfmpegDecodedFrame(AVFrame* frame)
     {

@@ -18,7 +18,7 @@ namespace SharpVideo.Decoding.V4l2.Stateless;
 /// (e.g., Raspberry Pi, Rockchip RK3588).
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
+public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 {
     private readonly V4L2Device _device;
     private readonly MediaDevice _mediaDevice;
@@ -240,14 +240,14 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
     }
 
     /// <inheritdoc />
-    public override void ReuseDecodedFrame(V4l2DecodedFrame decodedFrame)
+    public override void ReuseDecodedFrame(SharedDmaBuffer decodedFrame)
     {
         if (_device == null)
         {
             throw new InvalidOperationException("Decoder not initialized");
         }
 
-        _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(decodedFrame.DmaBuffer.V4L2Buffer);
+        _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(decodedFrame.V4L2Buffer);
     }
 
     /// <inheritdoc />
@@ -390,7 +390,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<V4l2DecodedFrame>
                 continue;
             }
 
-            var decodedFrame = new V4l2DecodedFrame(_drmBuffers![(int)dequeuedBuffer.Index]);
+            var decodedFrame = _drmBuffers![(int)dequeuedBuffer.Index];
             AddDecodedFrameToOutput(decodedFrame);
         }
 
