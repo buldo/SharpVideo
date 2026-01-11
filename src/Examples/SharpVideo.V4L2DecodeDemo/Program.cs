@@ -5,7 +5,6 @@ using SharpVideo.V4L2;
 using SharpVideo.V4L2Decoding.Models;
 using SharpVideo.V4L2Decoding.Services;
 using SharpVideo.V4L2Decoding.NaluSources;
-using SixLabors.ImageSharp;
 
 namespace SharpVideo.V4L2DecodeDemo;
 

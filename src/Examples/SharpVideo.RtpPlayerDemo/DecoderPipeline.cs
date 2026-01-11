@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
-using SharpVideo.Drm;
+
 using SharpVideo.Utils;
 using SharpVideo.V4L2Decoding.Services;
 using SharpVideo.V4L2Decoding.NaluSources;

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 using Xunit;
-using System.Linq;
+
 using SharpVideo.Linux.Native.Dma;
 using SharpVideo.Linux.Native.Drm;
 using SharpVideo.Linux.Native.V4L2;

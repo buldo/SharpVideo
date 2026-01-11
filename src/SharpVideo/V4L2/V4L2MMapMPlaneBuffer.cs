@@ -1,6 +1,4 @@
-﻿using System;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
+﻿using System.Runtime.Versioning;
 
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.C;

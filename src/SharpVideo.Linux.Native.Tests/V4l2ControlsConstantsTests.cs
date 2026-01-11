@@ -1,5 +1,3 @@
-using System;
-
 using SharpVideo.Linux.Native.V4L2;
 
 using Xunit;

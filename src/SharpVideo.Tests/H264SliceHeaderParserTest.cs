@@ -1,6 +1,4 @@
-﻿using System;
-
-using SharpVideo.H264;
+﻿using SharpVideo.H264;
 
 namespace SharpVideo.Tests;
 

@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Runtime.Versioning;
-using System.Threading;
 
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.V4L2;

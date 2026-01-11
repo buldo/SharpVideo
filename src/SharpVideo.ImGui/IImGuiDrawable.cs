@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using Hexa.NET.ImGui;
 
 namespace SharpVideo.ImGui;
 

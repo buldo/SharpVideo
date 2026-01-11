@@ -1,10 +1,6 @@
 using System.Runtime.Versioning;
 
-using Microsoft.Extensions.Logging;
-
-using SharpVideo.Decoding.V4l2;
 using SharpVideo.Decoding.V4l2.Stateless;
-using SharpVideo.DmaBuffers;
 using SharpVideo.Utils;
 
 namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;

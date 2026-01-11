@@ -1,5 +1,3 @@
-using SharpVideo.Drm;
-
 namespace SharpVideo.Decoding.V4l2;
 
 /// <summary>

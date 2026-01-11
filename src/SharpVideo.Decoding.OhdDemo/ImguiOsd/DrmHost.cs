@@ -1,9 +1,6 @@
 using System.Runtime.Versioning;
 
-using Hexa.NET.ImGui;
-
 using SharpVideo.Decoding.OhdDemo.Configuration;
-using SharpVideo.Decoding.V4l2;
 using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.Utils;
 

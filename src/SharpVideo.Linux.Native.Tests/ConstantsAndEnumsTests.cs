@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.Versioning;
 using SharpVideo.Linux.Native.C;
 using SharpVideo.Linux.Native.Drm;

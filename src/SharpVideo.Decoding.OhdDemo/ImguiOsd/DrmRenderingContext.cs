@@ -2,10 +2,7 @@ using System.Runtime.Versioning;
 
 using Hexa.NET.ImGui;
 
-using Microsoft.Extensions.Logging;
-
 using SharpVideo.Decoding.OhdDemo.Configuration;
-using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
 using SharpVideo.Gbm;
 using SharpVideo.ImGui;

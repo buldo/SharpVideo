@@ -1,10 +1,6 @@
-using System.Numerics;
-
 using Microsoft.Extensions.Logging;
 
-using Silk.NET.Maths;
 using Silk.NET.OpenGL;
-using Silk.NET.Windowing;
 
 using SharpVideo.Decoding.Ffmpeg;
 

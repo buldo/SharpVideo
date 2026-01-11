@@ -2,7 +2,6 @@ using System.Runtime.Versioning;
 using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
-using SharpVideo.Linux.Native;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2Decoding.Models;
