@@ -1,0 +1,25 @@
+namespace SharpVideo.V4L2DecodeDrmPreviewDemo2;
+
+public class PlayerStatistics
+{
+    private uint _decodedFrames;
+    private uint _presentedFrames;
+
+    public TimeSpan DecodeElapsed { get; set; }
+
+    public uint DecodedFrames => _decodedFrames;
+
+    public uint PresentedFrames => _presentedFrames;
+
+    public TimeSpan PresentElapsed { get; internal set; }
+
+    public void IncrementDecodedFrames()
+    {
+        Interlocked.Increment(ref _decodedFrames);
+    }
+
+    public void IncrementPresentedFrames()
+    {
+        Interlocked.Increment(ref _presentedFrames);
+    }
+}

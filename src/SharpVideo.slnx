@@ -16,6 +16,7 @@
     <Project Path="Examples/SharpVideo.RtpPlayerDemo/SharpVideo.RtpPlayerDemo.csproj" Id="05f5b15e-0bf4-49d2-91ff-60cf2bcd8e58" />
     <Project Path="Examples/SharpVideo.V4L2DecodeDemo/SharpVideo.V4L2DecodeDemo.csproj" />
     <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo/SharpVideo.V4L2DecodeDrmPreviewDemo.csproj" />
+    <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo2/SharpVideo.V4L2DecodeDrmPreviewDemo2.csproj" />
     <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
     <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
     <Project Path="SharpVideo.Decoding.OhdDemo/SharpVideo.Decoding.OhdDemo.csproj" Id="fc19e915-ee43-4486-b39d-6ccd5642a09a" />

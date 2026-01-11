@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RuntimeIdentifiers>linux</RuntimeIdentifiers>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
+    <ProjectReference Include="../../SharpVideo/SharpVideo.csproj" />
+    <ProjectReference Include="..\..\SharpVideo.Decoding\SharpVideo.Decoding.csproj" />
+    <ProjectReference Include="..\..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
+    <ProjectReference Include="..\SharpVideo.DemoMedia\SharpVideo.DemoMedia.csproj" />
+    <ProjectReference Include="..\SharpVideo.V4L2Decoding\SharpVideo.V4L2Decoding.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="test_video.h264">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
