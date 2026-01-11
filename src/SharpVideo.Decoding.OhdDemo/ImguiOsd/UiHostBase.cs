@@ -1,4 +1,5 @@
-﻿using Rtsp.Rtp;
+﻿using System.Collections.Concurrent;
+using Rtsp.Rtp;
 
 namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
@@ -7,6 +8,7 @@ internal abstract class UiHostBase<TDecoder, TDecoderOutputBuffer> : IUiHost
     where TDecoderOutputBuffer : class
 {
     private readonly H264Payload _h264Depacketiser = new();
+    private readonly BlockingCollection<RawMediaFrame> _frameQueue = new(boundedCapacity: 32);
 
     protected readonly CancellationTokenSource CancellationTokenSource = new();
     protected readonly ILoggerFactory LoggerFactory;
@@ -14,6 +16,7 @@ internal abstract class UiHostBase<TDecoder, TDecoderOutputBuffer> : IUiHost
     protected readonly TDecoder H264Decoder;
 
     protected Task? DrawThread;
+    private Task? _decodeThread;
     protected VideoFrameManager<TDecoder, TDecoderOutputBuffer>? VideoFrameManager;
     protected ImGuiUiRenderer? UiRenderer;
 
@@ -47,6 +50,7 @@ internal abstract class UiHostBase<TDecoder, TDecoderOutputBuffer> : IUiHost
             showDemoWindow: ShowDemoWindow);
 
         DrawThread = Task.Factory.StartNew(RunDrawThread, TaskCreationOptions.LongRunning);
+        _decodeThread = Task.Factory.StartNew(RunDecodeThread, TaskCreationOptions.LongRunning);
         VideoFrameManager.Start();
 
         OnStart();
@@ -58,9 +62,16 @@ internal abstract class UiHostBase<TDecoder, TDecoderOutputBuffer> : IUiHost
         Logger.LogInformation("Stopping {HostType}", GetType().Name);
         await CancellationTokenSource.CancelAsync();
 
+        _frameQueue.CompleteAdding();
+
         if (DrawThread != null)
         {
             await DrawThread;
+        }
+
+        if (_decodeThread != null)
+        {
+            await _decodeThread;
         }
 
         if (VideoFrameManager != null)
@@ -93,7 +104,30 @@ internal abstract class UiHostBase<TDecoder, TDecoderOutputBuffer> : IUiHost
         var frame = _h264Depacketiser.ProcessPacket(packet);
         if (frame.Any())
         {
-            ProcessNalu(frame);
+            try
+            {
+                _frameQueue.Add(frame);
+            }
+            catch (InvalidOperationException)
+            {
+                // Queue is completed, dispose the frame
+                frame.Dispose();
+            }
+        }
+    }
+
+    private void RunDecodeThread()
+    {
+        try
+        {
+            foreach (var frame in _frameQueue.GetConsumingEnumerable(CancellationTokenSource.Token))
+            {
+                ProcessNalu(frame);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected during shutdown
         }
     }
 
