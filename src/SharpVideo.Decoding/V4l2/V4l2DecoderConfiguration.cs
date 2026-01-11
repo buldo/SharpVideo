@@ -18,15 +18,15 @@ public sealed class V4l2DecoderConfiguration
     /// <summary>
     /// Number of output buffers for encoded data (input to decoder).
     /// </summary>
-    public uint OutputBufferCount { get; init; } = 4;
+    public uint OutputBufferCount { get; init; } = 16;
 
     /// <summary>
     /// Number of capture buffers for decoded frames (output from decoder).
     /// </summary>
-    public uint CaptureBufferCount { get; init; } = 4;
+    public uint CaptureBufferCount { get; init; } = 16;
 
     /// <summary>
     /// Number of media requests to pool for stateless decoders.
     /// </summary>
-    public int RequestPoolSize { get; init; } = 4;
+    public int RequestPoolSize { get; init; } = 32;
 }

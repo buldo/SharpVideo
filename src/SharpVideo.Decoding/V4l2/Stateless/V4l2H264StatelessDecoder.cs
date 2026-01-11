@@ -1,6 +1,9 @@
-﻿using System.Runtime.Versioning;
+﻿using System.Collections.Concurrent;
+using System.IO;
+using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
+using System.Linq;
 
 using SharpVideo.Decoding.V4l2.H264;
 using SharpVideo.Drm;
@@ -15,6 +18,7 @@ namespace SharpVideo.Decoding.V4l2.Stateless;
 /// V4L2 stateless H264 decoder.
 /// Used for hardware decoders that require userspace to manage decoding state
 /// (e.g., Raspberry Pi, Rockchip RK3588).
+/// DPB management follows GStreamer's gstv4l2codech264dec.c implementation.
 /// </summary>
 [SupportedOSPlatform("linux")]
 public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
@@ -29,22 +33,42 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private List<SharedDmaBuffer>? _drmBuffers;
 
     private bool _supportsSliceParamsControl;
+    private bool _supportsScalingMatrixControl;
+
+    private readonly BlockingCollection<SharedDmaBuffer> _availableCaptureBuffers = new();
+    private readonly object _dpbLock = new();
+
+    // Pending frame assembly for multi-slice frames in frame-based mode
+    private MemoryStream? _pendingFrameData;
+    private SliceHeaderState? _pendingSliceHeader;
+    private PpsState? _pendingPps;
+    private SpsState? _pendingSps;
+    private bool _pendingIsKeyFrame;
 
     // Thread for capture buffer processing
     private Thread? _captureThread;
     private CancellationTokenSource? _captureCts;
 
-    // DPB (Decoded Picture Buffer) tracking - using Queue for O(1) operations
-    private readonly Queue<DpbEntry> _dpb = new();
+    // DPB (Decoded Picture Buffer) - following GStreamer's model
+    private readonly H264Dpb _dpb;
 
-    // Frame counter for generating unique timestamps
-    private ulong _frameCounter;
+    // Current picture being decoded
+    private H264Picture? _currentPicture;
+
+    // Map from buffer to picture for buffer lifecycle management
+    private readonly Dictionary<SharedDmaBuffer, H264Picture> _bufferToPicture = new();
+
+    private readonly H264PicOrderCountCalculator _pocCalculator = new();
+
+    // System frame counter for generating unique timestamps (matches GStreamer's system_frame_number)
+    private uint _systemFrameNumber;
 
     // H264 bitstream parsing state
     private readonly H264BitstreamParserState _streamState = new();
     private readonly ParsingOptions _parsingOptions = new() { add_checksum = false };
 
     private bool _isInitialized;
+    private bool _streamingStarted;
 
     private V4l2H264StatelessDecoder(
         V4L2Device device,
@@ -59,6 +83,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _mediaDevice = mediaDevice;
         _configuration = configuration;
         _drmBufferManager = drmBufferManager;
+        _dpb = new H264Dpb(logger);
 
         OutputPixelFormat = new PixelFormat(_device.GetCaptureFormatMPlane().PixelFormat);
     }
@@ -172,12 +197,16 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         if (spsData != null)
         {
             _logger.LogInformation(
-                "SPS RECEIVED: id={SpsId}, profile={Profile}, level={Level}, size={Width}x{Height}",
+                "SPS RECEIVED: id={SpsId}, profile={Profile}, level={Level}, size={Width}x{Height}, max_num_ref_frames={MaxRefs}",
                 spsData.seq_parameter_set_id,
                 spsData.profile_idc,
                 spsData.level_idc,
                 (spsData.pic_width_in_mbs_minus1 + 1) * 16,
-                (spsData.pic_height_in_map_units_minus1 + 1) * 16);
+                (spsData.pic_height_in_map_units_minus1 + 1) * 16,
+                spsData.max_num_ref_frames);
+
+            // Update DPB configuration based on SPS
+            _dpb.SetMaxNumRefFrames((int)spsData.max_num_ref_frames);
         }
         // SPS is stored in _streamState by the parser, no V4L2 buffer needed
     }
@@ -208,13 +237,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         var header = sliceData.slice_header;
 
-        // Skip non-initial slices in frame-based mode
-        if (header.first_mb_in_slice != 0)
-        {
-            _logger.LogDebug("Skipping non-initial slice for frame {FrameNum} in frame-based mode", header.frame_num);
-            return;
-        }
-
         // Check if PPS/SPS are available
         if (!_streamState.pps.TryGetValue(header.pic_parameter_set_id, out var pps) || pps == null)
         {
@@ -232,10 +254,64 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         bool isKeyFrame = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 
-        _logger.LogDebug("Submitting frame: frame_num={FrameNum}, PPS={PpsId}, SPS={SpsId}, KeyFrame={IsKeyFrame}",
-            header.frame_num, header.pic_parameter_set_id, pps.seq_parameter_set_id, isKeyFrame);
+        if (header.first_mb_in_slice == 0)
+        {
+            // New access unit: flush any pending assembled frame first
+            SubmitPendingFrameIfAny();
+            StartPendingFrame(nalu, header, isKeyFrame, pps, sps);
+        }
+        else
+        {
+            if (_pendingFrameData == null)
+            {
+                _logger.LogWarning("Received non-initial slice without an active frame assembly; dropping slice for frame {FrameNum}", header.frame_num);
+                return;
+            }
 
-        SubmitFrameToDevice(nalu, header, isKeyFrame);
+            _pendingFrameData.Write(nalu);
+        }
+    }
+
+    private void StartPendingFrame(ReadOnlySpan<byte> nalu, SliceHeaderState header, bool isKeyFrame, PpsState pps, SpsState sps)
+    {
+        _pendingFrameData = new MemoryStream();
+        _pendingFrameData.Write(nalu);
+
+        _pendingSliceHeader = header;
+        _pendingPps = pps;
+        _pendingSps = sps;
+        _pendingIsKeyFrame = isKeyFrame;
+
+        _logger.LogDebug("Started assembling frame: frame_num={FrameNum}, PPS={PpsId}, SPS={SpsId}, KeyFrame={IsKeyFrame}",
+            header.frame_num, header.pic_parameter_set_id, pps.seq_parameter_set_id, isKeyFrame);
+    }
+
+    private void SubmitPendingFrameIfAny()
+    {
+        if (_pendingFrameData == null || _pendingSliceHeader == null || _pendingPps == null || _pendingSps == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var assembled = _pendingFrameData.ToArray();
+            SubmitFrameToDevice(assembled, _pendingSliceHeader, _pendingIsKeyFrame, _pendingPps, _pendingSps);
+        }
+        finally
+        {
+            ResetPendingFrame();
+        }
+    }
+
+    private void ResetPendingFrame()
+    {
+        _pendingFrameData?.Dispose();
+        _pendingFrameData = null;
+        _pendingSliceHeader = null;
+        _pendingPps = null;
+        _pendingSps = null;
+        _pendingIsKeyFrame = false;
     }
 
     /// <inheritdoc />
@@ -246,14 +322,48 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             throw new InvalidOperationException("Decoder not initialized");
         }
 
-        _device.CaptureMPlaneQueue.ReuseDmaBufBuffer(decodedFrame.V4L2Buffer);
+        lock (_dpbLock)
+        {
+            // Check if the buffer is still referenced by a picture in DPB
+            if (_bufferToPicture.TryGetValue(decodedFrame, out var picture) && picture.IsRef)
+            {
+                // Buffer is still used as reference, don't return it yet
+                // It will be returned when the picture is marked as non-ref
+                _logger.LogTrace("Buffer still referenced in DPB, deferring reuse");
+                return;
+            }
+
+            // Remove from picture mapping if present
+            _bufferToPicture.Remove(decodedFrame);
+        }
+
+        decodedFrame.V4L2Buffer.ResetPlanesUsed();
+        _availableCaptureBuffers.Add(decodedFrame);
     }
 
     /// <inheritdoc />
     protected override void FlushDecoder()
     {
         _logger.LogInformation("Flushing decoder...");
-        _dpb.Clear();
+        SubmitPendingFrameIfAny();
+        ResetPendingFrame();
+
+        lock (_dpbLock)
+        {
+            // Clear DPB and release all buffers
+            foreach (var pic in _dpb.GetPictures())
+            {
+                if (pic.Buffer != null)
+                {
+                    _bufferToPicture.Remove(pic.Buffer);
+                }
+            }
+            _dpb.Clear();
+            _bufferToPicture.Clear();
+        }
+
+        _currentPicture = null;
+        _pocCalculator.Reset();
     }
 
     private void InitializeDecoder()
@@ -266,6 +376,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         // Configure decoder formats
         ConfigureFormats();
+
+        DetectControlSupport();
 
         // For RK3566 I can only set FRAME_BASED + ANNEX_B
         var decodeMode = V4L2StatelessH264DecodeMode.FRAME_BASED;
@@ -287,9 +399,6 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         // Setup and map buffers properly with real V4L2 mmap
         SetupAndMapBuffers();
 
-        // Start streaming on both queues
-        StartStreaming();
-
         // Verify streaming is actually working
         var outputFormat = _device.GetOutputFormatMPlane();
         var captureFormat = _device.GetCaptureFormatMPlane();
@@ -297,6 +406,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _logger.LogDebug("Streaming verification: Output {OutputFormat:X8}, Capture {CaptureFormat:X8}",
             outputFormat.PixelFormat, captureFormat.PixelFormat);
 
+        _isInitialized = true;
         _logger.LogInformation("Decoder initialization completed successfully");
     }
 
@@ -341,6 +451,26 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         };
 
         _device.SetCaptureFormatMPlane(captureFormat);
+    }
+
+    private void DetectControlSupport()
+    {
+        _supportsSliceParamsControl = _device.ExtendedControls.Any(
+            c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS);
+        var hasDecodeParams = _device.ExtendedControls.Any(
+            c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS);
+
+        _supportsScalingMatrixControl = _device.ExtendedControls.Any(
+            c => c.Id == V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SCALING_MATRIX);
+
+        if (!_supportsSliceParamsControl)
+        {
+            _logger.LogWarning("Device does not report SLICE_PARAMS control support; decoder will run without it");
+        }
+        if (!_supportsScalingMatrixControl)
+        {
+            _logger.LogWarning("Device does not report SCALING_MATRIX control support; decoder will run without it");
+        }
     }
 
 
@@ -399,16 +529,23 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         {
             buffer.V4L2Buffer = _device.CaptureMPlaneQueue.DmaBufBuffersPool.Buffers
                 .Single(b => b.DmaBufferFd == buffer.DmaBuffer.Fd);
+
+            // Track availability for DPB management
+            buffer.V4L2Buffer.ResetPlanesUsed();
+            _availableCaptureBuffers.Add(buffer);
         }
     }
 
-    private void StartStreaming()
+    private void EnsureStreamingStarted()
     {
+        if (_streamingStarted)
+        {
+            return;
+        }
+
         _logger.LogInformation("Starting V4L2 streaming...");
 
-        _device!.CaptureMPlaneQueue.EnqueueAllDmaBufBuffers();
-
-        _device.OutputMPlaneQueue.StreamOn();
+        _device!.OutputMPlaneQueue.StreamOn();
         _device.CaptureMPlaneQueue.StreamOn();
 
         _captureCts = new CancellationTokenSource();
@@ -417,6 +554,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             Name = "V4L2CaptureBufferProcessor", IsBackground = true
         };
         _captureThread.Start();
+
+        _streamingStarted = true;
         _logger.LogInformation("Started capture buffer processing thread");
     }
 
@@ -440,184 +579,249 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _logger.LogInformation("Capture buffer processing thread stopped");
     }
 
+    private SharedDmaBuffer AcquireCaptureBuffer()
+    {
+        // Blocks until a free capture buffer is available (not referenced in DPB and returned by presenter)
+        return _availableCaptureBuffers.Take();
+    }
+
     private void SubmitFrameToDevice(
         ReadOnlySpan<byte> frameData,
         SliceHeaderState header,
-        bool isKeyFrame)
+        bool isKeyFrame,
+        PpsState pps,
+        SpsState sps)
     {
-        // Generate unique timestamp for this frame (used for DPB reference tracking)
-        _frameCounter++;
-        var timestamp = new TimeVal { TvSec = (nint)(_frameCounter / 1000000), TvUsec = (nint)(_frameCounter % 1000000) };
+        // Increment system frame number for unique picture identification
+        // Following GStreamer convention: system_frame_number is used to generate reference_ts
+        _systemFrameNumber++;
 
-        // First, ensure there's a free buffer available before acquiring media request
+        // Create a new H264Picture for this frame (following GStreamer's model)
+        var picture = new H264Picture
+        {
+            SystemFrameNumber = _systemFrameNumber
+        };
+        picture.InitFromSliceHeader(header, sps, isKeyFrame);
+
+        // For IDR pictures, clear the DPB and reset POC calculator
+        if (isKeyFrame)
+        {
+            lock (_dpbLock)
+            {
+                // Mark all current references as non-ref before clearing
+                _dpb.MarkAllNonRef();
+
+                // Release buffers from pictures that are no longer needed
+                foreach (var pic in _dpb.GetPictures().Where(p => !p.IsRef))
+                {
+                    if (pic.Buffer != null)
+                    {
+                        _bufferToPicture.Remove(pic.Buffer);
+                    }
+                }
+
+                _dpb.Clear();
+            }
+            _pocCalculator.Reset();
+        }
+
+        // Calculate POC for this picture
+        var topPoc = _pocCalculator.CalculatePOC(header, sps, isKeyFrame);
+        picture.TopFieldOrderCnt = topPoc;
+        picture.BottomFieldOrderCnt = topPoc + header.delta_pic_order_cnt_bottom;
+
+        _logger.LogDebug("Picture: system_frame={SysFrame}, frame_num={FrameNum}, POC={Poc}, IsRef={IsRef}",
+            picture.SystemFrameNumber, picture.FrameNum, picture.GetPicOrderCnt(), picture.IsRef);
+
+        // First, ensure there's a free OUTPUT buffer available before acquiring media request
         _device!.OutputMPlaneQueue.EnsureFreeBuffer();
+
+        // Acquire a capture buffer that is safe to reuse
+        var captureBuffer = AcquireCaptureBuffer();
+        captureBuffer.V4L2Buffer.ResetPlanesUsed();
+
+        // Associate buffer with picture
+        picture.Buffer = captureBuffer;
+
+        // Get DPB snapshot for decode params BEFORE adding current picture
+        V4L2H264DpbEntry[] dpbSnapshot;
+        lock (_dpbLock)
+        {
+            dpbSnapshot = _dpb.CreateV4L2Dpb();
+        }
+
+        // Timestamp for OUTPUT buffer QBUF: split system_frame_number into seconds and microseconds
+        // The driver will copy this timestamp to the CAPTURE buffer automatically
+        // Following GStreamer: use system_frame_number as microseconds value
+        var timestamp = new TimeVal
+        {
+            TvSec = (nint)(picture.SystemFrameNumber / 1_000_000),
+            TvUsec = (nint)(picture.SystemFrameNumber % 1_000_000)
+        };
 
         // Now acquire media request if needed (buffer is guaranteed to be available)
         MediaRequest? request = null;
         if (_mediaDevice != null)
         {
             request = _device.OutputMPlaneQueue.AcquireMediaRequest();
-            SubmitFrameControls(header, isKeyFrame, request, _frameCounter);
+            SubmitFrameControls(header, pps, sps, dpbSnapshot, picture, request);
         }
+
+        // Queue capture buffer WITHOUT timestamp - driver copies timestamp from output buffer
+        _device.CaptureMPlaneQueue.EnqueueDmaBufBuffer(captureBuffer.V4L2Buffer, request, null);
 
         // Write buffer and enqueue with timestamp
         _device.OutputMPlaneQueue.WriteBufferAndEnqueue(frameData, request, timestamp);
         request?.Queue();
+
+        EnsureStreamingStarted();
+
+        // Add picture to DPB if it's a reference picture
+        if (picture.IsRef)
+        {
+            lock (_dpbLock)
+            {
+                // Perform sliding window marking before adding new reference
+                _dpb.PerformSlidingWindowMarking(_dpb.MaxNumRefFrames);
+
+                // Calculate PicNum for short-term reference
+                // For frames: PicNum = frame_num
+                // Following GStreamer's calculation
+                picture.PicNum = (int)picture.FrameNum;
+
+                _dpb.Add(picture);
+                _bufferToPicture[captureBuffer] = picture;
+
+                _logger.LogTrace("Added reference picture to DPB: frame_num={FrameNum}, ref_ts={RefTs}, DPB size={Size}",
+                    picture.FrameNum, picture.ReferenceTs, _dpb.NumPics);
+            }
+        }
+
+        _currentPicture = picture;
     }
 
     private void SubmitFrameControls(
         SliceHeaderState header,
-        bool isKeyFrame,
-        MediaRequest request,
-        ulong frameTimestamp)
+        PpsState pps,
+        SpsState sps,
+        V4L2H264DpbEntry[] dpbSnapshot,
+        H264Picture picture,
+        MediaRequest request)
     {
-        var pps = _streamState.pps[header.pic_parameter_set_id];
         var ppsV4L2 = PpsMapper.ConvertPpsStateToV4L2(pps);
+
+        // Ensure scaling matrix flag is set when either SPS or PPS carries scaling data
+        bool scalingMatrixPresent = pps.pic_scaling_matrix_present_flag != 0 ||
+                                    sps.sps_data.seq_scaling_matrix_present_flag != 0;
+        if (_supportsScalingMatrixControl && scalingMatrixPresent)
+        {
+            ppsV4L2.Flags |= 0x80; // V4L2_H264_PPS_FLAG_SCALING_MATRIX_PRESENT
+        }
+
         _device!.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_PPS,
             ppsV4L2,
             request);
 
-        var sps = _streamState.sps[pps.seq_parameter_set_id];
         var spsV4L2 = SpsMapper.MapSpsToV4L2(sps);
         _device.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SPS,
             spsV4L2,
             request);
 
+        if (_supportsScalingMatrixControl)
+        {
+            var scalingMatrix = ScalingMatrixMapper.MapScalingMatrix(sps, pps);
+            _device.SetSingleExtendedControl(
+                V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SCALING_MATRIX,
+                scalingMatrix,
+                request);
+        }
+
         if (_supportsSliceParamsControl)
         {
-            var sliceParams = SliceParamsMapper.BuildSliceParams(header);
+            var sliceParams = SliceParamsMapper.BuildSliceParams(header, pps, dpbSnapshot);
             _device.SetSingleExtendedControl(
                 V4l2ControlsConstants.V4L2_CID_STATELESS_H264_SLICE_PARAMS,
                 sliceParams,
                 request);
         }
 
-        var decodeParams = BuildDecodeParams(header, isKeyFrame, sps, frameTimestamp);
+        var decodeParams = BuildDecodeParams(header, picture, sps, dpbSnapshot);
         _device.SetSingleExtendedControl(
             V4l2ControlsConstants.V4L2_CID_STATELESS_H264_DECODE_PARAMS,
             decodeParams,
             request);
     }
 
-    private V4L2CtrlH264DecodeParams BuildDecodeParams(SliceHeaderState header, bool isIdr, SpsState sps, ulong currentFrameTimestamp)
+    /// <summary>
+    /// Build decode params following GStreamer's gst_v4l2_codec_h264_dec_fill_decoder_params.
+    /// </summary>
+    private V4L2CtrlH264DecodeParams BuildDecodeParams(
+        SliceHeaderState header,
+        H264Picture picture,
+        SpsState sps,
+        V4L2H264DpbEntry[] dpbSnapshot)
     {
-        // Handle IDR frames - they reset the DPB
-        if (isIdr)
-        {
-            _dpb.Clear();
-            _logger.LogDebug("IDR frame detected - DPB cleared");
-        }
-
-        var dpbArray = CreateEmptyDpb();
-
-        // Populate DPB with current reference frames
-        int dpbIndex = 0;
-        foreach (var entry in _dpb)
-        {
-            if (dpbIndex >= dpbArray.Length)
-                break;
-
-            dpbArray[dpbIndex].ReferenceTimestamp = entry.Timestamp;
-            dpbArray[dpbIndex].FrameNum = (ushort)entry.FrameNum;
-            dpbArray[dpbIndex].PicNum = (ushort)entry.FrameNum;
-            dpbArray[dpbIndex].TopFieldOrderCnt = (int)entry.PicOrderCnt;
-            dpbArray[dpbIndex].BottomFieldOrderCnt = (int)entry.PicOrderCnt;
-            dpbArray[dpbIndex].Flags = V4L2H264Constants.V4L2_H264_DPB_ENTRY_FLAG_VALID;
-
-            if (entry.IsReference)
-            {
-                dpbArray[dpbIndex].Flags |= V4L2H264Constants.V4L2_H264_DPB_ENTRY_FLAG_ACTIVE;
-            }
-
-            if (entry.IsLongTerm)
-            {
-                dpbArray[dpbIndex].Flags |= V4L2H264Constants.V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM;
-            }
-
-            dpbIndex++;
-        }
-
         var decodeParams = new V4L2CtrlH264DecodeParams
         {
-            Dpb = dpbArray,
-            NalRefIdc = (ushort)Math.Min(header.nal_ref_idc, ushort.MaxValue),
+            Dpb = dpbSnapshot,
+            NalRefIdc = picture.NalRefIdc,
             FrameNum = (ushort)Math.Min(header.frame_num, ushort.MaxValue),
-            TopFieldOrderCnt = (int)header.pic_order_cnt_lsb,
-            BottomFieldOrderCnt = (int)header.pic_order_cnt_lsb,
             IdrPicId = (ushort)Math.Min(header.idr_pic_id, ushort.MaxValue),
             PicOrderCntLsb = (ushort)Math.Min(header.pic_order_cnt_lsb, ushort.MaxValue),
             DeltaPicOrderCntBottom = header.delta_pic_order_cnt_bottom,
             DeltaPicOrderCnt0 = header.delta_pic_order_cnt.Count > 0 ? header.delta_pic_order_cnt[0] : 0,
             DeltaPicOrderCnt1 = header.delta_pic_order_cnt.Count > 1 ? header.delta_pic_order_cnt[1] : 0,
-            DecRefPicMarkingBitSize = 0,
-            PicOrderCntBitSize = 0,
+            DecRefPicMarkingBitSize = header.dec_ref_pic_marking?.bit_size ?? 0,
+            PicOrderCntBitSize = SliceHeaderState.getPicOrderCntLsbLen(sps.sps_data.log2_max_pic_order_cnt_lsb_minus4),
             SliceGroupChangeCycle = header.slice_group_change_cycle,
             Reserved = 0,
-            Flags = DetermineDecodeFlags(header, isIdr)
+            Flags = BuildDecodeFlags(header, picture)
         };
 
-        // Add current frame to DPB if it's a reference frame
-        if (header.nal_ref_idc > 0)
+        // Set field order counts based on picture field type (matching GStreamer)
+        switch (picture.Field)
         {
-            var newEntry = new DpbEntry
-            {
-                FrameNum = (uint)header.frame_num,
-                PicOrderCnt = header.pic_order_cnt_lsb,
-                Timestamp = currentFrameTimestamp,
-                IsReference = true,
-                IsLongTerm = false
-            };
-            _dpb.Enqueue(newEntry);
-            _logger.LogTrace("Added reference frame to DPB: frame_num={FrameNum}, timestamp={Timestamp}, DPB size={Size}",
-                header.frame_num, currentFrameTimestamp, _dpb.Count);
-        }
-
-        // Manage DPB size - remove oldest frames if we exceed max size (now O(1) with Queue)
-        var maxDpbSize = sps.sps_data.max_num_ref_frames;
-
-        while (_dpb.Count > maxDpbSize)
-        {
-            _dpb.Dequeue(); // O(1) operation
-            _logger.LogTrace("Removed oldest DPB entry, new size={Size}", _dpb.Count);
+            case H264PictureField.Frame:
+                decodeParams.TopFieldOrderCnt = picture.TopFieldOrderCnt;
+                decodeParams.BottomFieldOrderCnt = picture.BottomFieldOrderCnt;
+                break;
+            case H264PictureField.TopField:
+                decodeParams.TopFieldOrderCnt = picture.TopFieldOrderCnt;
+                decodeParams.BottomFieldOrderCnt = picture.OtherField?.BottomFieldOrderCnt ?? 0;
+                break;
+            case H264PictureField.BottomField:
+                decodeParams.TopFieldOrderCnt = picture.OtherField?.TopFieldOrderCnt ?? 0;
+                decodeParams.BottomFieldOrderCnt = picture.BottomFieldOrderCnt;
+                break;
         }
 
         return decodeParams;
     }
 
-    private static V4L2H264DpbEntry[] CreateEmptyDpb()
-    {
-        var dpb = new V4L2H264DpbEntry[V4L2H264Constants.V4L2_H264_NUM_DPB_ENTRIES];
-        for (int i = 0; i < dpb.Length; i++)
-        {
-            dpb[i] = new V4L2H264DpbEntry { Reserved = new byte[5] };
-        }
-
-        return dpb;
-    }
-
-    private static uint DetermineDecodeFlags(SliceHeaderState header, bool isIdr)
+    /// <summary>
+    /// Build decode flags matching GStreamer's implementation.
+    /// </summary>
+    private static uint BuildDecodeFlags(SliceHeaderState header, H264Picture picture)
     {
         uint flags = 0;
 
-        if (isIdr)
+        // IDR picture flag
+        if (picture.IsIdr)
         {
             flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_IDR_PIC;
         }
 
-        var sliceType = (uint)(header.slice_type % 5);
-        switch (sliceType)
+        // Field picture flags
+        if (header.field_pic_flag != 0)
         {
-            case 0: // P slice
-            case 3: // SP slice
-                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
-                break;
-            case 1: // B slice
-                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BFRAME;
-                break;
-            // case 2: I slice - no flag needed
-            // case 4: SI slice - no flag needed
+            flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_FIELD_PIC;
+        }
+
+        if (header.bottom_field_flag != 0)
+        {
+            flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BOTTOM_FIELD;
         }
 
         return flags;
@@ -644,14 +848,29 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             _captureThread = null;
         }
 
-        _device.OutputMPlaneQueue.StreamOff();
-        _device.CaptureMPlaneQueue.StreamOff();
+        if (_streamingStarted)
+        {
+            _device.OutputMPlaneQueue.StreamOff();
+            _device.CaptureMPlaneQueue.StreamOff();
+        }
+
+        lock (_dpbLock)
+        {
+            _dpb.Clear();
+            _bufferToPicture.Clear();
+        }
+
+        _currentPicture = null;
+        ResetPendingFrame();
+        _availableCaptureBuffers.CompleteAdding();
+
         UnmapOutputBuffers();
         _device.Dispose();
 
         _mediaDevice.Dispose();
 
         _isInitialized = false;
+        _streamingStarted = false;
         _logger.LogInformation("Decoder cleanup completed");
     }
 

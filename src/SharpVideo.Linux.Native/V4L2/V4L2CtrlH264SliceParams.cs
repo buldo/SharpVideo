@@ -13,7 +13,15 @@ public static class V4L2H264Constants
     public const uint V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM = 0x04;
     public const uint V4L2_H264_DPB_ENTRY_FLAG_FIELD = 0x08;
 
+    // Reference field identifiers (match Linux uAPI)
+    public const byte V4L2_H264_TOP_FIELD_REF = 0x1;
+    public const byte V4L2_H264_BOTTOM_FIELD_REF = 0x2;
+    public const byte V4L2_H264_FRAME_REF = V4L2_H264_TOP_FIELD_REF | V4L2_H264_BOTTOM_FIELD_REF;
+
+    // Decode parameter flags (from linux/v4l2-controls.h)
     public const uint V4L2_H264_DECODE_PARAM_FLAG_IDR_PIC = 0x01;
+    public const uint V4L2_H264_DECODE_PARAM_FLAG_FIELD_PIC = 0x02;
+    public const uint V4L2_H264_DECODE_PARAM_FLAG_BOTTOM_FIELD = 0x04;
     public const uint V4L2_H264_DECODE_PARAM_FLAG_PFRAME = 0x08;
     public const uint V4L2_H264_DECODE_PARAM_FLAG_BFRAME = 0x10;
 }

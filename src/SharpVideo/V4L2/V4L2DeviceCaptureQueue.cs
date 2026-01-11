@@ -70,4 +70,12 @@ public class V4L2DeviceCaptureQueue : V4L2DeviceQueue
             EnqueueDmaBuf(buffer);
         }
     }
+
+    /// <summary>
+    /// Enqueues a DMABUF capture buffer, optionally associating it with a media request.
+    /// </summary>
+    public void EnqueueDmaBufBuffer(V4L2DmaBufMPlaneBuffer buffer, MediaRequest? request = null, TimeVal? timestamp = null)
+    {
+        EnqueueDmaBuf(buffer, request, timestamp);
+    }
 }

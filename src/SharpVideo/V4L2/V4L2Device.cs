@@ -110,9 +110,15 @@ public class V4L2Device : IDisposable
             {
                 Marshal.StructureToPtr(control, controlPtr, false);
                 var requestFd = request?.Fd ?? -1;
+
+                // CRITICAL: When binding controls to a media request, Which must be V4L2_CTRL_WHICH_REQUEST_VAL
+                // Otherwise controls are set globally and not per-request, causing decode artifacts
+                const uint V4L2_CTRL_WHICH_REQUEST_VAL = 0x0f010000U;
+                var which = request != null ? V4L2_CTRL_WHICH_REQUEST_VAL : GetControlClass(controlId);
+
                 var extControlsWrapper = new V4L2ExtControls
                 {
-                    Which = GetControlClass(controlId),
+                    Which = which,
                     Count = 1,
                     RequestFd = requestFd,
                     Controls = controlPtr

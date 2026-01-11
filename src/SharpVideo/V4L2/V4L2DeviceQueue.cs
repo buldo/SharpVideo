@@ -99,6 +99,8 @@ public class V4L2DeviceQueue
                 planeStorage[i] = dmaBufBuffer.Planes[i];
             }
 
+            var isOutputQueue = _type == V4L2BufferType.VIDEO_OUTPUT || _type == V4L2BufferType.VIDEO_OUTPUT_MPLANE;
+
             var buffer = new V4L2Buffer
             {
                 Index = dmaBufBuffer.Index,
@@ -106,11 +108,11 @@ public class V4L2DeviceQueue
                 Memory = V4L2Memory.DMABUF,
                 Length = (uint)planeCount,
                 Field = (uint)V4L2Field.NONE,
-                Flags = request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
+                Flags = isOutputQueue && request != null ? (uint)V4L2BufferFlags.REQUEST_FD : 0,
                 BytesUsed = 0,
                 Timestamp = timestamp ?? new TimeVal { TvSec = 0, TvUsec = 0 },
                 Sequence = 0,
-                RequestFd = request?.Fd ?? 0,
+                RequestFd = isOutputQueue && request != null ? request.Fd : 0,
                 Planes = planeStorage
             };
 
