@@ -684,6 +684,19 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 // Perform sliding window marking before adding new reference
                 _dpb.PerformSlidingWindowMarking(_dpb.MaxNumRefFrames);
 
+                // Remove pictures that are no longer references and release their buffers
+                // This mirrors GStreamer's gst_h264_dpb_delete_unused
+                var removedPictures = _dpb.RemoveUnusedPictures();
+                foreach (var removedPic in removedPictures)
+                {
+                    if (removedPic.Buffer != null)
+                    {
+                        _bufferToPicture.Remove(removedPic.Buffer);
+                        // Note: buffer will be returned to pool when ReuseDecodedFrame is called
+                        // since it's no longer tracked as referenced
+                    }
+                }
+
                 // Calculate PicNum for short-term reference
                 // For frames: PicNum = frame_num
                 // Following GStreamer's calculation
@@ -802,6 +815,7 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
     /// <summary>
     /// Build decode flags matching GStreamer's implementation.
+    /// In GStreamer, PFRAME/BFRAME flags are set in decode_slice based on slice_type.
     /// </summary>
     private static uint BuildDecodeFlags(SliceHeaderState header, H264Picture picture)
     {
@@ -822,6 +836,22 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         if (header.bottom_field_flag != 0)
         {
             flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BOTTOM_FIELD;
+        }
+
+        // Slice type flags - matching GStreamer's gst_v4l2_codec_h264_dec_decode_slice
+        // slice_type % 5 normalizes SI/SP/I/P/B to 0-4 range
+        var sliceType = header.slice_type % 5;
+        switch (sliceType)
+        {
+            case 0: // P slice
+            case 3: // SP slice
+                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_PFRAME;
+                break;
+            case 1: // B slice
+                flags |= V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BFRAME;
+                break;
+            // case 2: I slice - no flag needed
+            // case 4: SI slice - no flag needed
         }
 
         return flags;

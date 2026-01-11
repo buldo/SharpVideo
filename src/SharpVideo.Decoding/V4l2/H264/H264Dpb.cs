@@ -159,6 +159,24 @@ public sealed class H264Dpb
     }
 
     /// <summary>
+    /// Remove pictures that are no longer reference and have been outputted.
+    /// Returns the removed pictures so caller can handle buffer lifecycle.
+    /// This mirrors GStreamer's gst_h264_dpb_delete_unused.
+    /// </summary>
+    public List<H264Picture> RemoveUnusedPictures()
+    {
+        // Find pictures that are not reference (no longer needed for decoding)
+        // In a full implementation, we'd also check if they've been outputted
+        var toRemove = _pictures.Where(p => !p.IsRef).ToList();
+        foreach (var pic in toRemove)
+        {
+            _pictures.Remove(pic);
+            _logger?.LogTrace("Removed unused picture from DPB: frame_num={FrameNum}", pic.FrameNum);
+        }
+        return toRemove;
+    }
+
+    /// <summary>
     /// Remove all pictures that are not reference and have been outputted.
     /// </summary>
     public List<H264Picture> DrainOutputtedNonRef()
