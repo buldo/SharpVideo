@@ -50,6 +50,12 @@ public static class DrmUtils
                 logger.LogDebug("DRM device {Device} has no connected display, skipping", device);
                 drmDevice.Dispose();
             }
+            catch (DllNotFoundException ex)
+            {
+                logger.LogError(ex, "Native DRM library not found. Ensure that libdrm is installed.");
+                drmDevice?.Dispose();
+                throw;
+            }
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "Exception while opening DRM device: {Device}", device);
