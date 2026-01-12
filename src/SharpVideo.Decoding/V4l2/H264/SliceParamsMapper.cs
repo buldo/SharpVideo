@@ -16,10 +16,22 @@ internal static class SliceParamsMapper
     private const uint V4L2_H264_SLICE_FLAG_DIRECT_SPATIAL_MV_PRED = 0x01;
     private const uint V4L2_H264_SLICE_FLAG_SP_FOR_SWITCH = 0x02;
 
+    /// <summary>
+    /// Build slice params with properly constructed reference lists.
+    /// Following GStreamer's gst_v4l2_codec_h264_dec_fill_slice_params and
+    /// gst_v4l2_codec_h264_dec_fill_references.
+    /// </summary>
+    /// <param name="header">Slice header state</param>
+    /// <param name="pps">PPS state</param>
+    /// <param name="dpbSnapshot">V4L2 DPB entries</param>
+    /// <param name="refPicList0">Constructed L0 reference list with DPB indices and fields</param>
+    /// <param name="isFrame">Whether current picture is a frame (not field)</param>
     public static V4L2CtrlH264SliceParams BuildSliceParams(
         SliceHeaderState header,
         PpsState pps,
-        V4L2H264DpbEntry[] dpbSnapshot)
+        V4L2H264DpbEntry[] dpbSnapshot,
+        V4L2H264Reference[]? refPicList0,
+        bool isFrame)
     {
         // Determine slice flags (matching GStreamer gst_v4l2_codec_h264_dec_fill_slice_params)
         uint flags = 0;
@@ -57,7 +69,22 @@ internal static class SliceParamsMapper
             Flags = flags
         };
 
-        PopulateReferenceLists(header, dpbSnapshot, sliceParams);
+        // Use provided reference list if available, otherwise fall back to simple population
+        if (refPicList0 != null)
+        {
+            // Copy the properly constructed L0 reference list
+            int l0Count = Math.Min(refPicList0.Length, sliceParams.RefPicList0.Length);
+            for (int i = 0; i < l0Count; i++)
+            {
+                sliceParams.RefPicList0[i] = refPicList0[i];
+            }
+            // L1 not supported (no B-frames)
+        }
+        else
+        {
+            // Fallback to simple population (for backward compatibility)
+            PopulateReferenceLists(header, dpbSnapshot, sliceParams);
+        }
 
         return sliceParams;
     }

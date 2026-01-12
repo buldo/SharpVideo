@@ -89,6 +89,11 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private int _numSlices;
     private bool _firstSlice;
 
+    // Reference picture lists (following GStreamer's ref_pic_list0/ref_pic_list1)
+    // Built per-picture, modified per-slice via RPLM commands
+    private List<H264Picture>? _refPicList0;
+    private V4L2H264Reference[]? _refPicList0V4L2;
+
     // Bitstream assembly
     private MemoryStream? _bitstreamBuffer;
     private SpsState? _currentSps;
@@ -838,6 +843,13 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _currentPicture = CreatePictureForSlice(sliceHeader, sps, isIdr, firstField);
         FillDecodeParams(sliceHeader, _currentPicture);
 
+        // Build initial reference list P0 (following GStreamer's gst_h264_decoder_prepare_ref_pic_lists)
+        // This is done once per picture, then modified per-slice via RPLM in FillReferences
+        lock (_dpbLock)
+        {
+            _refPicList0 = _refPicListBuilder.BuildRefPicListP0(_dpb);
+        }
+
         _currentSps = sps;
         _currentPps = pps;
         _currentSliceHeader = sliceHeader;
@@ -1398,7 +1410,9 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private void FillSliceParams(SliceHeaderState header)
     {
         // Following gst_v4l2_codec_h264_dec_fill_slice_params
-        var sliceParams = SliceParamsMapper.BuildSliceParams(header, _currentPps!, _decodeParams.Dpb);
+        bool isFrame = _currentPicture?.Field == H264PictureField.Frame;
+        var sliceParams = SliceParamsMapper.BuildSliceParams(
+            header, _currentPps!, _decodeParams.Dpb, _refPicList0V4L2, isFrame);
         _sliceParams.Add(sliceParams);
     }
 
@@ -1415,9 +1429,119 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
     private void FillReferences(SliceHeaderState header)
     {
-        // This would fill ref_pic_list0 and ref_pic_list1 in slice params
-        // For slice-based mode following gst_v4l2_codec_h264_dec_fill_references
-        // Currently handled in SliceParamsMapper
+        // Following gst_v4l2_codec_h264_dec_fill_references
+        // Apply Reference Picture List Modification (RPLM) commands from slice header
+        // Then convert to V4L2 DPB indices
+
+        if (_currentPicture == null || _refPicList0 == null)
+        {
+            _refPicList0V4L2 = null;
+            return;
+        }
+
+        uint sliceType = header.slice_type % 5;
+
+        // B-slices not supported
+        if (sliceType == 1)
+        {
+            throw new NotImplementedException("B-frames are not supported");
+        }
+
+        // For I-slices, no reference list needed
+        if (sliceType == 2 || sliceType == 4) // I or SI slice
+        {
+            _refPicList0V4L2 = null;
+            return;
+        }
+
+        // Apply RPLM for P/SP slices (sliceType 0 or 3)
+        List<H264Picture> modifiedList;
+        lock (_dpbLock)
+        {
+            var (refPicList0, _) = _refPicListBuilder.ModifyRefPicLists(
+                _dpb, _currentPicture, header, _maxPicNum);
+            modifiedList = refPicList0;
+        }
+
+        // Validate num_ref_idx_l0_active_minus1
+        int numRefIdxL0Active = (int)header.num_ref_idx_l0_active_minus1 + 1;
+        if (numRefIdxL0Active > modifiedList.Count)
+        {
+            _logger.LogWarning(
+                "num_ref_idx_l0_active ({Active}) exceeds available references ({Available}), clamping",
+                numRefIdxL0Active, modifiedList.Count);
+            numRefIdxL0Active = modifiedList.Count;
+        }
+
+        // Convert to V4L2 reference list format
+        bool isFrame = _currentPicture.Field == H264PictureField.Frame;
+        _refPicList0V4L2 = new V4L2H264Reference[V4L2H264Constants.V4L2_H264_REF_LIST_LEN];
+
+        // Initialize all entries to invalid
+        for (int i = 0; i < _refPicList0V4L2.Length; i++)
+        {
+            _refPicList0V4L2[i].Index = 0xff;
+            _refPicList0V4L2[i].Fields = 0;
+        }
+
+        // Fill with valid references
+        for (int i = 0; i < numRefIdxL0Active && i < modifiedList.Count; i++)
+        {
+            var refPic = modifiedList[i];
+            byte dpbIndex = H264Dpb.LookupDpbIndex(_decodeParams.Dpb, refPic);
+
+            _refPicList0V4L2[i].Index = dpbIndex;
+            _refPicList0V4L2[i].Fields = GetV4L2FieldsRef(refPic, isFrame);
+
+            if (dpbIndex == 0xff)
+            {
+                _logger.LogWarning(
+                    "Reference picture not found in DPB: frame_num={FrameNum}, PicNum={PicNum}",
+                    refPic.FrameNum, refPic.PicNum);
+            }
+        }
+
+        // Diagnostic logging for L0 list
+        if (_logger.IsEnabled(LogLevel.Debug))
+        {
+            LogRefPicList0(modifiedList, numRefIdxL0Active);
+        }
+    }
+
+    /// <summary>
+    /// Get V4L2 fields reference flags for a reference picture.
+    /// Following GStreamer's _get_v4l2_fields_ref.
+    /// </summary>
+    private static byte GetV4L2FieldsRef(H264Picture refPic, bool merge)
+    {
+        if (merge && refPic.OtherField != null)
+        {
+            return V4L2H264Constants.V4L2_H264_FRAME_REF;
+        }
+
+        return refPic.Field switch
+        {
+            H264PictureField.Frame => V4L2H264Constants.V4L2_H264_FRAME_REF,
+            H264PictureField.TopField => V4L2H264Constants.V4L2_H264_TOP_FIELD_REF,
+            H264PictureField.BottomField => V4L2H264Constants.V4L2_H264_BOTTOM_FIELD_REF,
+            _ => V4L2H264Constants.V4L2_H264_FRAME_REF
+        };
+    }
+
+    /// <summary>
+    /// Log reference picture list L0 for debugging.
+    /// </summary>
+    private void LogRefPicList0(List<H264Picture> refPicList0, int activeCount)
+    {
+        _logger.LogDebug("RefPicList0 ({Count} active):", activeCount);
+        for (int i = 0; i < activeCount && i < refPicList0.Count; i++)
+        {
+            var pic = refPicList0[i];
+            byte dpbIdx = _refPicList0V4L2 != null ? _refPicList0V4L2[i].Index : (byte)0xff;
+            _logger.LogDebug(
+                "  [{Index}] FrameNum={FrameNum}, PicNum={PicNum}, POC={Poc}, IsLongTerm={IsLT}, DpbIdx={DpbIdx}",
+                i, pic.FrameNum, pic.PicNum, pic.GetPicOrderCnt(), pic.IsLongTermRef, dpbIdx);
+        }
     }
 
     // ============================================
@@ -1452,6 +1576,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _currentSliceHeader = null;
         _numSlices = 0;
         _sliceParams.Clear();
+        _refPicList0 = null;
+        _refPicList0V4L2 = null;
     }
 
     // ============================================

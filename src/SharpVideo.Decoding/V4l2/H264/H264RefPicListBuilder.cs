@@ -124,34 +124,7 @@ public sealed class H264RefPicListBuilder
     /// </summary>
     public List<H264Picture> BuildRefPicListB0(H264Dpb dpb, H264Picture currentPicture)
     {
-        var result = new List<H264Picture>();
-        int currentPoc = currentPicture.GetPicOrderCnt();
-
-        // Short-term refs with POC < current POC, sorted by descending POC
-        var shortTermLower = dpb.GetPictures()
-            .Where(p => p.IsRef && !p.IsLongTermRef && !p.IsNonExisting && p.GetPicOrderCnt() < currentPoc)
-            .OrderByDescending(p => p.GetPicOrderCnt())
-            .ToList();
-
-        result.AddRange(shortTermLower);
-
-        // Short-term refs with POC > current POC, sorted by ascending POC
-        var shortTermHigher = dpb.GetPictures()
-            .Where(p => p.IsRef && !p.IsLongTermRef && !p.IsNonExisting && p.GetPicOrderCnt() > currentPoc)
-            .OrderBy(p => p.GetPicOrderCnt())
-            .ToList();
-
-        result.AddRange(shortTermHigher);
-
-        // Long-term refs sorted by ascending long_term_pic_num
-        var longTermRefs = dpb.GetPictures()
-            .Where(p => p.IsRef && p.IsLongTermRef && !p.IsNonExisting)
-            .OrderBy(p => p.LongTermPicNum)
-            .ToList();
-
-        result.AddRange(longTermRefs);
-
-        return result;
+        throw new NotImplementedException("B-frames are not supported");
     }
 
     /// <summary>
@@ -160,41 +133,7 @@ public sealed class H264RefPicListBuilder
     /// </summary>
     public List<H264Picture> BuildRefPicListB1(H264Dpb dpb, H264Picture currentPicture)
     {
-        var result = new List<H264Picture>();
-        int currentPoc = currentPicture.GetPicOrderCnt();
-
-        // Short-term refs with POC > current POC, sorted by ascending POC
-        var shortTermHigher = dpb.GetPictures()
-            .Where(p => p.IsRef && !p.IsLongTermRef && !p.IsNonExisting && p.GetPicOrderCnt() > currentPoc)
-            .OrderBy(p => p.GetPicOrderCnt())
-            .ToList();
-
-        result.AddRange(shortTermHigher);
-
-        // Short-term refs with POC < current POC, sorted by descending POC
-        var shortTermLower = dpb.GetPictures()
-            .Where(p => p.IsRef && !p.IsLongTermRef && !p.IsNonExisting && p.GetPicOrderCnt() < currentPoc)
-            .OrderByDescending(p => p.GetPicOrderCnt())
-            .ToList();
-
-        result.AddRange(shortTermLower);
-
-        // Long-term refs sorted by ascending long_term_pic_num
-        var longTermRefs = dpb.GetPictures()
-            .Where(p => p.IsRef && p.IsLongTermRef && !p.IsNonExisting)
-            .OrderBy(p => p.LongTermPicNum)
-            .ToList();
-
-        result.AddRange(longTermRefs);
-
-        // If lists identical, swap first two entries (spec 8.2.4.2.3)
-        var refPicListB0 = BuildRefPicListB0(dpb, currentPicture);
-        if (result.Count > 1 && ListsAreEqual(result, refPicListB0))
-        {
-            (result[0], result[1]) = (result[1], result[0]);
-        }
-
-        return result;
+        throw new NotImplementedException("B-frames are not supported");
     }
 
     private static bool ListsAreEqual(List<H264Picture> l1, List<H264Picture> l2)
