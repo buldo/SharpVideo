@@ -48,7 +48,8 @@ class H264NalUnitPayloadParser
                     break;
                 }
             case NalUnitType.SEI_NUT:
-                // unimplemented
+                // sei_rbsp()
+                nal_unit_payload.sei = H264SeiParser.ParseSeiRbsp(bit_buffer, bitstream_parser_state);
                 break;
             case NalUnitType.SPS_NUT:
                 {

@@ -32,6 +32,12 @@ public sealed class H264Picture : IDisposable
     public uint SystemFrameNumber { get; init; }
 
     /// <summary>
+    /// Reorder frame number for latency tracking.
+    /// Following GStreamer's reorder_frame_number.
+    /// </summary>
+    public uint ReorderFrameNumber { get; set; }
+
+    /// <summary>
     /// The frame_num from the slice header.
     /// </summary>
     public uint FrameNum { get; set; }
@@ -42,6 +48,11 @@ public sealed class H264Picture : IDisposable
     /// Calculated as per H.264 spec 8.2.4.1.
     /// </summary>
     public int FrameNumWrap { get; set; }
+
+    /// <summary>
+    /// frame_num_offset for POC type 1 and 2.
+    /// </summary>
+    public int FrameNumOffset { get; set; }
 
     /// <summary>
     /// Picture number for short-term reference pictures.
@@ -67,6 +78,11 @@ public sealed class H264Picture : IDisposable
     /// Whether this is an IDR picture.
     /// </summary>
     public bool IsIdr { get; set; }
+
+    /// <summary>
+    /// IDR picture ID (for IDR pictures only).
+    /// </summary>
+    public uint IdrPicId { get; set; }
 
     /// <summary>
     /// Whether this is a reference picture.
@@ -99,6 +115,12 @@ public sealed class H264Picture : IDisposable
     public bool SecondField { get; set; }
 
     /// <summary>
+    /// Whether memory management operation 5 was performed on this picture.
+    /// Following GStreamer's mem_mgmt_5.
+    /// </summary>
+    public bool MemMgmt5 { get; set; }
+
+    /// <summary>
     /// Top field order count.
     /// </summary>
     public int TopFieldOrderCnt { get; set; }
@@ -107,6 +129,36 @@ public sealed class H264Picture : IDisposable
     /// Bottom field order count.
     /// </summary>
     public int BottomFieldOrderCnt { get; set; }
+
+    /// <summary>
+    /// pic_order_cnt_msb for POC type 0.
+    /// </summary>
+    public int PicOrderCntMsb { get; set; }
+
+    /// <summary>
+    /// pic_order_cnt_lsb from slice header (for POC type 0).
+    /// </summary>
+    public int PicOrderCntLsb { get; set; }
+
+    /// <summary>
+    /// delta_pic_order_cnt_bottom from slice header.
+    /// </summary>
+    public int DeltaPicOrderCntBottom { get; set; }
+
+    /// <summary>
+    /// delta_pic_order_cnt[0] from slice header (for POC type 1).
+    /// </summary>
+    public int DeltaPicOrderCnt0 { get; set; }
+
+    /// <summary>
+    /// delta_pic_order_cnt[1] from slice header (for POC type 1).
+    /// </summary>
+    public int DeltaPicOrderCnt1 { get; set; }
+
+    /// <summary>
+    /// pic_order_cnt_type from SPS.
+    /// </summary>
+    public int PicOrderCntType { get; set; }
 
     /// <summary>
     /// The picture field type (frame, top, or bottom).
@@ -124,9 +176,28 @@ public sealed class H264Picture : IDisposable
     public SharedDmaBuffer? Buffer { get; set; }
 
     /// <summary>
-    /// Whether this picture has been outputted.
+    /// Whether this picture has been outputted (removed from output queue).
+    /// Following GStreamer's separate tracking from needed_for_output.
     /// </summary>
     public bool Outputted { get; set; }
+
+    /// <summary>
+    /// Whether this picture is needed for output (still in output queue).
+    /// Following GStreamer's needed_for_output flag.
+    /// This is set to true when picture is added to DPB and false when bumped.
+    /// </summary>
+    public bool NeededForOutput { get; set; }
+
+    /// <summary>
+    /// Whether this picture should be output.
+    /// Used for intra refresh - pictures before recovery point may have this set to false.
+    /// </summary>
+    public bool OutputFlag { get; set; } = true;
+
+    /// <summary>
+    /// dec_ref_pic_marking data for reference picture marking.
+    /// </summary>
+    public DecRefPicMarkingState? DecRefPicMarking { get; set; }
 
     /// <summary>
     /// Get the reference timestamp in nanoseconds for V4L2 DPB.
@@ -178,6 +249,11 @@ public sealed class H264Picture : IDisposable
         FieldPicFlag = header.field_pic_flag != 0;
         BottomFieldFlag = header.bottom_field_flag != 0;
 
+        if (isIdr)
+        {
+            IdrPicId = header.idr_pic_id;
+        }
+
         if (FieldPicFlag)
         {
             Field = BottomFieldFlag ? H264PictureField.BottomField : H264PictureField.TopField;
@@ -186,6 +262,86 @@ public sealed class H264Picture : IDisposable
         {
             Field = H264PictureField.Frame;
         }
+
+        // Store POC-related values from slice header
+        PicOrderCntType = (int)sps.sps_data.pic_order_cnt_type;
+        PicOrderCntLsb = (int)header.pic_order_cnt_lsb;
+        DeltaPicOrderCntBottom = header.delta_pic_order_cnt_bottom;
+        DeltaPicOrderCnt0 = header.delta_pic_order_cnt.Count > 0 ? header.delta_pic_order_cnt[0] : 0;
+        DeltaPicOrderCnt1 = header.delta_pic_order_cnt.Count > 1 ? header.delta_pic_order_cnt[1] : 0;
+
+        // Store dec_ref_pic_marking if present and adaptive mode
+        if (header.dec_ref_pic_marking?.adaptive_ref_pic_marking_mode_flag != 0)
+        {
+            DecRefPicMarking = header.dec_ref_pic_marking;
+        }
+    }
+
+    /// <summary>
+    /// Create a field picture for the other field of a complementary field pair.
+    /// Following GStreamer's gst_h264_decoder_new_field_picture.
+    /// </summary>
+    public H264Picture CreateComplementaryFieldPicture(uint systemFrameNumber)
+    {
+        var otherField = new H264Picture
+        {
+            SystemFrameNumber = systemFrameNumber,
+            FrameNum = FrameNum,
+            FrameNumWrap = FrameNumWrap,
+            PicNum = PicNum,
+            NalRefIdc = NalRefIdc,
+            IsRef = IsRef,
+            IsLongTermRef = IsLongTermRef,
+            FieldPicFlag = FieldPicFlag,
+            TopFieldOrderCnt = TopFieldOrderCnt,
+            BottomFieldOrderCnt = BottomFieldOrderCnt,
+            PicOrderCntMsb = PicOrderCntMsb,
+            PicOrderCntLsb = PicOrderCntLsb,
+            PicOrderCntType = PicOrderCntType,
+            FrameNumOffset = FrameNumOffset,
+            IsNonExisting = IsNonExisting,
+            SecondField = true,
+            OtherField = this
+        };
+
+        // Set the field type to the opposite of the current field
+        otherField.Field = Field == H264PictureField.TopField
+            ? H264PictureField.BottomField
+            : H264PictureField.TopField;
+        otherField.BottomFieldFlag = otherField.Field == H264PictureField.BottomField;
+
+        // Link this picture to the other field
+        OtherField = otherField;
+
+        return otherField;
+    }
+
+    /// <summary>
+    /// Split a frame picture into two field pictures for reference picture marking.
+    /// Following GStreamer's gst_h264_decoder_split_frame.
+    /// </summary>
+    public H264Picture? SplitFrame(uint systemFrameNumber)
+    {
+        if (Field != H264PictureField.Frame)
+        {
+            return null;
+        }
+
+        var otherField = CreateComplementaryFieldPicture(systemFrameNumber);
+
+        // Determine which field is first based on POC
+        if (TopFieldOrderCnt < BottomFieldOrderCnt)
+        {
+            Field = H264PictureField.TopField;
+            otherField.Field = H264PictureField.BottomField;
+        }
+        else
+        {
+            Field = H264PictureField.BottomField;
+            otherField.Field = H264PictureField.TopField;
+        }
+
+        return otherField;
     }
 
     /// <inheritdoc />

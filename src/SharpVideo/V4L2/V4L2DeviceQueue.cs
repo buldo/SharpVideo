@@ -169,6 +169,7 @@ public class V4L2DeviceQueue
             {
                 Index = buffer.Index,
                 Planes = planes,
+                Timestamp = buffer.Timestamp,
             };
         }
     }

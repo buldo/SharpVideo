@@ -413,4 +413,57 @@ public class BitBuffer
         _bitOffset = bit_offset;
         return true;
     }
+
+    /// <summary>
+    /// Gets the remaining bits in the buffer.
+    /// </summary>
+    public long BitsRemaining => RemainingBitCount();
+
+    /// <summary>
+    /// Reads the specified number of bits and returns the value.
+    /// Throws if not enough bits remain.
+    /// </summary>
+    public uint ReadBits(int bitCount)
+    {
+        if (!ReadBits(bitCount, out uint val))
+        {
+            throw new InvalidOperationException($"Not enough bits remaining to read {bitCount} bits");
+        }
+        return val;
+    }
+
+    /// <summary>
+    /// Reads an unsigned exponential golomb value and returns it.
+    /// Throws if parsing fails.
+    /// </summary>
+    public uint ReadExponentialGolomb()
+    {
+        if (!ReadExponentialGolomb(out uint val))
+        {
+            throw new InvalidOperationException("Failed to read exponential golomb value");
+        }
+        return val;
+    }
+
+    /// <summary>
+    /// Peeks the next byte without consuming it.
+    /// Returns 0 if no bytes remain.
+    /// </summary>
+    public byte PeekByte()
+    {
+        if (!PeekBits(8, out uint val))
+        {
+            return 0;
+        }
+        return (byte)val;
+    }
+
+    /// <summary>
+    /// Skips the specified number of bits.
+    /// Returns false if not enough bits remain.
+    /// </summary>
+    public bool SkipBits(int bitCount)
+    {
+        return ConsumeBits(bitCount);
+    }
 }

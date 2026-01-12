@@ -32,12 +32,27 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private readonly BlockingCollection<SharedDmaBuffer> _availableCaptureBuffers = new();
     private readonly HashSet<SharedDmaBuffer> _pendingReuse = new();
 
+    // Pending decode request tracking
+    // Maps SystemFrameNumber to the buffer used for that frame
+    // This is needed because V4L2 dequeue returns timestamp which identifies the frame
+    private readonly Dictionary<uint, SharedDmaBuffer> _pendingDecodeRequests = new();
+    private readonly object _pendingRequestsLock = new();
+
     // DPB and picture state
     private readonly H264Dpb _dpb;
     private readonly H264PicOrderCountCalculator _pocCalculator = new();
+    private readonly H264ReferencePictureMarking _refPicMarking;
+    private readonly H264FrameNumGapHandler _frameNumGapHandler;
+    private readonly H264RefPicListBuilder _refPicListBuilder;
     private H264Picture? _currentPicture;
     private readonly Dictionary<SharedDmaBuffer, H264Picture> _bufferToPicture = new();
+    // Tracks buffers that have been output for display but not yet returned by user
+    // These buffers must NOT be reused even if their picture is no longer in DPB
+    private readonly HashSet<SharedDmaBuffer> _inFlightDisplayBuffers = new();
     private readonly object _dpbLock = new();
+
+    // Interlaced field handling (following GStreamer's last_field pattern)
+    private H264Picture? _lastField;
 
     // Decode mode and start code (determined at open time like GStreamer)
     private V4L2StatelessH264DecodeMode _decodeMode;
@@ -59,6 +74,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private bool _interlaced;
     private bool _needSequence;
     private bool _scalingMatrixPresent;
+    private int _maxPicNum;
+    private int _maxFrameNum;
 
     // V4L2 control structures (following GStreamer naming)
     private V4L2CtrlH264Sps _sps;
@@ -86,6 +103,13 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     private readonly H264BitstreamParserState _streamState = new();
     private readonly ParsingOptions _parsingOptions = new() { add_checksum = false };
 
+    // Intra refresh / recovery point support
+    // Following GStreamer's H266 GDR pattern adapted for H264
+    private bool _noOutputBeforeRecoveryFlag;
+    private int _recoveryPointPoc = int.MinValue;
+    private uint _pendingRecoveryFrameCnt;
+    private bool _hasPendingRecoveryPoint;
+
     // Streaming state
     private bool _isInitialized;
     private bool _streaming;
@@ -108,6 +132,9 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         _configuration = configuration;
         _drmBufferManager = drmBufferManager;
         _dpb = new H264Dpb(logger);
+        _refPicMarking = new H264ReferencePictureMarking(logger);
+        _frameNumGapHandler = new H264FrameNumGapHandler(logger);
+        _refPicListBuilder = new H264RefPicListBuilder(logger);
 
         OutputPixelFormat = new PixelFormat(_device.GetCaptureFormatMPlane().PixelFormat);
     }
@@ -178,6 +205,11 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             return;
         }
 
+        _logger.LogTrace("Processing NALU type={NaluType} ({NaluTypeId}), size={Size}",
+            naluState.nal_unit_header.NalUnitType,
+            (int)naluState.nal_unit_header.NalUnitType,
+            nalu.Length);
+
         switch (naluState.nal_unit_header.NalUnitType)
         {
             case NalUnitType.SPS_NUT:
@@ -188,9 +220,16 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 ProcessPps(naluState);
                 break;
 
+            case NalUnitType.SEI_NUT:
+                ProcessSei(naluState);
+                break;
+
             case NalUnitType.CODED_SLICE_OF_NON_IDR_PICTURE_NUT:
             case NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT:
                 ProcessSlice(nalu, naluState, naluState.nal_unit_header.NalUnitType);
+                break;
+
+            case NalUnitType.AUD_NUT:
                 break;
 
             default:
@@ -204,12 +243,28 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
     {
         lock (_dpbLock)
         {
-            if (_bufferToPicture.TryGetValue(decodedFrame, out var picture) && picture.IsRef)
+            // First, mark this buffer as no longer in-flight (returned from display)
+            _inFlightDisplayBuffers.Remove(decodedFrame);
+
+            if (_bufferToPicture.TryGetValue(decodedFrame, out var picture))
             {
-                // Buffer is still used as reference, mark for pending reuse
-                _pendingReuse.Add(decodedFrame);
-                _logger.LogTrace("Buffer still referenced in DPB, deferring reuse");
-                return;
+                // Check if the picture is still in the DPB (either as reference or awaiting output)
+                // A buffer can only be reused when the picture is completely removed from DPB
+                bool stillInDpb = _dpb.GetPictures().Contains(picture);
+
+                // Also check if OtherField (for interlaced) is still in DPB
+                if (!stillInDpb && picture.OtherField != null)
+                {
+                    stillInDpb = _dpb.GetPictures().Contains(picture.OtherField);
+                }
+
+                if (stillInDpb)
+                {
+                    // Buffer is still in DPB, mark for pending reuse
+                    _pendingReuse.Add(decodedFrame);
+                    _logger.LogTrace("Buffer still in DPB (IsRef={IsRef}), deferring reuse", picture.IsRef);
+                    return;
+                }
             }
 
             _pendingReuse.Remove(decodedFrame);
@@ -229,14 +284,28 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         EndPicture();
         ResetBitstream();
 
+        // Clear pending decode requests
+        lock (_pendingRequestsLock)
+        {
+            _pendingDecodeRequests.Clear();
+        }
+
         lock (_dpbLock)
         {
+            // Drain all pictures in POC order before clearing
+            DrainDpbOutput();
+
+            // Return pending buffers that are not in-flight
             foreach (var buffer in _pendingReuse)
             {
-                buffer.V4L2Buffer.ResetPlanesUsed();
-                _availableCaptureBuffers.Add(buffer);
+                if (!_inFlightDisplayBuffers.Contains(buffer))
+                {
+                    buffer.V4L2Buffer.ResetPlanesUsed();
+                    _availableCaptureBuffers.Add(buffer);
+                }
             }
             _pendingReuse.Clear();
+            // Note: in-flight buffers will be returned when user calls ReuseDecodedFrame
 
             foreach (var pic in _dpb.GetPictures())
             {
@@ -247,10 +316,17 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             }
             _dpb.Clear();
             _bufferToPicture.Clear();
+            _lastField = null;
         }
 
         _currentPicture = null;
         _pocCalculator.Reset();
+        _refPicListBuilder.Reset();
+
+        // Reset intra refresh / recovery point state
+        _recoveryPointPoc = int.MinValue;
+        _noOutputBeforeRecoveryFlag = false;
+        _hasPendingRecoveryPoint = false;
     }
 
     /// <inheritdoc />
@@ -493,7 +569,44 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 continue;
             }
 
-            var decodedFrame = _v4l2IndexToBuffer![dequeuedBuffer.Index];
+            // Get the frame number from the timestamp (following GStreamer's convention)
+            // timestamp = tv_sec * 1_000_000 + tv_usec = SystemFrameNumber
+            uint frameNumber = dequeuedBuffer.FrameNumber;
+
+            // Look up the buffer that was assigned to this frame
+            SharedDmaBuffer? decodedFrame;
+            lock (_pendingRequestsLock)
+            {
+                if (!_pendingDecodeRequests.TryGetValue(frameNumber, out decodedFrame))
+                {
+                    _logger.LogWarning("Received decoded buffer for unknown frame number {FrameNumber}, using index-based lookup",
+                        frameNumber);
+                    // Fallback to index-based lookup (less reliable but maintains compatibility)
+                    decodedFrame = _v4l2IndexToBuffer![dequeuedBuffer.Index];
+                }
+                else
+                {
+                    _pendingDecodeRequests.Remove(frameNumber);
+                }
+            }
+
+            // Verify the buffer index matches (sanity check)
+            if (decodedFrame.V4L2Buffer.Index != dequeuedBuffer.Index)
+            {
+                _logger.LogWarning("Buffer index mismatch for frame {FrameNumber}: expected {Expected}, got {Actual}",
+                    frameNumber, decodedFrame.V4L2Buffer.Index, dequeuedBuffer.Index);
+            }
+
+            _logger.LogTrace("Decoded frame {FrameNumber} completed, buffer index {Index}",
+                frameNumber, dequeuedBuffer.Index);
+
+            // Mark buffer as in-flight (being displayed) before sending to output
+            // This prevents it from being reused even if bumped from DPB
+            lock (_dpbLock)
+            {
+                _inFlightDisplayBuffers.Add(decodedFrame);
+            }
+
             AddDecodedFrameToOutput(decodedFrame);
         }
 
@@ -575,7 +688,10 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         FillSequence(naluState.nal_unit_payload.sps!);
         _needSequence = true;
 
-        // Update DPB max ref frames
+        // Update max_frame_num for reference list management
+        _maxFrameNum = 1 << (int)(spsData.log2_max_frame_num_minus4 + 4);
+
+        // Update DPB settings
         var maxRefs = (int)spsData.max_num_ref_frames;
         var maxAvailableRefs = (int)_configuration.CaptureBufferCount - 1;
         if (maxRefs > maxAvailableRefs)
@@ -585,12 +701,59 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             maxRefs = maxAvailableRefs;
         }
         _dpb.SetMaxNumRefFrames(maxRefs);
+        _dpb.SetMaxNumPics(maxDpbSize);
+        _dpb.Interlaced = interlaced;
+
+        // Calculate max_num_reorder_frames (following GStreamer)
+        int maxNumReorderFrames = GetMaxNumReorderFrames(spsData, maxDpbSize);
+        _dpb.SetMaxNumReorderFrames(maxNumReorderFrames);
 
         if (negotiationNeeded)
         {
             StopStreaming();
             // Re-negotiate would go here if we supported dynamic resolution changes
         }
+    }
+
+    /// <summary>
+    /// Calculate max_num_reorder_frames following GStreamer's logic.
+    /// </summary>
+    private static int GetMaxNumReorderFrames(SpsDataState sps, int maxDpbSize)
+    {
+        // If bitstream_restriction_flag is present, use max_num_reorder_frames
+        if (sps.vui_parameters_present_flag != 0 &&
+            sps.vui_parameters?.bitstream_restriction_flag != 0)
+        {
+            var numReorderFrames = (int)(sps.vui_parameters?.max_num_reorder_frames ?? 0);
+            if (numReorderFrames > maxDpbSize)
+            {
+                return maxDpbSize;
+            }
+            return numReorderFrames;
+        }
+
+        // If constraint_set3_flag is set for specific profiles, infer 0
+        if (sps.constraint_set3_flag != 0)
+        {
+            switch (sps.profile_idc)
+            {
+                case 44:
+                case 86:
+                case 100:
+                case 110:
+                case 122:
+                case 244:
+                    return 0;
+            }
+        }
+
+        // Baseline profile has no B-frames
+        if (sps.profile_idc == 66 || sps.profile_idc == 83)
+        {
+            return 0;
+        }
+
+        return maxDpbSize;
     }
 
     private void FillSequence(SpsState sps)
@@ -606,6 +769,43 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         {
             _logger.LogTrace("PPS: id={PpsId}, references SPS={SpsId}",
                 ppsData.pic_parameter_set_id, ppsData.seq_parameter_set_id);
+        }
+    }
+
+    private void ProcessSei(NalUnitState naluState)
+    {
+        var sei = naluState.nal_unit_payload.sei;
+        if (sei == null)
+        {
+            _logger.LogTrace("SEI NALU received but parsing returned null");
+            return;
+        }
+
+        _logger.LogDebug("SEI NALU parsed: {Count} messages", sei.Messages.Count);
+        foreach (var msg in sei.Messages)
+        {
+            _logger.LogDebug("  SEI message: type={Type} ({TypeId}), size={Size}",
+                msg.PayloadType, (int)msg.PayloadType, msg.PayloadSize);
+        }
+
+        // Process recovery point for intra refresh support
+        var recoveryPoint = sei.RecoveryPoint;
+        if (recoveryPoint != null)
+        {
+            _logger.LogInformation("SEI Recovery Point: recovery_frame_cnt={RecoveryFrameCnt}, exact_match={ExactMatch}, broken_link={BrokenLink}",
+                recoveryPoint.RecoveryFrameCnt, recoveryPoint.ExactMatchFlag, recoveryPoint.BrokenLinkFlag);
+
+            // Store the recovery point info to be applied when the next picture is created
+            // The recovery_poc will be calculated as: current_poc + recovery_frame_cnt * poc_increment
+            // where poc_increment = 2 for frame-only, or based on field structure
+            _hasPendingRecoveryPoint = true;
+            _pendingRecoveryFrameCnt = recoveryPoint.RecoveryFrameCnt;
+
+            // If broken_link_flag is set, we should suppress output until recovery point is reached
+            if (recoveryPoint.BrokenLinkFlag)
+            {
+                _noOutputBeforeRecoveryFlag = true;
+            }
         }
     }
 
@@ -630,8 +830,12 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             FillScalingMatrix(sps, pps);
         }
 
-        // Create picture and fill decode params
-        _currentPicture = CreatePicture(sliceHeader, sps, isIdr);
+        // Find the first field of a complementary pair for interlaced content
+        // Following GStreamer's gst_h264_decoder_find_first_field_picture
+        H264Picture? firstField = FindFirstFieldPicture(sliceHeader);
+
+        // Create picture (may be linked to first field)
+        _currentPicture = CreatePictureForSlice(sliceHeader, sps, isIdr, firstField);
         FillDecodeParams(sliceHeader, _currentPicture);
 
         _currentSps = sps;
@@ -659,15 +863,29 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
         };
         picture.InitFromSliceHeader(header, sps, isIdr);
 
-        // For IDR, clear DPB and reset POC
+        // Get max_frame_num for gap handling and pic_num calculation
+        int maxFrameNum = 1 << (int)(sps.sps_data.log2_max_frame_num_minus4 + 4);
+        _maxPicNum = header.field_pic_flag != 0 ? 2 * maxFrameNum : maxFrameNum;
+
+        // For IDR, clear DPB and reset POC (following GStreamer's gst_h264_decoder_process_slice_hdr)
+        // Note: GStreamer checks no_output_of_prior_pics_flag to decide between drain vs clear.
+        // For stateless V4L2 decoding, frames are output asynchronously via capture buffer loop,
+        // so we just mark all as non-ref and clear the DPB state.
         if (isIdr)
         {
             lock (_dpbLock)
             {
+                // Drain output before clearing (following GStreamer)
+                DrainDpbOutput();
+
+                // Return pending buffers that are not in-flight
                 foreach (var buffer in _pendingReuse)
                 {
-                    buffer.V4L2Buffer.ResetPlanesUsed();
-                    _availableCaptureBuffers.Add(buffer);
+                    if (!_inFlightDisplayBuffers.Contains(buffer))
+                    {
+                        buffer.V4L2Buffer.ResetPlanesUsed();
+                        _availableCaptureBuffers.Add(buffer);
+                    }
                 }
                 _pendingReuse.Clear();
 
@@ -681,19 +899,319 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                 }
                 _dpb.Clear();
                 _bufferToPicture.Clear();
+                _lastField = null;
             }
             _pocCalculator.Reset();
+            _refPicMarking.Reset();
+            _frameNumGapHandler.Reset();
+            _refPicListBuilder.Reset();
+
+            // IDR clears recovery state - we're at a clean point
+            _recoveryPointPoc = int.MinValue;
+            _noOutputBeforeRecoveryFlag = false;
+            _hasPendingRecoveryPoint = false;
+        }
+        else
+        {
+            // Handle frame_num gaps (following GStreamer's gst_h264_decoder_handle_frame_num_gap)
+            bool gapsAllowed = sps.sps_data.gaps_in_frame_num_value_allowed_flag != 0;
+            lock (_dpbLock)
+            {
+                _frameNumGapHandler.HandleFrameNumGap(
+                    _dpb,
+                    header.frame_num,
+                    maxFrameNum,
+                    gapsAllowed,
+                    isIdr,
+                    CreateNonExistingPicture);
+            }
         }
 
-        // Calculate POC
-        var topPoc = _pocCalculator.CalculatePOC(header, sps, isIdr);
-        picture.TopFieldOrderCnt = topPoc;
-        picture.BottomFieldOrderCnt = topPoc + header.delta_pic_order_cnt_bottom;
+        // Calculate POC using the proper field-aware calculation (matching GStreamer)
+        _pocCalculator.CalculatePOC(
+            header,
+            sps,
+            isIdr,
+            picture.Field,
+            out int topPoc,
+            out int bottomPoc);
 
-        _logger.LogDebug("Picture: sys_frame={SysFrame}, frame_num={FrameNum}, POC={Poc}, IsRef={IsRef}",
-            picture.SystemFrameNumber, picture.FrameNum, picture.GetPicOrderCnt(), picture.IsRef);
+        picture.TopFieldOrderCnt = topPoc;
+        picture.BottomFieldOrderCnt = bottomPoc;
+
+        // Store PicOrderCntMsb for UpdateAfterPicture (used by POC type 0)
+        picture.PicOrderCntMsb = _pocCalculator.LastPicOrderCntMsb;
+
+        // Handle intra refresh recovery point
+        // Following GStreamer H266 GDR pattern adapted for H264
+        if (_hasPendingRecoveryPoint)
+        {
+            _hasPendingRecoveryPoint = false;
+
+            // Calculate recovery POC: current POC + recovery_frame_cnt * poc_increment
+            // For frame-only content, poc_increment = 2 (per H.264 spec POC type 0/1/2 behavior)
+            // For interlaced, it depends on field structure
+            int pocIncrement = _interlaced ? 1 : 2;
+            int currentPoc = picture.GetPicOrderCnt();
+            _recoveryPointPoc = currentPoc + (int)_pendingRecoveryFrameCnt * pocIncrement;
+
+            _logger.LogInformation("Recovery point set: current_poc={CurrentPoc}, recovery_frame_cnt={RecoveryFrameCnt}, recovery_poc={RecoveryPoc}",
+                currentPoc, _pendingRecoveryFrameCnt, _recoveryPointPoc);
+        }
+
+        // Suppress output if before recovery point (following GStreamer H266 pattern)
+        if (_noOutputBeforeRecoveryFlag && _recoveryPointPoc != int.MinValue)
+        {
+            int picPoc = picture.GetPicOrderCnt();
+            if (picPoc < _recoveryPointPoc)
+            {
+                picture.OutputFlag = false;
+                _logger.LogTrace("Suppressing output for picture POC={Poc} (recovery_poc={RecoveryPoc})",
+                    picPoc, _recoveryPointPoc);
+            }
+            else
+            {
+                // Reached or passed recovery point - clear suppression
+                _noOutputBeforeRecoveryFlag = false;
+                _recoveryPointPoc = int.MinValue;
+                _logger.LogInformation("Recovery point reached at POC={Poc}, resuming normal output", picPoc);
+            }
+        }
+
+        // Update pic_nums for all pictures in DPB (following GStreamer's gst_h264_decoder_update_pic_nums)
+        lock (_dpbLock)
+        {
+            _refPicListBuilder.UpdatePicNums(_dpb, picture, maxFrameNum);
+        }
+
+        // Calculate FrameNumWrap and PicNum for the current picture
+        // This MUST be done before MMCO operations as they use PicNum for calculations
+        // Following H.264 spec 8.2.4.1
+        if (picture.FrameNum > _frameNumGapHandler.PrevRefFrameNum)
+        {
+            picture.FrameNumWrap = (int)picture.FrameNum;
+        }
+        else
+        {
+            picture.FrameNumWrap = (int)picture.FrameNum + maxFrameNum;
+        }
+
+        if (picture.Field == H264PictureField.Frame)
+        {
+            picture.PicNum = picture.FrameNumWrap;
+        }
+        else
+        {
+            picture.PicNum = 2 * picture.FrameNumWrap + 1;
+        }
+
+        _logger.LogDebug("Picture: sys_frame={SysFrame}, frame_num={FrameNum}, PicNum={PicNum}, TopPOC={TopPoc}, BottomPOC={BottomPoc}, IsRef={IsRef}",
+            picture.SystemFrameNumber, picture.FrameNum, picture.PicNum, picture.TopFieldOrderCnt, picture.BottomFieldOrderCnt, picture.IsRef);
 
         return picture;
+    }
+
+    /// <summary>
+    /// Drain pictures from DPB in POC order for output.
+    /// Following GStreamer's _bump_dpb pattern.
+    /// </summary>
+    private void DrainDpbOutput()
+    {
+        while (_dpb.NeedsBump(null, H264DpbBumpMode.NormalLatency))
+        {
+            var toOutput = _dpb.Bump(true);
+            if (toOutput == null)
+            {
+                break;
+            }
+            OutputPicture(toOutput);
+        }
+    }
+
+    /// <summary>
+    /// Perform DPB bumping if needed.
+    /// Following GStreamer's _bump_dpb.
+    /// </summary>
+    private void BumpDpb(H264Picture? currentPicture, H264DpbBumpMode bumpMode)
+    {
+        while (_dpb.NeedsBump(currentPicture, bumpMode))
+        {
+            var toOutput = _dpb.Bump(false);
+            if (toOutput == null)
+            {
+                _logger.LogWarning("Bumping is needed but no picture to output");
+                break;
+            }
+            OutputPicture(toOutput);
+        }
+    }
+
+    /// <summary>
+    /// Output a picture that has been bumped from the DPB.
+    /// For stateless V4L2, pictures are already being output via capture buffer processing,
+    /// but this ensures proper POC ordering tracking.
+    /// </summary>
+    private void OutputPicture(H264Picture picture)
+    {
+        // Check if output should be suppressed (intra refresh before recovery point)
+        if (!picture.OutputFlag)
+        {
+            _logger.LogTrace("Skipping output of picture due to OutputFlag=false: frame_num={FrameNum}, POC={Poc}",
+                picture.FrameNum, picture.GetPicOrderCnt());
+            // Note: Bump() already sets NeededForOutput = false and Outputted = true
+            return;
+        }
+
+        _logger.LogTrace("Outputting picture: frame_num={FrameNum}, POC={Poc}",
+            picture.FrameNum, picture.GetPicOrderCnt());
+        // Note: Bump() already sets NeededForOutput = false and Outputted = true
+    }
+
+    /// <summary>
+    /// Find the first field of a complementary field pair for interlaced content.
+    /// Following GStreamer's gst_h264_decoder_find_first_field_picture.
+    /// </summary>
+    private H264Picture? FindFirstFieldPicture(SliceHeaderState sliceHeader)
+    {
+        if (!_interlaced)
+        {
+            return null;
+        }
+
+        // Not a field picture - no first field
+        if (sliceHeader.field_pic_flag == 0)
+        {
+            // If there's a pending first field, it's incomplete
+            if (_lastField != null)
+            {
+                _logger.LogWarning("Previous picture {Poc} is not complete (received frame)",
+                    _lastField.GetPicOrderCnt());
+                _lastField = null;
+            }
+            return null;
+        }
+
+        // Check if we have a cached first field
+        if (_lastField != null)
+        {
+            // Verify it's a complementary pair
+            if (_lastField.FrameNum == sliceHeader.frame_num)
+            {
+                H264PictureField currentField = sliceHeader.bottom_field_flag != 0
+                    ? H264PictureField.BottomField
+                    : H264PictureField.TopField;
+
+                if (currentField != _lastField.Field)
+                {
+                    // Valid complementary pair
+                    var firstField = _lastField;
+                    _lastField = null;
+                    return firstField;
+                }
+                else
+                {
+                    // Same field type - error
+                    _logger.LogWarning("Current picture and previous picture have identical field {Field}",
+                        currentField);
+                    _lastField = null;
+                    return null;
+                }
+            }
+            else
+            {
+                // Different frame_num - first field was incomplete
+                _logger.LogWarning("Previous picture {Poc} is not complete (different frame_num)",
+                    _lastField.GetPicOrderCnt());
+                _lastField = null;
+            }
+        }
+
+        // Check DPB for an incomplete field picture (following GStreamer's DPB search)
+        lock (_dpbLock)
+        {
+            var pics = _dpb.GetPictures();
+            if (pics.Count > 0)
+            {
+                var lastPic = pics[^1];
+                if (lastPic.Field != H264PictureField.Frame && lastPic.OtherField == null)
+                {
+                    if (lastPic.FrameNum == sliceHeader.frame_num)
+                    {
+                        H264PictureField currentField = sliceHeader.bottom_field_flag != 0
+                            ? H264PictureField.BottomField
+                            : H264PictureField.TopField;
+
+                        if (currentField != lastPic.Field)
+                        {
+                            return lastPic;
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Create a picture for the current slice, linking to first field if this is second field.
+    /// Following GStreamer's gst_h264_decoder_new_field_picture.
+    /// </summary>
+    private H264Picture CreatePictureForSlice(SliceHeaderState sliceHeader, SpsState sps, bool isIdr, H264Picture? firstField)
+    {
+        if (firstField != null)
+        {
+            // This is the second field - create a complementary field picture
+            _systemFrameNumber++;
+            var secondField = firstField.CreateComplementaryFieldPicture(_systemFrameNumber);
+            secondField.InitFromSliceHeader(sliceHeader, sps, isIdr);
+
+            // Calculate POC for the second field
+            _pocCalculator.CalculatePOC(
+                sliceHeader,
+                sps,
+                isIdr,
+                secondField.Field,
+                out int topPoc,
+                out int bottomPoc);
+
+            secondField.TopFieldOrderCnt = topPoc;
+            secondField.BottomFieldOrderCnt = bottomPoc;
+
+            _logger.LogDebug("Second field: sys_frame={SysFrame}, frame_num={FrameNum}, POC={Poc}",
+                secondField.SystemFrameNumber, secondField.FrameNum, secondField.GetPicOrderCnt());
+
+            return secondField;
+        }
+
+        // Regular picture (first field or frame)
+        var picture = CreatePicture(sliceHeader, sps, isIdr);
+
+        // If this is a field picture and not linked to another, cache it as last_field
+        if (picture.Field != H264PictureField.Frame && picture.OtherField == null)
+        {
+            _lastField = picture;
+        }
+
+        return picture;
+    }
+
+    /// <summary>
+    /// Creates a non-existing picture for frame_num gap filling.
+    /// </summary>
+    private H264Picture? CreateNonExistingPicture(uint frameNum)
+    {
+        _systemFrameNumber++;
+
+        return new H264Picture
+        {
+            SystemFrameNumber = _systemFrameNumber,
+            FrameNum = frameNum,
+            IsNonExisting = true,
+            IsRef = true,
+            IsLongTermRef = false,
+            Field = H264PictureField.Frame
+        };
     }
 
     private void FillPps(PpsState pps)
@@ -742,7 +1260,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
                     (sliceHeader.bottom_field_flag != 0 ? V4L2H264Constants.V4L2_H264_DECODE_PARAM_FLAG_BOTTOM_FIELD : 0u)
         };
 
-        // Set field order counts based on picture field (matching GStreamer)
+        // Set field order counts based on picture field (matching GStreamer exactly)
+        // GStreamer uses the calculated POC values from the picture struct, not raw slice header values
         switch (picture.Field)
         {
             case H264PictureField.Frame:
@@ -790,13 +1309,30 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         bool isIdr = naluType == NalUnitType.CODED_SLICE_OF_IDR_PICTURE_NUT;
 
+        // Handle field picture boundary detection for interlaced content
+        // Following GStreamer's field picture boundary check in gst_h264_decoder_parse_slice
+        if (_interlaced && _currentPicture != null &&
+            _currentPicture.Field != H264PictureField.Frame &&
+            !_currentPicture.SecondField)
+        {
+            H264PictureField curField = header.field_pic_flag != 0
+                ? (header.bottom_field_flag != 0 ? H264PictureField.BottomField : H264PictureField.TopField)
+                : H264PictureField.Frame;
+
+            if (curField != _currentPicture.Field)
+            {
+                _logger.LogTrace("Found new field picture, finishing the first field picture");
+                EndPicture();
+            }
+        }
+
         // Check if this is the first slice of a new picture
         if (header.first_mb_in_slice == 0)
         {
             // End previous picture if any
             EndPicture();
 
-            // Start new picture
+            // Start new picture (may be second field of a pair)
             StartPicture(header, pps, sps, isIdr);
         }
         else if (_currentPicture == null)
@@ -999,71 +1535,194 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
             }
         }
 
-        // Timestamp for OUTPUT buffer
+        // Timestamp for OUTPUT buffer (following GStreamer gstv4l2decoder.c)
+        // The reference_ts in DPB entries = SystemFrameNumber * 1000 (nanoseconds)
+        // V4L2 buffer timestamp: tv_sec * 1_000_000_000 + tv_usec * 1000 = nanoseconds
+        // So we set: tv_sec = frame_num / 1_000_000, tv_usec = frame_num % 1_000_000
+        // This gives: timestamp_ns = frame_num * 1000 = reference_ts
         var timestamp = new TimeVal
         {
             TvSec = (nint)(_currentPicture.SystemFrameNumber / 1_000_000),
             TvUsec = (nint)(_currentPicture.SystemFrameNumber % 1_000_000)
         };
 
-        // Queue capture buffer
-        _device.CaptureMPlaneQueue.EnqueueDmaBufBuffer(captureBuffer.V4L2Buffer, request, null);
+        // Register the pending decode request before submitting
+        // This maps the frame number to the buffer so we can identify it when dequeued
+        lock (_pendingRequestsLock)
+        {
+            _pendingDecodeRequests[_currentPicture.SystemFrameNumber] = captureBuffer;
+        }
 
-        // Write bitstream and queue output buffer
+        // Write bitstream and queue OUTPUT buffer FIRST with timestamp (like GStreamer)
         var bitstreamData = _bitstreamBuffer.ToArray();
         _device.OutputMPlaneQueue.WriteBufferAndEnqueue(bitstreamData, request, timestamp);
+
+        // Queue CAPTURE buffer WITHOUT timestamp (like GStreamer: gst_v4l2_decoder_queue_src_buffer)
+        // GStreamer does NOT set timestamp on capture buffer
+        _device.CaptureMPlaneQueue.EnqueueDmaBufBuffer(captureBuffer.V4L2Buffer, request, null);
 
         // Queue the media request
         request.Queue();
 
         StartStreaming();
 
-        // Add picture to DPB if it's a reference
-        if (_currentPicture.IsRef)
-        {
-            AddPictureToDpb(_currentPicture, captureBuffer);
-        }
+        // Process the picture - add to DPB, do bumping, etc.
+        // This must be done for ALL pictures, not just reference ones
+        FinishPicture(_currentPicture, captureBuffer);
 
         _sliceParams.Clear();
     }
 
-    private void AddPictureToDpb(H264Picture picture, SharedDmaBuffer buffer)
+    /// <summary>
+    /// Finish processing a picture after it has been submitted for decoding.
+    /// Following GStreamer's gst_h264_decoder_finish_picture.
+    /// This handles reference picture marking, DPB management, and output ordering.
+    /// </summary>
+    private void FinishPicture(H264Picture picture, SharedDmaBuffer buffer)
     {
         lock (_dpbLock)
         {
-            // Perform sliding window marking before adding
-            _dpb.PerformSlidingWindowMarking(_dpb.MaxNumRefFrames);
-
-            // Remove unused pictures
-            var removedPictures = _dpb.RemoveUnusedPictures();
-            foreach (var removedPic in removedPictures)
+            // For reference pictures, perform marking BEFORE bumping
+            if (picture.IsRef)
             {
-                if (removedPic.Buffer != null)
-                {
-                    if (_pendingReuse.Remove(removedPic.Buffer))
-                    {
-                        _bufferToPicture.Remove(removedPic.Buffer);
-                        removedPic.Buffer.V4L2Buffer.ResetPlanesUsed();
-                        _availableCaptureBuffers.Add(removedPic.Buffer);
-                    }
-                    else
-                    {
-                        _bufferToPicture.Remove(removedPic.Buffer);
-                    }
-                }
+                // Perform reference picture marking (following GStreamer's gst_h264_decoder_reference_picture_marking)
+                // This handles both adaptive ref pic marking (MMCO) and sliding window
+                _refPicMarking.PerformMarking(_dpb, picture, _currentSliceHeader?.dec_ref_pic_marking);
+
+                // Update prev state after marking (for MMCO 5 handling)
+                _pocCalculator.UpdateAfterPicture(picture);
+                _frameNumGapHandler.UpdatePrevRefFrameNum(picture.FrameNum);
             }
 
-            // Calculate FrameNumWrap and PicNum
-            picture.FrameNumWrap = (int)picture.FrameNum;
-            picture.PicNum = picture.FieldPicFlag
-                ? 2 * picture.FrameNumWrap + (picture.BottomFieldFlag ? 1 : 0)
-                : picture.FrameNumWrap;
+            // Remove unused pictures before bumping
+            var removedPictures = _dpb.RemoveUnusedPictures();
+            ReturnRemovedPicturesToPool(removedPictures);
 
-            _dpb.Add(picture);
-            _bufferToPicture[buffer] = picture;
+            // C.4.4: if mem_mgmt_5, drain the DPB first
+            if (picture.MemMgmt5)
+            {
+                _logger.LogTrace("Memory management type 5, draining the DPB");
+                DrainDpbOutput();
+            }
 
-            _logger.LogTrace("Added ref picture to DPB: frame_num={FrameNum}, ref_ts={RefTs}, DPB size={Size}",
-                picture.FrameNum, picture.ReferenceTs, _dpb.NumPics);
+            // DPB Bumping - output pictures in POC order if needed (following GStreamer's _bump_dpb)
+            BumpDpb(picture, H264DpbBumpMode.NormalLatency);
+
+            // Note: PicNum is already calculated in CreatePicture before MMCO operations
+
+            // C.4.5.1, C.4.5.2:
+            // - If the current decoded picture is the second field of a complementary
+            //   reference field pair, add to DPB.
+            // C.4.5.1: For a reference decoded picture, the "bumping" process is invoked
+            //   repeatedly until there is an empty frame buffer, then add to DPB.
+            // C.4.5.2: For a non-reference decoded picture, if there is empty frame buffer
+            //   after bumping the smaller POC, add to DPB. Otherwise, output directly.
+            bool shouldAddToDpb =
+                (picture.SecondField && picture.OtherField != null && picture.OtherField.IsRef) ||
+                picture.IsRef ||
+                _dpb.HasEmptyFrameBuffer();
+
+            if (shouldAddToDpb)
+            {
+                // Handle interlaced: if the first field of last_field was cached,
+                // add it to DPB when its second field arrives
+                // Following GStreamer's add_picture_to_dpb
+                if (_interlaced && picture.SecondField && picture.OtherField != null)
+                {
+                    // Check if first field is already in DPB
+                    if (!_dpb.GetPictures().Contains(picture.OtherField))
+                    {
+                        _dpb.Add(picture.OtherField);
+                        if (picture.OtherField.Buffer != null)
+                        {
+                            _bufferToPicture[picture.OtherField.Buffer] = picture.OtherField;
+                        }
+                    }
+                }
+
+                // For interlaced frame pictures, split into fields for proper reference marking
+                // Following GStreamer's frame splitting logic in gst_h264_decoder_finish_picture
+                if (_interlaced && picture.Field == H264PictureField.Frame)
+                {
+                    var otherField = picture.SplitFrame(_systemFrameNumber++);
+                    if (otherField != null)
+                    {
+                        _dpb.Add(otherField);
+                        // Note: other field shares the same buffer
+                    }
+                }
+
+                _dpb.Add(picture);
+                _bufferToPicture[buffer] = picture;
+
+                _logger.LogTrace("Added picture to DPB: frame_num={FrameNum}, POC={Poc}, IsRef={IsRef}, DPB size={Size}",
+                    picture.FrameNum, picture.GetPicOrderCnt(), picture.IsRef, _dpb.NumPics);
+            }
+            else
+            {
+                // No space in DPB for non-reference picture, output directly
+                _bufferToPicture[buffer] = picture;
+                OutputPictureDirectly(picture);
+                _logger.LogTrace("Output non-ref picture directly (no DPB space): frame_num={FrameNum}, POC={Poc}",
+                    picture.FrameNum, picture.GetPicOrderCnt());
+            }
+        }
+    }
+
+    /// <summary>
+    /// Output a picture directly without going through DPB.
+    /// Following GStreamer's output_picture_directly.
+    /// </summary>
+    private void OutputPictureDirectly(H264Picture picture)
+    {
+        // Check if output should be suppressed
+        if (!picture.OutputFlag)
+        {
+            _logger.LogTrace("Skipping direct output due to OutputFlag=false: frame_num={FrameNum}, POC={Poc}",
+                picture.FrameNum, picture.GetPicOrderCnt());
+            picture.Outputted = true;
+            picture.NeededForOutput = false;
+            return;
+        }
+
+        picture.Outputted = true;
+        picture.NeededForOutput = false;
+
+        _logger.LogTrace("Direct output picture: frame_num={FrameNum}, POC={Poc}",
+            picture.FrameNum, picture.GetPicOrderCnt());
+    }
+
+    /// <summary>
+    /// Return removed pictures' buffers to the pool if they were pending reuse.
+    /// </summary>
+    private void ReturnRemovedPicturesToPool(List<H264Picture> removedPictures)
+    {
+        foreach (var removedPic in removedPictures)
+        {
+            if (removedPic.Buffer != null)
+            {
+                // Only return buffer to pool if:
+                // 1. User called ReuseDecodedFrame but we deferred it (pendingReuse)
+                // 2. Buffer is NOT currently being displayed (not in-flight)
+                if (_pendingReuse.Remove(removedPic.Buffer))
+                {
+                    // Check if buffer is still being displayed
+                    if (_inFlightDisplayBuffers.Contains(removedPic.Buffer))
+                    {
+                        // Buffer is still on screen, it will be returned when user calls ReuseDecodedFrame
+                        _logger.LogTrace("Buffer pending but still in-flight (on display): frame_num={FrameNum}",
+                            removedPic.FrameNum);
+                        continue;
+                    }
+
+                    _bufferToPicture.Remove(removedPic.Buffer);
+                    removedPic.Buffer.V4L2Buffer.ResetPlanesUsed();
+                    _availableCaptureBuffers.Add(removedPic.Buffer);
+
+                    _logger.LogTrace("Returned pending buffer to pool after DPB removal: frame_num={FrameNum}",
+                        removedPic.FrameNum);
+                }
+            }
         }
     }
 
@@ -1099,9 +1758,15 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         StopStreaming();
 
+        lock (_pendingRequestsLock)
+        {
+            _pendingDecodeRequests.Clear();
+        }
+
         lock (_dpbLock)
         {
             _pendingReuse.Clear();
+            _inFlightDisplayBuffers.Clear();
             _dpb.Clear();
             _bufferToPicture.Clear();
         }

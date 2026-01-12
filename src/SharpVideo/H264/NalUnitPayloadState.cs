@@ -7,10 +7,11 @@
 /// </summary>
 public class NalUnitPayloadState
 {
-    public SpsState sps;
-    public PpsState pps;
-    public SliceLayerWithoutPartitioningRbspState slice_layer_without_partitioning_rbsp;
-    public PrefixNalUnitRbspState prefix_nal_unit;
-    public SubsetSpsState subset_sps;
-    public SliceLayerExtensionRbspState slice_layer_extension_rbsp;
+    public SpsState? sps;
+    public PpsState? pps;
+    public SliceLayerWithoutPartitioningRbspState? slice_layer_without_partitioning_rbsp;
+    public PrefixNalUnitRbspState? prefix_nal_unit;
+    public SubsetSpsState? subset_sps;
+    public SliceLayerExtensionRbspState? slice_layer_extension_rbsp;
+    public SeiRbspState? sei;
 }
