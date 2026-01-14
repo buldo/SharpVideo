@@ -22,7 +22,7 @@ It focuses on Linux ARM environments with V4L2 decoding and DRM presentation. Ho
 
 * `DrmDemo` – Exploring DRM devices
 * `DrmDmaDemo` – Video output via DRM with DMA-BUF
-* `FfmpegDemo` – Using FFmpeg
+* `FfmpegDemo` – Using FFmpeg. **Works on Windows and Linux**
 * `ImGuiDemo` – Using ImGui in a DRM environment
 * `MultiPlaneDemo` – Multi-plane DRM output (plane overlay)
 * `MultiPlaneGlDemo` – Same as MultiPlaneDemo, but with OpenGL
@@ -32,3 +32,10 @@ It focuses on Linux ARM environments with V4L2 decoding and DRM presentation. Ho
 * `V4L2DecodeDrmPreviewDemo` – Same as V4L2DecodeDemo, but with preview. Only stateless devices
 * `V4L2DecodeDrmPreviewDemo2` – Base on SharpVideo.Decoding. Tested on RPi an RK3566 mainline
 * `V4L2PrintInfo` – Printing information about V4L2 devices
+
+# How to
+Some linux deps.  
+Not sure that this is all dependencies
+```sh
+sudo apt install -y build-essential libdrm-dev pkg-config libgbm-dev libinput-dev libegl-dev
+```
