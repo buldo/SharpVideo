@@ -3,6 +3,7 @@
 using FFmpeg.AutoGen;
 
 using SharpVideo.Decoding.Ffmpeg;
+using SharpVideo.Decoding.V4l2;
 using SharpVideo.Decoding.V4l2.Discovery;
 using SharpVideo.Decoding.V4l2.Stateful;
 using SharpVideo.Decoding.V4l2.Stateless;
@@ -70,9 +71,11 @@ public class DecodersFactory
 
         if (decoderInfo.DecoderType == V4l2H264DecoderType.Stateful)
         {
-            decoder = new V4l2H264StatefulDecoder(
+            decoder = V4l2H264StatefulDecoder.Create(
                 device,
-                _loggerFactory.CreateLogger<V4l2H264StatefulDecoder>());
+                _loggerFactory,
+                null,
+                drmBufferManager);
         }
         else if(decoderInfo.DecoderType == V4l2H264DecoderType.Stateless)
         {

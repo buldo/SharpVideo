@@ -5,6 +5,7 @@
     <Platform Name="x86" />
   </Configurations>
   <Folder Name="/Examples/">
+    <Project Path="Examples/SharpVideo.Decoding.OhdDemo/SharpVideo.Decoding.OhdDemo.csproj" />
     <Project Path="Examples/SharpVideo.DemoMedia/SharpVideo.DemoMedia.csproj" />
     <Project Path="Examples/SharpVideo.DrmDemo/SharpVideo.DrmDemo.csproj" />
     <Project Path="Examples/SharpVideo.DrmDmaDemo/SharpVideo.DrmDmaDemo.csproj" />
@@ -19,7 +20,6 @@
     <Project Path="Examples/SharpVideo.V4L2DecodeDrmPreviewDemo2/SharpVideo.V4L2DecodeDrmPreviewDemo2.csproj" />
     <Project Path="Examples/SharpVideo.V4L2Decoding/SharpVideo.V4L2Decoding.csproj" Id="c4799937-43aa-404d-925a-d1a9191d18ad" />
     <Project Path="Examples/SharpVideo.V4L2PrintInfo/SharpVideo.V4L2PrintInfo.csproj" />
-    <Project Path="SharpVideo.Decoding.OhdDemo/SharpVideo.Decoding.OhdDemo.csproj" Id="fc19e915-ee43-4486-b39d-6ccd5642a09a" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path="../README.md" />
