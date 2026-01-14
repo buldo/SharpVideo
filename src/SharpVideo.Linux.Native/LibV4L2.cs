@@ -258,4 +258,38 @@ public static unsafe class LibV4L2
     {
         return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_QUERY_EXT_CTRL, ref queryExtCtrl);
     }
+
+    /// <summary>
+    /// Subscribe to V4L2 events.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="subscription">Event subscription structure specifying event type and flags</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult SubscribeEvent(int fd, ref V4L2EventSubscription subscription)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_SUBSCRIBE_EVENT, ref subscription);
+    }
+
+    /// <summary>
+    /// Unsubscribe from V4L2 events.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="subscription">Event subscription structure specifying event type to unsubscribe</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult UnsubscribeEvent(int fd, ref V4L2EventSubscription subscription)
+    {
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_UNSUBSCRIBE_EVENT, ref subscription);
+    }
+
+    /// <summary>
+    /// Dequeue a V4L2 event.
+    /// </summary>
+    /// <param name="fd">Open V4L2 device file descriptor</param>
+    /// <param name="event">Event structure to receive the dequeued event</param>
+    /// <returns>Result of the operation</returns>
+    public static IoctlResult DequeueEvent(int fd, out V4L2Event @event)
+    {
+        @event = new V4L2Event();
+        return IoctlHelper.Ioctl(fd, V4L2Constants.VIDIOC_DQEVENT, ref @event);
+    }
 }

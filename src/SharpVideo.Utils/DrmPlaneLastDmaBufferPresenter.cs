@@ -10,6 +10,7 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
 {
     private readonly DrmBufferManager _bufferManager;
     private readonly AtomicFlipManager? _atomicDisplayManager;
+    private readonly ILogger _logger;
 
     private readonly List<SharedDmaBuffer> _processedBuffers = new();
 
@@ -27,6 +28,7 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
         : base(drmDevice, plane, crtcId, width, height, logger)
     {
         _bufferManager = bufferManager;
+        _logger = logger;
 
         // Only use atomic mode if explicitly requested AND capability is available
         if (useAtomicMode)
@@ -54,7 +56,7 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
                         width,
                         height,
                         logger);
-                
+
                     logger.LogInformation("Overlay plane using atomic mode with dedicated event loop");
                 }
                 else
@@ -63,7 +65,7 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
                 }
             }
         }
-        
+
         if (_atomicDisplayManager == null)
         {
             logger.LogInformation("Overlay plane configured to use legacy SetPlane mode (no atomic/event loop)");
@@ -74,7 +76,16 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
     {
         if (drmBuffer.FramebufferId == 0)
         {
+            _logger.LogTrace(
+                "Creating framebuffer for buffer: DmaFd={DmaFd}, Hash={Hash}",
+                drmBuffer.DmaBuffer.Fd, drmBuffer.GetHashCode());
             drmBuffer.FramebufferId = _bufferManager.CreateFramebuffer(drmBuffer);
+        }
+        else
+        {
+            _logger.LogTrace(
+                "Reusing existing framebuffer: FbId={FbId}, DmaFd={DmaFd}, Hash={Hash}",
+                drmBuffer.FramebufferId, drmBuffer.DmaBuffer.Fd, drmBuffer.GetHashCode());
         }
 
         if (_atomicDisplayManager != null)

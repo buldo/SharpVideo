@@ -42,6 +42,15 @@ public static class BuffersInfoProvider
                     new PlaneDescriptor(BytesPerPixelNumerator: 3, BytesPerPixelDenominator: 1, WidthDivisor: 1, HeightDivisor: 1)
                 ])
             },
+            // YUV420 (I420): Y plane + U plane (1/4 size) + V plane (1/4 size)
+            {
+                KnownPixelFormats.DRM_FORMAT_YUV420,
+                new FormatDescriptor([
+                    new PlaneDescriptor(BytesPerPixelNumerator: 1, BytesPerPixelDenominator: 1, WidthDivisor: 1, HeightDivisor: 1),
+                    new PlaneDescriptor(BytesPerPixelNumerator: 1, BytesPerPixelDenominator: 1, WidthDivisor: 2, HeightDivisor: 2),
+                    new PlaneDescriptor(BytesPerPixelNumerator: 1, BytesPerPixelDenominator: 1, WidthDivisor: 2, HeightDivisor: 2)
+                ])
+            },
         }.ToFrozenDictionary();
 
     /// <summary>

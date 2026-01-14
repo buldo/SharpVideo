@@ -231,4 +231,22 @@ public static unsafe partial class NativeTestLibrary
 
     [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_cid_stateless_h264_decode_params")]
     public static partial uint GetNativeV4L2CidStatelessH264DecodeParams();
+
+    // V4L2 Event structure testing functions
+
+    // Function to fill v4l2_event_subscription structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_event_subscription")]
+    public static partial void FillNativeV4L2EventSubscription(V4L2EventSubscription* structure);
+
+    // Function to get v4l2_event_subscription structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_event_subscription_size")]
+    public static partial int GetNativeV4L2EventSubscriptionSize();
+
+    // Function to fill v4l2_event structure with test data
+    [LibraryImport(LibraryName, EntryPoint = "fill_native_v4l2_event")]
+    public static partial void FillNativeV4L2Event(V4L2Event* structure);
+
+    // Function to get v4l2_event structure size for verification
+    [LibraryImport(LibraryName, EntryPoint = "get_native_v4l2_event_size")]
+    public static partial int GetNativeV4L2EventSize();
 }

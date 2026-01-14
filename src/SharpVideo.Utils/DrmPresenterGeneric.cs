@@ -88,6 +88,9 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
             logger.LogInformation("Found {Format} overlay plane: ID {PlaneId}",
                 overlayPlanePixelFormat.GetName(), overlayPlane.Id);
 
+            // Use legacy SetPlane mode for better hardware compatibility
+            // Atomic mode can fail on some hardware (e.g., Raspberry Pi) when
+            // the primary plane is set up with legacy API
             overlayPlanePresenter = new DrmPlaneLastDmaBufferPresenter(
                 drmDevice,
                 overlayPlane,
@@ -95,7 +98,8 @@ public sealed class DrmPresenter<TPrimaryPresenter, TOverlayPresenter> : IDispos
                 actualWidth,
                 actualHeight,
                 bufferManager,
-                logger);
+                logger,
+                useAtomicMode: false);
         }
 
         var primaryPlanePresenter = new DrmPlaneDoubleBufferPresenter(

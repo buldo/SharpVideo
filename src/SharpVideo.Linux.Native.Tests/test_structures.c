@@ -437,3 +437,46 @@ void fill_native_v4l2_ctrl_h264_sps(struct v4l2_ctrl_h264_sps* s) {
 int get_native_v4l2_ctrl_h264_sps_size(void) {
     return sizeof(struct v4l2_ctrl_h264_sps);
 }
+
+// V4L2 Event structures
+
+// Function to fill v4l2_event_subscription structure with test data
+void fill_native_v4l2_event_subscription(struct v4l2_event_subscription* s) {
+    if (!s) return;
+
+    s->type = 0xDEADBEEF;     // Distinctive pattern for type
+    s->id = 0xCAFEBABE;       // Distinctive pattern for id
+    s->flags = 0x12345678;    // Distinctive pattern for flags
+    for (int i = 0; i < 5; i++) {
+        s->reserved[i] = 0x87654321 + i;  // Sequential distinctive pattern
+    }
+}
+
+// Function to get v4l2_event_subscription structure size for verification
+int get_native_v4l2_event_subscription_size(void) {
+    return sizeof(struct v4l2_event_subscription);
+}
+
+// Function to fill v4l2_event structure with test data
+void fill_native_v4l2_event(struct v4l2_event* s) {
+    if (!s) return;
+
+    s->type = 0xDEADBEEF;         // Distinctive pattern for type
+    // Fill the union with a distinctive pattern - for SOURCE_CHANGE, first 4 bytes are 'changes'
+    memset(&s->u, 0xAB, sizeof(s->u));
+    // Set the first 4 bytes (src_change.changes) to a distinctive value
+    *((uint32_t*)&s->u) = 0xFEEDFACE;
+    s->pending = 0xCAFEBABE;      // Distinctive pattern for pending
+    s->sequence = 0x12345678;     // Distinctive pattern for sequence
+    s->timestamp.tv_sec = 0x11223344;   // Distinctive pattern for timestamp seconds
+    s->timestamp.tv_nsec = 0x55667788;  // Distinctive pattern for timestamp nanoseconds
+    s->id = 0x87654321;           // Distinctive pattern for id
+    for (int i = 0; i < 8; i++) {
+        s->reserved[i] = 0x99AABBCC + i;  // Sequential distinctive pattern
+    }
+}
+
+// Function to get v4l2_event structure size for verification
+int get_native_v4l2_event_size(void) {
+    return sizeof(struct v4l2_event);
+}

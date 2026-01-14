@@ -657,5 +657,61 @@ public unsafe class StructureCompatibilityTests
             Marshal.FreeHGlobal(ptr);
         }
     }
+
+    // V4L2 Event Structure Compatibility Tests
+
+    [Fact]
+    public void TestV4L2EventSubscription_NativeSizeCompatibility()
+    {
+        // Test that our V4L2EventSubscription structure has the same size as the native v4l2_event_subscription structure
+        int csharpSize = Marshal.SizeOf<V4L2EventSubscription>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2EventSubscriptionSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2EventSubscription_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2EventSubscription();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2EventSubscription(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Type);
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Id);
+        Assert.Equal(0x12345678u, nativeFilledStruct.Flags);
+    }
+
+    [Fact]
+    public void TestV4L2Event_NativeSizeCompatibility()
+    {
+        // Test that our V4L2Event structure has the same size as the native v4l2_event structure
+        int csharpSize = Marshal.SizeOf<V4L2Event>();
+        int nativeSize = NativeTestLibrary.GetNativeV4L2EventSize();
+
+        Assert.Equal(nativeSize, csharpSize);
+    }
+
+    [Fact]
+    public void TestV4L2Event_NativeMemoryLayoutCompatibility()
+    {
+        // Fill C structure in native code and check that managed structure fields have right values
+        var nativeFilledStruct = new V4L2Event();
+
+        // Fill structure using native C code
+        NativeTestLibrary.FillNativeV4L2Event(&nativeFilledStruct);
+
+        // Verify that the managed structure fields have the expected distinctive patterns
+        Assert.Equal(0xDEADBEEFu, nativeFilledStruct.Type);
+        Assert.Equal(0xFEEDFACEu, nativeFilledStruct.SourceChangeFlags); // First 4 bytes of union
+        Assert.Equal(0xCAFEBABEu, nativeFilledStruct.Pending);
+        Assert.Equal(0x12345678u, nativeFilledStruct.Sequence);
+        Assert.Equal(0x11223344L, nativeFilledStruct.Timestamp.TvSec);
+        Assert.Equal(0x55667788L, nativeFilledStruct.Timestamp.TvNsec);
+        Assert.Equal(0x87654321u, nativeFilledStruct.Id);
+    }
 }
 

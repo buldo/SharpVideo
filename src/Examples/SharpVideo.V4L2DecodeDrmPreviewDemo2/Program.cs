@@ -2,7 +2,10 @@ using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
 
+using SharpVideo.Decoding;
 using SharpVideo.Decoding.V4l2;
+using SharpVideo.Decoding.V4l2.Discovery;
+using SharpVideo.Decoding.V4l2.Stateful;
 using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
@@ -67,38 +70,37 @@ internal class Program
             Logger);
 
         // Configure z-order: Primary plane (transparent) on top, Overlay plane (video) below
+        // Note: Z-position may not be supported on all hardware (e.g., some Raspberry Pi configurations)
         Logger.LogInformation("Configuring plane z-order: video below, transparent primary on top");
         var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
         var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
 
         if (primaryZposRange.HasValue && overlayZposRange.HasValue)
         {
-            presenter.PrimaryPlane.SetPlaneZPosition(primaryZposRange.Value.max);  // Primary on top
-            presenter.OverlayPlane.SetPlaneZPosition(overlayZposRange.Value.min);  // Video below
-            Logger.LogInformation("Set Primary zpos={PrimaryZ} (top), Overlay zpos={OverlayZ} (bottom)",
-                primaryZposRange.Value.max, overlayZposRange.Value.min);
+            var primarySuccess = presenter.PrimaryPlane.SetPlaneZPosition(primaryZposRange.Value.max);
+            var overlaySuccess = presenter.OverlayPlane.SetPlaneZPosition(overlayZposRange.Value.min);
+
+            if (primarySuccess && overlaySuccess)
+            {
+                Logger.LogInformation("Set Primary zpos={PrimaryZ} (top), Overlay zpos={OverlayZ} (bottom)",
+                    primaryZposRange.Value.max, overlayZposRange.Value.min);
+            }
+            else
+            {
+                Logger.LogWarning("Failed to set z-position: Primary={PrimarySuccess}, Overlay={OverlaySuccess}. " +
+                    "Using default layer ordering.", primarySuccess, overlaySuccess);
+            }
+        }
+        else
+        {
+            Logger.LogWarning("Z-position not supported on this hardware. Primary zpos available: {PrimaryAvail}, " +
+                "Overlay zpos available: {OverlayAvail}. Using default layer ordering.",
+                primaryZposRange.HasValue, overlayZposRange.HasValue);
         }
 
-        var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
-        using var _ = v4L2Device; // Ensure disposal
+        var decoder = CreateV4l2Decoder(drmBufferManager);
 
-        var config = new V4l2DecoderConfiguration
-        {
-            // Use more buffers if streaming is supported for smoother playback
-            OutputBufferCount = 3u,
-            CaptureBufferCount = 6u,
-            RequestPoolSize = 6
-        };
-
-        using var mediaDevice = GetMediaDevice();
-        var decoder = V4l2H264StatelessDecoder.Create(
-            v4L2Device,
-            mediaDevice,
-            LoggerFactory,
-            config,
-            drmBufferManager: drmBufferManager);
-
-        var player = new Player(presenter, decoder, LoggerFactory);
+        var player = new Player(presenter, (BaseDecoder<SharedDmaBuffer>)decoder, LoggerFactory);
         player.Init();
 
         await using var fileStream = GetFileStream();
@@ -117,51 +119,65 @@ internal class Program
 
     }
 
-    private static (V4L2Device device, V4L2DeviceInfo deviceInfo) GetVideoDevice(ILogger logger)
+    /// <summary>
+    /// Creates a V4L2 hardware decoder with automatic hardware detection.
+    /// </summary>
+    /// <param name="drmBufferManager">DRM buffer manager for zero-copy decoding.</param>
+    /// <returns>A V4L2 decoder (stateless or stateful based on hardware).</returns>
+    private static IDecoder CreateV4l2Decoder(DrmBufferManager drmBufferManager)
     {
-        var h264Devices = V4L2.V4L2DeviceManager.GetH264Devices();
-        if (!h264Devices.Any())
+        var provider = new V4l2H264DecoderProvider(LoggerFactory.CreateLogger<V4l2H264DecoderProvider>());
+        var decoderInfo = provider.FindBestDecoder();
+        if (decoderInfo == null)
         {
-            throw new Exception("Error: No H.264 capable V4L2 devices found.");
+            throw new Exception("Failed to find V4L2 H264 decoder");
         }
 
-        var selectedDevice = h264Devices.First();
-        logger.LogInformation("Using device: {@Device}", selectedDevice);
+        Logger.LogInformation(
+            "Found {DecoderType} decoder at {Path} ({Driver}: {Card})",
+            decoderInfo.DecoderType,
+            decoderInfo.DevicePath,
+            decoderInfo.Driver,
+            decoderInfo.Card);
 
-        // Log device capabilities for optimization analysis
-        LogDeviceCapabilities(selectedDevice, logger);
-
-        var v4L2Device = V4L2DeviceFactory.Open(selectedDevice.DevicePath);
-        if (v4L2Device == null)
+        var device = V4L2DeviceFactory.Open(decoderInfo.DevicePath);
+        if (device == null)
         {
-            throw new Exception($"Error: Failed to open V4L2 device at path '{selectedDevice.DevicePath}'.");
+            throw new Exception($"Failed to open device {decoderInfo.DevicePath}");
         }
 
-        return (v4L2Device, selectedDevice);
-    }
+        IDecoder? decoder;
 
-    private static void LogDeviceCapabilities(V4L2DeviceInfo deviceInfo, ILogger logger)
-    {
-        logger.LogInformation("Driver: {Driver}; Card: {Card}; Device Path: {Path}; DeviceCapabilities: {DeviceCapabilities}", deviceInfo.DriverName, deviceInfo.CardName, deviceInfo.DevicePath, deviceInfo.DeviceCapabilities);
-
-        logger.LogInformation("=== Supported Formats ===");
-        foreach (var format in deviceInfo.SupportedFormats)
+        if (decoderInfo.DecoderType == V4l2H264DecoderType.Stateful)
         {
-            logger.LogInformation("  Format: {Description} (FourCC: {FourCC})",
-                format.Description, format.PixelFormat);
+            decoder = V4l2H264StatefulDecoder.Create(
+                device,
+                LoggerFactory,
+                null,
+                drmBufferManager);
         }
-    }
-
-    private static MediaDevice GetMediaDevice()
-    {
-        // TODO: media device discovery
-        var mediaDevice = MediaDevice.Open("/dev/media0");
-        if (mediaDevice == null)
+        else if (decoderInfo.DecoderType == V4l2H264DecoderType.Stateless)
         {
-            throw new Exception("Not able to open /dev/media0");
+            var mediaDevice = MediaDevice.Open(decoderInfo.MediaDevicePath!);
+            if (mediaDevice == null)
+            {
+                throw new Exception($"Failed to open media device {decoderInfo.MediaDevicePath}");
+            }
+
+            decoder = V4l2H264StatelessDecoder.Create(
+                device,
+                mediaDevice,
+                LoggerFactory,
+                null,
+                drmBufferManager);
+        }
+        else
+        {
+            throw new Exception($"Unknown decoder type: {decoderInfo.DecoderType}");
         }
 
-        return mediaDevice;
+        decoder.Initialize();
+        return decoder;
     }
 
     private static FileStream GetFileStream()

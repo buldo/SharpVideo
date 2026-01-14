@@ -79,6 +79,27 @@ public static class V4L2Constants
     public static readonly uint VIDIOC_DECODER_CMD = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 96, 72); // sizeof(V4L2DecoderCmd)
     public static readonly uint VIDIOC_TRY_DECODER_CMD = IoctlConstants.IOWR(V4L2_IOCTL_MAGIC, 97, 72); // sizeof(V4L2DecoderCmd)
 
+    // Event ioctls
+    public static readonly uint VIDIOC_DQEVENT = IoctlConstants.IOR(V4L2_IOCTL_MAGIC, 89, 136); // sizeof(v4l2_event) = 136 on 64-bit Linux
+    public static readonly uint VIDIOC_SUBSCRIBE_EVENT = IoctlConstants.IOW(V4L2_IOCTL_MAGIC, 90, 32); // sizeof(v4l2_event_subscription)
+    public static readonly uint VIDIOC_UNSUBSCRIBE_EVENT = IoctlConstants.IOW(V4L2_IOCTL_MAGIC, 91, 32); // sizeof(v4l2_event_subscription)
+
+    // V4L2 Event types
+    public const uint V4L2_EVENT_ALL = 0;
+    public const uint V4L2_EVENT_VSYNC = 1;
+    public const uint V4L2_EVENT_EOS = 2;
+    public const uint V4L2_EVENT_CTRL = 3;
+    public const uint V4L2_EVENT_FRAME_SYNC = 4;
+    public const uint V4L2_EVENT_SOURCE_CHANGE = 5;
+    public const uint V4L2_EVENT_MOTION_DET = 6;
+
+    // Event subscription flags
+    public const uint V4L2_EVENT_SUB_FL_SEND_INITIAL = 1 << 0;
+    public const uint V4L2_EVENT_SUB_FL_ALLOW_FEEDBACK = 1 << 1;
+
+    // Source change event flags (in v4l2_event_src_change.changes)
+    public const uint V4L2_EVENT_SRC_CH_RESOLUTION = 1 << 0;
+
     // Other useful constants
     public const uint VIDEO_MAX_FRAME = 32;
     public const uint VIDEO_MAX_PLANES = 8;

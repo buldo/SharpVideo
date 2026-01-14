@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
 
-using SharpVideo.Decoding.V4l2.Stateless;
+using SharpVideo.Decoding;
 using SharpVideo.Utils;
 using SharpVideo.V4L2Decoding.NaluSources;
 
@@ -14,7 +14,7 @@ namespace SharpVideo.V4L2DecodeDrmPreviewDemo2;
 public class Player
 {
     private readonly DrmPresenter _presenter;
-    private readonly V4l2H264StatelessDecoder _decoder;
+    private readonly BaseDecoder<SharedDmaBuffer> _decoder;
     private readonly ILogger<Player> _logger;
     private readonly ILoggerFactory _loggerFactory;
     // Use bounded capacity to limit latency - max 3 frames in display queue
@@ -30,7 +30,7 @@ public class Player
 
     public Player(
         DrmPresenter presenter,
-        V4l2H264StatelessDecoder decoder,
+        BaseDecoder<SharedDmaBuffer> decoder,
         ILoggerFactory loggerFactory)
     {
         _presenter = presenter;

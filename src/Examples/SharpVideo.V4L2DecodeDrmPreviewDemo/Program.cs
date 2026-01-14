@@ -65,16 +65,32 @@ internal class Program
             Logger);
 
         // Configure z-order: Primary plane (transparent) on top, Overlay plane (video) below
+        // Note: Z-position may not be supported on all hardware (e.g., some Raspberry Pi configurations)
         Logger.LogInformation("Configuring plane z-order: video below, transparent primary on top");
         var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
         var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
 
         if (primaryZposRange.HasValue && overlayZposRange.HasValue)
         {
-            presenter.PrimaryPlane.SetPlaneZPosition(primaryZposRange.Value.max);  // Primary on top
-            presenter.OverlayPlane.SetPlaneZPosition(overlayZposRange.Value.min);  // Video below
-            Logger.LogInformation("Set Primary zpos={PrimaryZ} (top), Overlay zpos={OverlayZ} (bottom)",
-                primaryZposRange.Value.max, overlayZposRange.Value.min);
+            var primarySuccess = presenter.PrimaryPlane.SetPlaneZPosition(primaryZposRange.Value.max);
+            var overlaySuccess = presenter.OverlayPlane.SetPlaneZPosition(overlayZposRange.Value.min);
+
+            if (primarySuccess && overlaySuccess)
+            {
+                Logger.LogInformation("Set Primary zpos={PrimaryZ} (top), Overlay zpos={OverlayZ} (bottom)",
+                    primaryZposRange.Value.max, overlayZposRange.Value.min);
+            }
+            else
+            {
+                Logger.LogWarning("Failed to set z-position: Primary={PrimarySuccess}, Overlay={OverlaySuccess}. " +
+                    "Using default layer ordering.", primarySuccess, overlaySuccess);
+            }
+        }
+        else
+        {
+            Logger.LogWarning("Z-position not supported on this hardware. Primary zpos available: {PrimaryAvail}, " +
+                "Overlay zpos available: {OverlayAvail}. Using default layer ordering.",
+                primaryZposRange.HasValue, overlayZposRange.HasValue);
         }
 
         var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
