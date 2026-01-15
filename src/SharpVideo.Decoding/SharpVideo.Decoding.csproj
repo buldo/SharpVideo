@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Title>SharpVideo decoding library</Title>
+    <Description>Ffmpeg and V4L2 h264 decoding</Description>
   </PropertyGroup>
 
   <ItemGroup>

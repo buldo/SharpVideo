@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Title>SharpVideo ImGui in DRM mode</Title>
+    <Description>Helpers to run ImGui in DRM environment</Description>
   </PropertyGroup>
 
   <ItemGroup>

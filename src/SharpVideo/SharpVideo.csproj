@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Title>SharpVideo</Title>
+    <Description>Some management abstractions over V4L2, DRM, etc.</Description>
   </PropertyGroup>
 
   <ItemGroup>

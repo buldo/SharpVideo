@@ -5,6 +5,9 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Title>SharpVideo Utils</Title>
+    <Description>Random SharpVideo utils classes</Description>
 	</PropertyGroup>
 
 	<ItemGroup>

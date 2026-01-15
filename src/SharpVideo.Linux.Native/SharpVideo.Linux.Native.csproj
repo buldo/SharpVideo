@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <Title>SharpVideo Linux Bindings</Title>
+    <Description>Bindings to multible linux libraries such as DRM, GBM, V2L2, LibC, etc.</Description>
   </PropertyGroup>
 
 </Project>
