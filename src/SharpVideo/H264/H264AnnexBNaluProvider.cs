@@ -4,11 +4,23 @@ using System.Threading.Channels;
 
 namespace SharpVideo.H264;
 
+/// <summary>
+/// High-performance H.264 Annex-B NAL unit parser.
+/// Optimized for low-latency video streaming applications.
+/// </summary>
 public class H264AnnexBNaluProvider : IDisposable
 {
-    private readonly Pipe _pipe = new Pipe();
-    private readonly Channel<H264Nalu> _channel = Channel.CreateUnbounded<H264Nalu>(new UnboundedChannelOptions
-    { SingleReader = true, SingleWriter = true });
+    private readonly Pipe _pipe = new(new PipeOptions(
+        minimumSegmentSize: 8192,           // 8KB segments for better memory locality
+        useSynchronizationContext: false)); // Avoid sync context overhead
+
+    private readonly Channel<H264Nalu> _channel = Channel.CreateBounded<H264Nalu>(
+        new BoundedChannelOptions(32) // Bounded for back-pressure and lower latency
+        {
+            SingleReader = true,
+            SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait
+        });
 
     private readonly CancellationTokenSource _cancellationTokenSource = new();
     private readonly Task _processingTask;
@@ -34,7 +46,7 @@ public class H264AnnexBNaluProvider : IDisposable
     private async Task ProcessNalusAsync(CancellationToken cancellationToken)
     {
         var reader = _pipe.Reader;
-        byte[] buffer = _arrayPool.Rent(128 * 1024); // 128KB initial buffer
+        byte[] buffer = _arrayPool.Rent(64 * 1024); // 64KB initial buffer (reduced from 128KB)
         int bufferLength = 0;
 
         try
@@ -94,8 +106,9 @@ public class H264AnnexBNaluProvider : IDisposable
         int requiredLength = bufferLength + data.Length;
         if (requiredLength > buffer.Length)
         {
-            // Need to resize - rent bigger buffer
-            byte[] newBuffer = _arrayPool.Rent(requiredLength * 2);
+            // Need to resize - rent bigger buffer (use power of 2 sizing)
+            int newSize = Math.Max(buffer.Length * 2, requiredLength);
+            byte[] newBuffer = _arrayPool.Rent(newSize);
             buffer.AsSpan(0, bufferLength).CopyTo(newBuffer);
             _arrayPool.Return(buffer);
             buffer = newBuffer;
@@ -119,46 +132,28 @@ public class H264AnnexBNaluProvider : IDisposable
         List<int>? startPositionsList = null;
         int startPositionsCount = 0;
 
-        // Find all start code positions - optimized loop
+        // Find all start code positions - optimized loop with early exit
         var bufferSpan = buffer.AsSpan(0, bufferLength);
-        for (int i = 0; i <= bufferLength - 3; i++)
+        int searchEnd = bufferLength - 3;
+
+        for (int i = 0; i <= searchEnd; i++)
         {
+            // Quick pre-check: first byte must be 0
+            if (bufferSpan[i] != 0x00)
+                continue;
+
             // Check for 4-byte start code: 0x00 0x00 0x00 0x01
             if (i <= bufferLength - 4 &&
-                bufferSpan[i] == 0x00 && bufferSpan[i + 1] == 0x00 &&
+                bufferSpan[i + 1] == 0x00 &&
                 bufferSpan[i + 2] == 0x00 && bufferSpan[i + 3] == 0x01)
             {
-                if (startPositionsCount < 64)
-                    startPositionsStack[startPositionsCount] = i;
-                else
-                {
-                    if (startPositionsList == null)
-                    {
-                        startPositionsList = new List<int>(128);
-                        for (int j = 0; j < 64; j++)
-                            startPositionsList.Add(startPositionsStack[j]);
-                    }
-                    startPositionsList.Add(i);
-                }
-                startPositionsCount++;
+                AddStartPosition(ref startPositionsStack, ref startPositionsList, ref startPositionsCount, i);
                 i += 3; // Skip ahead to avoid overlapping matches
             }
             // Check for 3-byte start code: 0x00 0x00 0x01
-            else if (bufferSpan[i] == 0x00 && bufferSpan[i + 1] == 0x00 && bufferSpan[i + 2] == 0x01)
+            else if (bufferSpan[i + 1] == 0x00 && bufferSpan[i + 2] == 0x01)
             {
-                if (startPositionsCount < 64)
-                    startPositionsStack[startPositionsCount] = i;
-                else
-                {
-                    if (startPositionsList == null)
-                    {
-                        startPositionsList = new List<int>(128);
-                        for (int j = 0; j < 64; j++)
-                            startPositionsList.Add(startPositionsStack[j]);
-                    }
-                    startPositionsList.Add(i);
-                }
-                startPositionsCount++;
+                AddStartPosition(ref startPositionsStack, ref startPositionsList, ref startPositionsCount, i);
                 i += 2; // Skip ahead to avoid overlapping matches
             }
         }
@@ -175,14 +170,13 @@ public class H264AnnexBNaluProvider : IDisposable
             var startCodeLength = GetStartCodeLength(bufferSpan, startPos);
             var naluLength = nextStartPos - startPos;
 
-            if (naluLength > 0)
+            if (naluLength > startCodeLength) // Ensure there's actual payload
             {
-                // Use ArrayPool for NALU data
-                var naluData = _arrayPool.Rent(naluLength);
+                // Allocate exact size for NALU data - avoid extra copy
+                var naluData = new byte[naluLength];
                 bufferSpan.Slice(startPos, naluLength).CopyTo(naluData);
 
-                var nalu = new H264Nalu(naluData.AsSpan(0, naluLength).ToArray(), startCodeLength);
-                _arrayPool.Return(naluData);
+                var nalu = new H264Nalu(naluData, startCodeLength);
 
                 // Use synchronous write - we're already in a background task
                 if (!_channel.Writer.TryWrite(nalu))
@@ -207,6 +201,25 @@ public class H264AnnexBNaluProvider : IDisposable
         }
 
         return bufferLength;
+    }
+
+    private static void AddStartPosition(ref Span<int> stackSpan, ref List<int>? list, ref int count, int position)
+    {
+        if (count < 64)
+        {
+            stackSpan[count] = position;
+        }
+        else
+        {
+            if (list == null)
+            {
+                list = new List<int>(128);
+                for (int j = 0; j < 64; j++)
+                    list.Add(stackSpan[j]);
+            }
+            list.Add(position);
+        }
+        count++;
     }
 
     private void ProcessFinalNaluSync(Span<byte> buffer)

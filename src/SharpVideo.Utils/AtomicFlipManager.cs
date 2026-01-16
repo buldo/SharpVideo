@@ -11,12 +11,12 @@ namespace SharpVideo.Utils;
 /// <summary>
 /// Manages atomic modesetting with VBlank-synchronized display.
 /// Implements a latency-optimized algorithm that always displays the latest available frame.
-/// 
-/// IMPORTANT: The DRM device MUST have DRM_CLIENT_CAP_ATOMIC capability enabled before 
+///
+/// IMPORTANT: The DRM device MUST have DRM_CLIENT_CAP_ATOMIC capability enabled before
 /// creating this manager. Caller is responsible for verifying:
 ///   if (!drmDevice.TrySetClientCapability(DRM_CLIENT_CAP_ATOMIC, true, out _))
 ///       throw or fallback to legacy mode
-/// 
+///
 /// This class assumes atomic mode is available and will fail fast if operations fail.
 /// </summary>
 [SupportedOSPlatform("linux")]
@@ -53,10 +53,10 @@ public unsafe class AtomicFlipManager : IDisposable
 
     /// <summary>
     /// Creates a new atomic flip manager for the specified plane.
-    /// 
+    ///
     /// PRECONDITION: Caller MUST have verified DRM_CLIENT_CAP_ATOMIC is enabled:
     ///   drmDevice.TrySetClientCapability(DRM_CLIENT_CAP_ATOMIC, true, out _) == true
-    /// 
+    ///
     /// This constructor will validate atomic properties but assumes atomic mode is available.
     /// </summary>
     /// <exception cref="ArgumentException">If atomic properties are invalid or incomplete</exception>
@@ -76,7 +76,7 @@ public unsafe class AtomicFlipManager : IDisposable
         ArgumentNullException.ThrowIfNull(drmPlane);
         ArgumentNullException.ThrowIfNull(props);
         ArgumentNullException.ThrowIfNull(logger);
-        
+
         // Validate atomic properties are complete (fail-fast)
         if (!props.IsValid())
         {
@@ -121,7 +121,7 @@ public unsafe class AtomicFlipManager : IDisposable
         _eventThread.Start();
 
         _logger.LogInformation("Atomic display manager initialized with VBlank synchronization");
-        
+
         if (blendConfig != null)
         {
             _logger.LogInformation("Blend configuration: Mode={Mode}, Alpha={Alpha}, ZPos={ZPos}",
@@ -164,9 +164,30 @@ public unsafe class AtomicFlipManager : IDisposable
     {
         lock (_lock)
         {
+            if (_completedBuffers.Count == 0)
+            {
+                return [];
+            }
             var result = _completedBuffers.ToArray();
             _completedBuffers.Clear();
             return result;
+        }
+    }
+
+    /// <summary>
+    /// Copy all completed buffers to the destination span and return the count.
+    /// More efficient than GetCompletedBuffers() as it avoids allocations.
+    /// </summary>
+    public int GetCompletedBuffers(Span<SharedDmaBuffer> destination)
+    {
+        lock (_lock)
+        {
+            int count = Math.Min(_completedBuffers.Count, destination.Length);
+            for (int i = 0; i < count; i++)
+            {
+                destination[i] = _completedBuffers.Dequeue();
+            }
+            return count;
         }
     }
 
@@ -316,7 +337,8 @@ error:
 
         while (!_cts.Token.IsCancellationRequested)
         {
-            var ret = Libc.poll(ref pollFd, 1, 100); // 100ms timeout
+            // Reduced timeout for lower latency (was 100ms, now 16ms ~= 1 vsync at 60Hz)
+            var ret = Libc.poll(ref pollFd, 1, 16);
 
             if (ret > 0 && (pollFd.revents & PollEvents.POLLIN) != 0)
             {

@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Threading.Channels;
 
 using Microsoft.Extensions.Logging;
 
@@ -10,6 +10,18 @@ using SharpVideo.V4L2Decoding.NaluSources;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo2;
 
+/// <summary>
+/// Optimized video player with minimal latency pipeline.
+/// Uses a simplified 2-thread model:
+/// - Decode thread: reads NALUs and submits to decoder
+/// - Display thread: receives decoded frames directly and presents them
+/// </summary>
+/// <remarks>
+/// Latency optimizations:
+/// 1. Single-element channel between decoder and display (minimal buffering)
+/// 2. Direct display from decoder output - no intermediate queue
+/// 3. Reduced NALU source buffer size for faster initial frame display
+/// </remarks>
 [SupportedOSPlatform("linux")]
 public class Player
 {
@@ -17,10 +29,21 @@ public class Player
     private readonly BaseDecoder<SharedDmaBuffer> _decoder;
     private readonly ILogger<Player> _logger;
     private readonly ILoggerFactory _loggerFactory;
-    // Use bounded capacity to limit latency - max 3 frames in display queue
-    private readonly BlockingCollection<SharedDmaBuffer> _buffersToPresent = new(boundedCapacity: 3);
-    private readonly CancellationTokenSource _displayCts = new();
-    private readonly CancellationTokenSource _decoderOutputCts = new();
+
+    // Pre-allocated buffer for requeue operations to avoid allocations in hot path
+    private readonly SharedDmaBuffer[] _requeueBuffer = new SharedDmaBuffer[4];
+
+    // Use bounded channel with capacity 1 for minimal latency
+    // This means we only buffer at most 1 frame between decode and display
+    private readonly Channel<SharedDmaBuffer> _frameChannel = Channel.CreateBounded<SharedDmaBuffer>(
+        new BoundedChannelOptions(1)
+        {
+            SingleReader = true,
+            SingleWriter = true,
+            FullMode = BoundedChannelFullMode.Wait
+        });
+
+    private readonly CancellationTokenSource _cts = new();
 
     private Task? _decodeTask;
     private Task? _displayTask;
@@ -48,14 +71,14 @@ public class Player
 
     public void StartPlay(FileStream fileStream)
     {
-        // Start thread that receives decoded frames from decoder and queues for display
-        _decoderOutputTask = Task.Run(() => DecoderOutputRoutine(_decoderOutputCts.Token));
+        // Start display thread first - it will wait for frames
+        _displayTask = Task.Run(() => DisplayRoutineAsync(_cts.Token));
+
+        // Start decoder output processor - bridges decoder blocking API to channel
+        _decoderOutputTask = Task.Run(() => DecoderOutputRoutineAsync(_cts.Token));
 
         // Start decoding (feeds NALUs to decoder)
         _decodeTask = Task.Run(() => DecodeLocalAsync(fileStream));
-
-        // Start display thread
-        _displayTask = Task.Run(() => DisplayRoutine(_displayCts.Token));
     }
 
     public void WaitCompleted()
@@ -63,36 +86,32 @@ public class Player
         // Wait for decoding to finish
         _decodeCompleted.Wait();
 
-        // Stop decoder output thread
-        _decoderOutputCts.Cancel();
-        _decoderOutputTask?.Wait();
+        // Give decoder output thread time to process remaining frames
+        // before cancelling
+        Thread.Sleep(100);
 
-        // Mark display queue as complete
-        _buffersToPresent.CompleteAdding();
+        // Signal cancellation and complete the channel
+        _cts.Cancel();
+        _frameChannel.Writer.TryComplete();
 
-        // Wait for display to finish remaining frames
-        _displayTask?.Wait();
-
-        _decodeTask?.Wait();
-    }
-
-    private void ProcessBuffer(SharedDmaBuffer buffer)
-    {
-        Statistics.IncrementDecodedFrames();
-
-        // Add to display queue - blocks if queue is full (back-pressure)
-        _buffersToPresent.Add(buffer);
-
-        if (_logger.IsEnabled(LogLevel.Trace))
+        // Wait for all tasks to finish
+        try
         {
-            _logger.LogTrace("Frame decoded: {DecodedCount}, queue size: {QueueSize}",
-                Statistics.DecodedFrames, _buffersToPresent.Count);
+            Task.WaitAll([_decodeTask!, _decoderOutputTask!, _displayTask!], TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException)
+        {
+            // Expected when cancelled
         }
     }
 
     private async Task DecodeLocalAsync(FileStream fileStream)
     {
-        await using var naluSource = new StreamNaluSource(fileStream, _loggerFactory.CreateLogger<StreamNaluSource>());
+        // Use smaller NALU queue for reduced latency (was 100, now 16)
+        await using var naluSource = new StreamNaluSource(
+            fileStream,
+            _loggerFactory.CreateLogger<StreamNaluSource>(),
+            queueCapacity: 16);
         await naluSource.StartAsync();
 
         var queue = naluSource.NaluQueue;
@@ -107,55 +126,80 @@ public class Player
         _decodeCompleted.Set();
     }
 
-    private void DecoderOutputRoutine(CancellationToken cancellationToken)
+    private async Task DecoderOutputRoutineAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Decoder output thread started");
+        var decodeStopwatch = Stopwatch.StartNew();
 
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                // This blocks until a frame is available
-                var decodedFrame = _decoder.WaitForDecodedFrames();
-                ProcessBuffer(decodedFrame);
+                SharedDmaBuffer decodedFrame;
+                try
+                {
+                    // This blocks until a frame is available
+                    decodedFrame = _decoder.WaitForDecodedFrames();
+                }
+                catch (InvalidOperationException)
+                {
+                    // BlockingCollection was completed
+                    break;
+                }
+
+                Statistics.IncrementDecodedFrames();
+
+                // Try synchronous write first to avoid async overhead
+                // Channel capacity is 1, so this will succeed most of the time when display keeps up
+                if (!_frameChannel.Writer.TryWrite(decodedFrame))
+                {
+                    await _frameChannel.Writer.WriteAsync(decodedFrame, cancellationToken);
+                }
+
+                if (_logger.IsEnabled(LogLevel.Trace))
+                {
+                    _logger.LogTrace("Frame decoded: {DecodedCount}", Statistics.DecodedFrames);
+                }
             }
-            catch (InvalidOperationException)
-            {
-                // BlockingCollection was completed
-                break;
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected
+        }
+        finally
+        {
+            decodeStopwatch.Stop();
+            Statistics.DecodeElapsed = decodeStopwatch.Elapsed;
+            _frameChannel.Writer.TryComplete();
         }
 
         _logger.LogInformation("Decoder output thread stopped");
     }
 
-    private void DisplayRoutine(CancellationToken cancellationToken)
+    private async Task DisplayRoutineAsync(CancellationToken cancellationToken)
     {
         _logger.LogInformation("Display thread started");
         var displayStopwatch = Stopwatch.StartNew();
 
         try
         {
-            foreach (var buffer in _buffersToPresent.GetConsumingEnumerable(cancellationToken))
+            await foreach (var buffer in _frameChannel.Reader.ReadAllAsync(cancellationToken))
             {
                 if (_logger.IsEnabled(LogLevel.Trace))
                 {
-                    _logger.LogTrace("Presenting frame {FrameNumber}; InQueue: {InQueue}",
-                        Statistics.PresentedFrames + 1, _buffersToPresent.Count);
+                    _logger.LogTrace("Presenting frame {FrameNumber}", Statistics.PresentedFrames + 1);
                 }
 
                 _presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(buffer);
                 Statistics.IncrementPresentedFrames();
-                var toRequeue = _presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers();
+
+                // Use pre-allocated buffer to avoid allocations in hot path
+                var requeueCount = _presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers(_requeueBuffer);
 
                 // Batch requeue for better performance
-                for (int i = 0; i < toRequeue.Length; i++)
+                for (int i = 0; i < requeueCount; i++)
                 {
-                    _decoder.ReuseDecodedFrame(toRequeue[i]);
+                    _decoder.ReuseDecodedFrame(_requeueBuffer[i]);
                 }
             }
         }

@@ -294,8 +294,8 @@ public class V4l2H264StatefulDecoder : BaseDecoder<SharedDmaBuffer>
             // The WaitForReadyBuffer implementation uses poll internally
             CheckAndHandleEvents();
 
-            // Wait for decoded frame
-            var dequeuedBuffer = _device.CaptureMPlaneQueue.WaitForReadyBuffer(100); // 100ms timeout
+            // Wait for decoded frame - reduced timeout for lower latency (was 100ms)
+            var dequeuedBuffer = _device.CaptureMPlaneQueue.WaitForReadyBuffer(16); // ~1 frame at 60fps
             if (dequeuedBuffer == null)
             {
                 // Check if EOS was received and no more pending buffers

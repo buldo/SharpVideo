@@ -114,9 +114,33 @@ public class DrmPlaneLastDmaBufferPresenter: DrmSinglePlanePresenter
             return _atomicDisplayManager.GetCompletedBuffers();
         }
 
+        if (_processedBuffers.Count == 0)
+        {
+            return [];
+        }
         var ret = _processedBuffers.ToArray();
         _processedBuffers.Clear();
         return ret;
+    }
+
+    /// <summary>
+    /// Copy completed buffers to the destination span. Returns the count of buffers copied.
+    /// More efficient than GetPresentedOverlayBuffers() as it avoids allocations.
+    /// </summary>
+    public int GetPresentedOverlayBuffers(Span<SharedDmaBuffer> destination)
+    {
+        if (_atomicDisplayManager != null)
+        {
+            return _atomicDisplayManager.GetCompletedBuffers(destination);
+        }
+
+        int count = Math.Min(_processedBuffers.Count, destination.Length);
+        for (int i = 0; i < count; i++)
+        {
+            destination[i] = _processedBuffers[i];
+        }
+        _processedBuffers.RemoveRange(0, count);
+        return count;
     }
 
     public override void Cleanup()
