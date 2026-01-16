@@ -604,8 +604,8 @@ public class V4l2H264StatelessDecoder : BaseDecoder<SharedDmaBuffer>
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            // Reduced timeout for lower latency (was 1000ms, now 16ms ~= 1 frame at 60fps)
-            var dequeuedBuffer = _device!.CaptureMPlaneQueue.WaitForReadyBuffer(16);
+            // Reduced timeout for lower latency to support high frame rates (4ms ~= 1 frame at 240fps)
+            var dequeuedBuffer = _device!.CaptureMPlaneQueue.WaitForReadyBuffer(4);
             if (dequeuedBuffer == null)
             {
                 continue;

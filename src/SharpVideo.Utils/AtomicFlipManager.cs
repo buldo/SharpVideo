@@ -337,8 +337,8 @@ error:
 
         while (!_cts.Token.IsCancellationRequested)
         {
-            // Reduced timeout for lower latency (was 100ms, now 16ms ~= 1 vsync at 60Hz)
-            var ret = Libc.poll(ref pollFd, 1, 16);
+            // Reduced timeout for lower latency to support high frame rates (4ms ~= 1 frame at 240fps)
+            var ret = Libc.poll(ref pollFd, 1, 4);
 
             if (ret > 0 && (pollFd.revents & PollEvents.POLLIN) != 0)
             {
