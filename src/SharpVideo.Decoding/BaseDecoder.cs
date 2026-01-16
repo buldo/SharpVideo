@@ -80,6 +80,16 @@ public abstract class BaseDecoder<TOutputBuffer> : IDisposable, IDecoder
     }
 
     /// <summary>
+    /// Non-blocking attempt to get a decoded frame.
+    /// </summary>
+    /// <param name="frame">The decoded frame if available.</param>
+    /// <returns>True if a frame was available, false otherwise.</returns>
+    public bool TryTakeDecodedFrame(out TOutputBuffer? frame)
+    {
+        return _decodedFramesOutput.TryTake(out frame);
+    }
+
+    /// <summary>
     /// Returns a displayed frame for reuse by the decoder.
     /// </summary>
     /// <param name="decodedFrame">The frame to return.</param>
