@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -115,13 +116,13 @@ public sealed class DualPlanePresenter2 : IDisposable
     private volatile SharedDmaBuffer? _pendingVideoBuffer;
     private SharedDmaBuffer? _committedVideoBuffer;
     private SharedDmaBuffer? _displayingVideoBuffer;
-    private SharedDmaBuffer? _releasedVideoBuffer;
+    private readonly ConcurrentQueue<SharedDmaBuffer> _releasedVideoBuffers = new();
 
     // OSD plane buffer tracking (max 3 in flight)
     private volatile nint _pendingOsdBo;
     private nint _committedOsdBo;
     private nint _displayingOsdBo;
-    private nint _releasedOsdBo;
+    private readonly ConcurrentQueue<nint> _releasedOsdBuffers = new();
     private uint _currentOsdFbId;
 
     // Commit thread synchronization
@@ -229,16 +230,21 @@ public sealed class DualPlanePresenter2 : IDisposable
 
     /// <summary>
     /// Enqueues a video frame for display. Returns immediately.
-    /// If a frame was already pending and not yet committed, it is returned immediately.
+    /// If a frame was already pending and not yet committed, it is returned as 'replaced'.
+    /// Also drains any released buffers into the destination span.
     /// The framebuffer is created automatically from the DMA buffer if needed.
     /// </summary>
     /// <param name="buffer">The video buffer to display.</param>
+    /// <param name="releasedDestination">Span to copy released buffers into.</param>
     /// <returns>
-    /// The previous pending buffer that was replaced (caller should return it to decoder),
-    /// or null if no buffer was replaced.
+    /// A tuple containing:
+    /// - replaced: The previous pending buffer that was replaced (caller should return it to decoder), or null if none.
+    /// - releasedCount: Number of released buffers copied into releasedDestination.
     /// </returns>
     /// <exception cref="InvalidOperationException">If video plane is not enabled.</exception>
-    public SharedDmaBuffer? EnqueueVideoFrame(SharedDmaBuffer buffer)
+    public (SharedDmaBuffer? replaced, int releasedCount) EnqueueVideoFrame(
+        SharedDmaBuffer buffer,
+        Span<SharedDmaBuffer> releasedDestination)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -250,19 +256,28 @@ public sealed class DualPlanePresenter2 : IDisposable
         ArgumentNullException.ThrowIfNull(buffer);
 
         // Atomically replace pending buffer
-        var previous = Interlocked.Exchange(ref _pendingVideoBuffer, buffer);
+        var replaced = Interlocked.Exchange(ref _pendingVideoBuffer, buffer);
 
         // Signal commit thread
         _commitSignal.Set();
 
-        return previous;
+        // Drain released buffers
+        int releasedCount = 0;
+        while (releasedCount < releasedDestination.Length &&
+               _releasedVideoBuffers.TryDequeue(out var released))
+        {
+            releasedDestination[releasedCount++] = released;
+        }
+
+        return (replaced, releasedCount);
     }
 
     /// <summary>
     /// Gets released video buffers that have finished displaying and can be returned to the decoder.
+    /// Drains all available buffers from the release queue.
     /// </summary>
     /// <param name="destination">Span to copy released buffers into.</param>
-    /// <returns>Number of buffers copied (0 or 1).</returns>
+    /// <returns>Number of buffers copied.</returns>
     public int GetReleasedVideoBuffers(Span<SharedDmaBuffer> destination)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -270,22 +285,29 @@ public sealed class DualPlanePresenter2 : IDisposable
         if (destination.IsEmpty)
             return 0;
 
-        var released = Interlocked.Exchange(ref _releasedVideoBuffer, null);
-        if (released != null)
+        int count = 0;
+        while (count < destination.Length && _releasedVideoBuffers.TryDequeue(out var released))
         {
-            destination[0] = released;
-            return 1;
+            destination[count++] = released;
         }
 
-        return 0;
+        return count;
     }
 
     /// <summary>
     /// Sets the OSD buffer to display.
+    /// If a buffer was already pending and not yet committed, it is returned as 'replaced'.
+    /// Also drains any released buffers into the destination span.
     /// </summary>
     /// <param name="gbmBo">The GBM buffer object handle from eglSwapBuffers/gbm_surface_lock_front_buffer.</param>
+    /// <param name="releasedDestination">Span to copy released buffers into.</param>
+    /// <returns>
+    /// A tuple containing:
+    /// - replaced: The previous pending buffer that was replaced, or 0 if none.
+    /// - releasedCount: Number of released buffers copied into releasedDestination.
+    /// </returns>
     /// <exception cref="InvalidOperationException">If OSD plane is not enabled.</exception>
-    public void SetOsdBuffer(nint gbmBo)
+    public (nint replaced, int releasedCount) SetOsdBuffer(nint gbmBo, Span<nint> releasedDestination)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -295,22 +317,43 @@ public sealed class DualPlanePresenter2 : IDisposable
         }
 
         // Atomically replace pending OSD buffer
-        Interlocked.Exchange(ref _pendingOsdBo, gbmBo);
+        var replaced = Interlocked.Exchange(ref _pendingOsdBo, gbmBo);
 
         // Signal commit thread
         _commitSignal.Set();
+
+        // Drain released buffers
+        int releasedCount = 0;
+        while (releasedCount < releasedDestination.Length &&
+               _releasedOsdBuffers.TryDequeue(out var released))
+        {
+            releasedDestination[releasedCount++] = released;
+        }
+
+        return (replaced, releasedCount);
     }
 
     /// <summary>
-    /// Gets the released OSD buffer that has finished displaying.
-    /// The caller should release this back to the GBM surface.
+    /// Gets released OSD buffers that have finished displaying.
+    /// The caller should release these back to the GBM surface.
+    /// Drains all available buffers from the release queue.
     /// </summary>
-    /// <returns>The released buffer object handle, or 0 if none.</returns>
-    public nint GetReleasedOsdBuffer()
+    /// <param name="destination">Span to copy released buffers into.</param>
+    /// <returns>Number of buffers copied.</returns>
+    public int GetReleasedOsdBuffers(Span<nint> destination)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        return Interlocked.Exchange(ref _releasedOsdBo, 0);
+        if (destination.IsEmpty)
+            return 0;
+
+        int count = 0;
+        while (count < destination.Length && _releasedOsdBuffers.TryDequeue(out var released))
+        {
+            destination[count++] = released;
+        }
+
+        return count;
     }
 
     /// <summary>
@@ -337,7 +380,8 @@ public sealed class DualPlanePresenter2 : IDisposable
     }
 
     /// <summary>
-    /// Stops the commit thread.
+    /// Stops the commit thread and moves all in-flight buffers to the release queues.
+    /// Call GetReleasedVideoBuffers/GetReleasedOsdBuffers after Stop to retrieve all buffers.
     /// </summary>
     public void Stop()
     {
@@ -349,7 +393,41 @@ public sealed class DualPlanePresenter2 : IDisposable
         _commitThread.Join(TimeSpan.FromSeconds(2));
 
         _started = false;
-        _logger?.LogInformation("Commit thread stopped");
+
+        // Drain all in-flight buffers to release queues
+        var pendingVideo = Interlocked.Exchange(ref _pendingVideoBuffer, null);
+        if (pendingVideo != null)
+            _releasedVideoBuffers.Enqueue(pendingVideo);
+
+        if (_committedVideoBuffer != null)
+        {
+            _releasedVideoBuffers.Enqueue(_committedVideoBuffer);
+            _committedVideoBuffer = null;
+        }
+
+        if (_displayingVideoBuffer != null)
+        {
+            _releasedVideoBuffers.Enqueue(_displayingVideoBuffer);
+            _displayingVideoBuffer = null;
+        }
+
+        var pendingOsd = Interlocked.Exchange(ref _pendingOsdBo, 0);
+        if (pendingOsd != 0)
+            _releasedOsdBuffers.Enqueue(pendingOsd);
+
+        if (_committedOsdBo != 0)
+        {
+            _releasedOsdBuffers.Enqueue(_committedOsdBo);
+            _committedOsdBo = 0;
+        }
+
+        if (_displayingOsdBo != 0)
+        {
+            _releasedOsdBuffers.Enqueue(_displayingOsdBo);
+            _displayingOsdBo = 0;
+        }
+
+        _logger?.LogInformation("Commit thread stopped, in-flight buffers moved to release queues");
     }
 
     private unsafe void PerformModeset()
@@ -475,7 +553,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                     if (oldDisplaying != null)
                     {
                         // Release previous displaying buffer
-                        Interlocked.Exchange(ref _releasedVideoBuffer, oldDisplaying);
+                        _releasedVideoBuffers.Enqueue(oldDisplaying);
                     }
                 }
 
@@ -487,7 +565,7 @@ public sealed class DualPlanePresenter2 : IDisposable
 
                     if (oldDisplaying != 0)
                     {
-                        Interlocked.Exchange(ref _releasedOsdBo, oldDisplaying);
+                        _releasedOsdBuffers.Enqueue(oldDisplaying);
                     }
                 }
 
@@ -516,12 +594,12 @@ public sealed class DualPlanePresenter2 : IDisposable
                     // Return buffers on failure
                     if (videoBuffer != null)
                     {
-                        Interlocked.Exchange(ref _releasedVideoBuffer, videoBuffer);
+                        _releasedVideoBuffers.Enqueue(videoBuffer);
                     }
 
                     if (osdBo != 0)
                     {
-                        Interlocked.Exchange(ref _releasedOsdBo, osdBo);
+                        _releasedOsdBuffers.Enqueue(osdBo);
                     }
                 }
 

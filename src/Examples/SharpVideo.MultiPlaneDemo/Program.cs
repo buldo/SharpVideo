@@ -208,30 +208,31 @@ namespace SharpVideo.MultiPlaneExample
 
             Logger.LogInformation("Starting frame presentation ({FrameCount} frames)...", FrameCount);
 
-            // Set OSD buffer once at the start
-            presenter.SetOsdBuffer(osdBo);
+            // Set OSD buffer once at the start (no previous buffer to release)
+            presenter.SetOsdBuffer(osdBo, Span<nint>.Empty);
 
             var currentVideoIndex = 0;
-            var releasedBuffers = new SharedDmaBuffer[1];
+            var releasedBuffers = new SharedDmaBuffer[4]; // Can release multiple per call
 
             for (int frame = 0; frame < FrameCount; frame++)
             {
                 // Get a video buffer to submit
                 var currentVideoBuffer = videoBuffers[currentVideoIndex];
 
-                // Enqueue video frame - returns previously pending buffer if any
-                var replacedBuffer = presenter.EnqueueVideoFrame(currentVideoBuffer);
+                // Enqueue video frame - returns replaced buffer and drains release queue
+                var (replacedBuffer, releasedCount) = presenter.EnqueueVideoFrame(
+                    currentVideoBuffer,
+                    releasedBuffers);
+
                 if (replacedBuffer != null)
                 {
                     // Buffer was replaced before being committed, can reuse immediately
                     Logger.LogTrace("Frame {Frame}: Buffer replaced before commit", frame);
                 }
 
-                // Check for released video buffers (finished displaying)
-                var releasedCount = presenter.GetReleasedVideoBuffers(releasedBuffers);
                 if (releasedCount > 0)
                 {
-                    Logger.LogTrace("Frame {Frame}: Released {Count} video buffer(s)", frame, releasedCount);
+                    Logger.LogTrace("Frame {Frame}: Got {Count} released buffer(s) from EnqueueVideoFrame", frame, releasedCount);
                 }
 
                 // Cycle to next buffer
