@@ -1,34 +1,48 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 
 using Microsoft.Extensions.Logging;
 
+using SharpVideo.Decoding;
 using SharpVideo.Utils;
-using SharpVideo.V4L2Decoding.Services;
 using SharpVideo.V4L2Decoding.NaluSources;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
+/// <summary>
+/// Optimized video player with minimal latency pipeline using DualPlanePresenter2.
+/// Uses a simplified 2-thread model:
+/// - Decode thread: reads NALUs and submits to decoder
+/// - Display thread: receives decoded frames directly from BlockingCollection and presents them
+/// </summary>
+/// <remarks>
+/// Latency optimizations:
+/// 1. Direct read from decoder's BlockingCollection - no intermediate Channel
+/// 2. Reduced NALU source buffer size for faster initial frame display
+/// 3. Single display thread handles both decode output and presentation
+/// 4. Uses DualPlanePresenter2 with OUT_FENCE_PTR for precise buffer release timing
+/// </remarks>
 [SupportedOSPlatform("linux")]
 public class Player
 {
-    private readonly DrmPresenter _presenter;
-    private readonly H264V4L2StatelessDecoder _decoder;
+    private readonly DualPlanePresenter2 _presenter;
+    private readonly BaseDecoder<SharedDmaBuffer> _decoder;
     private readonly ILogger<Player> _logger;
     private readonly ILoggerFactory _loggerFactory;
-    // Use bounded capacity to limit latency - max 3 frames in display queue
-    private readonly BlockingCollection<SharedDmaBuffer> _buffersToPresent = new(boundedCapacity: 3);
-    private readonly CancellationTokenSource displayCts = new CancellationTokenSource();
 
-    private Task _decodeTask;
-    private Task _displayTask;
+    // Pre-allocated buffer for requeue operations to avoid allocations in hot path
+    private readonly SharedDmaBuffer[] _requeueBuffer = new SharedDmaBuffer[4];
 
-    private ManualResetEventSlim _decodeCompleted = new(false);
+    private readonly CancellationTokenSource _cts = new();
+
+    private Task? _decodeTask;
+    private Task? _displayTask;
+
+    private readonly ManualResetEventSlim _decodeCompleted = new(false);
 
     public Player(
-        DrmPresenter presenter,
-        H264V4L2StatelessDecoder decoder,
+        DualPlanePresenter2 presenter,
+        BaseDecoder<SharedDmaBuffer> decoder,
         ILoggerFactory loggerFactory)
     {
         _presenter = presenter;
@@ -41,87 +55,138 @@ public class Player
 
     public void Init()
     {
-        _decoder.InitializeDecoder(ProcessBuffer);
+        _decoder.Initialize();
     }
 
     public void StartPlay(FileStream fileStream)
     {
+        // Start the presenter commit thread
+        _presenter.Start();
+
+        // Start unified decode-display thread - reads from decoder and presents directly
+        _displayTask = Task.Run(() => DecodeAndDisplayRoutine(_cts.Token));
+
+        // Start decoding (feeds NALUs to decoder)
         _decodeTask = Task.Run(() => DecodeLocalAsync(fileStream));
-        _displayTask = Task.Run(() => DisplayRoutine(displayCts.Token));
     }
 
     public void WaitCompleted()
     {
+        // Wait for decoding to finish
         _decodeCompleted.Wait();
-        displayCts.Cancel(false);
-        Task.WaitAll(_decodeTask, _displayTask);
-        Statistics.DecodeElapsed = _decoder.Statistics.DecodeElapsed;
-    }
 
-    private void ProcessBuffer(SharedDmaBuffer buffer)
-    {
-        Statistics.IncrementDecodedFrames();
+        // Give display thread time to process remaining frames
+        Thread.Sleep(100);
 
-        // Add to display queue - blocks if queue is full (back-pressure)
-        _buffersToPresent.Add(buffer);
+        // Signal cancellation
+        _cts.Cancel();
 
-        if (_logger.IsEnabled(LogLevel.Trace))
+        // Wait for all tasks to finish
+        try
         {
-            _logger.LogTrace("Frame decoded: {DecodedCount}, queue size: {QueueSize}",
-                Statistics.DecodedFrames, _buffersToPresent.Count);
+            Task.WaitAll([_decodeTask!, _displayTask!], TimeSpan.FromSeconds(5));
+        }
+        catch (AggregateException)
+        {
+            // Expected when cancelled
+        }
+
+        // Stop the presenter
+        _presenter.Stop();
+
+        // Drain any remaining released buffers
+        var releasedCount = _presenter.GetReleasedVideoBuffers(_requeueBuffer);
+        for (int i = 0; i < releasedCount; i++)
+        {
+            _decoder.ReuseDecodedFrame(_requeueBuffer[i]);
         }
     }
 
     private async Task DecodeLocalAsync(FileStream fileStream)
     {
-        await using var naluSource = new StreamNaluSource(fileStream, _loggerFactory.CreateLogger<StreamNaluSource>());
+        // Use smaller NALU queue for reduced latency (optimized: 8 for more aggressive backpressure)
+        await using var naluSource = new StreamNaluSource(
+            fileStream,
+            _loggerFactory.CreateLogger<StreamNaluSource>(),
+            queueCapacity: 8);
         await naluSource.StartAsync();
-        _decoder.StartDecoding(naluSource);
 
-        // Wait for decoder thread to complete naturally (processes all NALUs from the queue)
-        // The decoder thread will exit when naluSource.NaluQueue.CompleteAdding() is called
-        // and all items are consumed
-        await _decoder.WaitForDecodingCompleteAsync();
+        var queue = naluSource.NaluQueue;
+
+        // Process all NALUs from the source
+        foreach (var nalu in queue.GetConsumingEnumerable())
+        {
+            _decoder.Decode(nalu.Data);
+            await Task.Delay(15);
+        }
+
+        _logger.LogInformation("All NALUs processed, signaling decode complete");
         _decodeCompleted.Set();
     }
 
-    private void DisplayRoutine(CancellationToken cancellationToken)
+    /// <summary>
+    /// Unified decode output and display routine.
+    /// Eliminates the intermediate Channel by reading directly from decoder's BlockingCollection.
+    /// </summary>
+    private void DecodeAndDisplayRoutine(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Display thread started");
-        var displayStopwatch = Stopwatch.StartNew();
-        while(!(cancellationToken.IsCancellationRequested && Statistics.DecodedFrames == Statistics.PresentedFrames))
+        _logger.LogInformation("Unified decode-display thread started");
+        var stopwatch = Stopwatch.StartNew();
+
+        try
         {
-            SharedDmaBuffer buffer;
-            try
+            while (!cancellationToken.IsCancellationRequested)
             {
-                buffer = _buffersToPresent.Take(cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+                SharedDmaBuffer decodedFrame;
+                try
+                {
+                    // This blocks until a frame is available - direct from decoder
+                    decodedFrame = _decoder.WaitForDecodedFrames();
+                }
+                catch (InvalidOperationException)
+                {
+                    // BlockingCollection was completed
+                    break;
+                }
 
-            if (_logger.IsEnabled(LogLevel.Trace))
-            {
-                _logger.LogTrace("Presenting frame {FrameNumber}; InQueue: {InQueue}",
-                    Statistics.PresentedFrames + 1, _buffersToPresent.Count);
-            }
+                Statistics.IncrementDecodedFrames();
 
-            _presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(buffer);
-            Statistics.IncrementPresentedFrames();
-            var toRequeue = _presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers();
+                if (_logger.IsEnabled(LogLevel.Trace))
+                {
+                    _logger.LogTrace("Presenting frame {FrameNumber}", Statistics.PresentedFrames + 1);
+                }
 
-            // Batch requeue for better performance
-            for (int i = 0; i < toRequeue.Length; i++)
-            {
-                _decoder.RequeueCaptureBuffer(toRequeue[i]);
+                // Present using DualPlanePresenter2's EnqueueVideoFrame
+                // Returns replaced buffer (if any) and drains release queue
+                var (replacedBuffer, releasedCount) = _presenter.EnqueueVideoFrame(
+                    decodedFrame,
+                    _requeueBuffer);
+
+                Statistics.IncrementPresentedFrames();
+
+                // Handle replaced buffer (was pending but not yet committed)
+                if (replacedBuffer != null)
+                {
+                    _decoder.ReuseDecodedFrame(replacedBuffer);
+                }
+
+                // Return released buffers to decoder for reuse
+                for (int i = 0; i < releasedCount; i++)
+                {
+                    _decoder.ReuseDecodedFrame(_requeueBuffer[i]);
+                }
             }
         }
-        displayStopwatch.Stop();
-        Statistics.PresentElapsed = displayStopwatch.Elapsed;
+        catch (OperationCanceledException)
+        {
+            // Expected when cancelled
+        }
 
-        _logger.LogInformation("Display thread stopped. Frames: {FrameCount}; Time: {Elapsed}s)",
-            Statistics.PresentedFrames, displayStopwatch.Elapsed.TotalSeconds);
+        stopwatch.Stop();
+        Statistics.DecodeElapsed = stopwatch.Elapsed;
+        Statistics.PresentElapsed = stopwatch.Elapsed;
+
+        _logger.LogInformation("Unified decode-display thread stopped. Frames: {FrameCount}; Time: {Elapsed}s)",
+            Statistics.PresentedFrames, stopwatch.Elapsed.TotalSeconds);
     }
-
 }

@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
 using System.Net;
 using System.Runtime.Versioning;
+using System.Text;
+
 using Hexa.NET.ImGui;
 using Microsoft.Extensions.Logging;
 using SharpVideo.DmaBuffers;
@@ -9,6 +11,7 @@ using SharpVideo.Gbm;
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.C;
 using SharpVideo.Utils;
+using SharpVideo.Utils.Buffers;
 using SharpVideo.V4L2;
 using SharpVideo.V4L2Decoding.Models;
 using SharpVideo.V4L2Decoding.Services;
@@ -17,8 +20,9 @@ using SharpVideo.ImGui;
 namespace SharpVideo.RtpPlayerDemo;
 
 /// <summary>
-/// RTP H.264 Player with V4L2 hardware decoding, DRM display, and ImGui OSD
-/// Receives RTP stream on UDP 0.0.0.0:5600 and displays video with statistics overlay
+/// RTP H.264 Player with V4L2 hardware decoding, DRM display using DualPlanePresenter2, and ImGui OSD
+/// Receives RTP stream on UDP 0.0.0.0:5600 and displays video with statistics overlay.
+/// Uses fence-based synchronization with DualPlanePresenter2.
 /// </summary>
 [SupportedOSPlatform("linux")]
 internal class Program
@@ -41,7 +45,7 @@ internal class Program
 
     static async Task Main(string[] args)
     {
-        Logger.LogInformation("=== SharpVideo RTP H.264 Player ===");
+        Logger.LogInformation("=== SharpVideo RTP H.264 Player (DualPlanePresenter2) ===");
         Logger.LogInformation("Listening on {Address}:{Port}", BindAddress, BindPort);
         Logger.LogInformation("Press ESC or Ctrl+C to exit");
 
@@ -79,6 +83,51 @@ internal class Program
         }
         drmDevice.EnableDrmCapabilities(Logger);
 
+        // Get device resources
+        var resources = drmDevice.GetResources();
+        if (resources == null)
+        {
+            throw new Exception("Failed to get DRM resources");
+        }
+
+        // Find connected connector
+        var connector = resources.Connectors
+            .FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
+
+        if (connector == null)
+        {
+            throw new Exception("No connected display found");
+        }
+
+        Logger.LogInformation("Found connector: {Type}-{TypeId} (ID: {Id})",
+            connector.ConnectorType, connector.ConnectorTypeId, connector.ConnectorId);
+
+        // Get display mode
+        var mode = connector.Modes
+            .FirstOrDefault(m => m.HDisplay == Width && m.VDisplay == Height)
+            ?? connector.Modes.FirstOrDefault();
+
+        if (mode == null)
+        {
+            throw new Exception("No suitable display mode found");
+        }
+
+        Logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{Hz}Hz)",
+            mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
+
+        // Get CRTC ID
+        uint crtcId = connector.Encoder?.CrtcId ?? 0;
+        if (crtcId == 0)
+        {
+            crtcId = resources.Crtcs.FirstOrDefault();
+            if (crtcId == 0)
+            {
+                throw new Exception("No CRTC found");
+            }
+        }
+
+        Logger.LogInformation("Using CRTC: {CrtcId}", crtcId);
+
         // Create GBM device for ImGui rendering
         var gbmDevice = GbmDevice.CreateFromDrmDevice(drmDevice);
         Logger.LogInformation("Created GBM device for ImGui rendering");
@@ -96,88 +145,65 @@ internal class Program
             [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_ARGB8888],
             drmBufferManagerLogger);
 
-        // Create unified DRM presenter with GBM atomic primary (ImGui) and DMA overlay (video)
-        var presenter = DrmPresenter.CreateWithGbmAtomicAndDmaOverlay(
-            drmDevice,
+        // Select planes for video (NV12) and OSD (ARGB8888)
+        DualPlaneSelection planeSelection;
+        try
+        {
+            planeSelection = DualPlaneSelector.Select(
+                drmDevice,
+                crtcId,
+                KnownPixelFormats.DRM_FORMAT_NV12.Fourcc,      // Video plane format
+                KnownPixelFormats.DRM_FORMAT_ARGB8888.Fourcc,  // OSD plane format
+                Logger);
+
+            Logger.LogInformation("Selected planes - Video: {VideoId}, OSD: {OsdId}",
+                planeSelection.VideoPlane.Id, planeSelection.OsdPlane.Id);
+            Logger.LogInformation("ZPos assignment - Video: {VideoZ} (immutable={VI}), OSD: {OsdZ} (immutable={OI})",
+                planeSelection.ZPos.VideoZPos, planeSelection.ZPos.VideoZPosImmutable,
+                planeSelection.ZPos.OsdZPos, planeSelection.ZPos.OsdZPosImmutable);
+        }
+        catch (DrmException ex)
+        {
+            Logger.LogError(ex, "Failed to select planes");
+            throw;
+        }
+
+        // Create GBM surface for OSD plane
+        var gbmSurface = GbmSurfaceHelper.CreateForRendering(
+            gbmDevice,
             Width,
             Height,
-            gbmDevice,
-            drmBufferManager,
-            KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary plane for ImGui
-            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane for video
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,
             Logger);
 
-        if (presenter == null)
-        {
-            throw new Exception("Failed to create unified DRM presenter");
-        }
+        // Build presenter configuration
+        var presenterConfig = DualPlanePresenterConfig.CreateBuilder()
+            .WithVideoPlane(planeSelection.VideoPlane, new PlaneDrawConfiguration(Width, Height))
+            .WithOsdPlane(planeSelection.OsdPlane, new PlaneDrawConfiguration(Width, Height))
+            .WithCrtc(crtcId)
+            .WithConnector(connector.ConnectorId)
+            .WithMode(ConvertToNativeMode(mode))
+            .WithZPos(planeSelection.ZPos)
+            .WithLogger(Logger)
+            .Build();
 
-        // Configure z-order: Primary plane (ImGui OSD) on top, Overlay plane (video) below
-        Logger.LogInformation("Configuring plane z-order...");
-        var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
-        var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
-
-        if (primaryZposRange.HasValue)
-        {
-            Logger.LogInformation("Primary plane zpos range: [{Min}, {Max}], current: {Current}",
-                primaryZposRange.Value.min, primaryZposRange.Value.max, primaryZposRange.Value.current);
-        }
-        else
-        {
-            Logger.LogWarning("Primary plane does not support zpos property");
-        }
-
-        if (overlayZposRange.HasValue)
-        {
-            Logger.LogInformation("Overlay plane zpos range: [{Min}, {Max}], current: {Current}",
-                overlayZposRange.Value.min, overlayZposRange.Value.max, overlayZposRange.Value.current);
-        }
-        else
-        {
-            Logger.LogWarning("Overlay plane does not support zpos property");
-        }
-
-        // Set z-position to make primary plane (OSD) appear on top of overlay (video)
-        if (primaryZposRange.HasValue && overlayZposRange.HasValue)
-        {
-            var primaryZpos = primaryZposRange.Value.max;
-            var overlayZpos = overlayZposRange.Value.min;
-
-            Logger.LogInformation("Setting Primary zpos={PrimaryZpos} (OSD on top), Overlay zpos={OverlayZpos} (video below)",
-                primaryZpos, overlayZpos);
-
-            var primarySuccess = presenter.PrimaryPlane.SetPlaneZPosition(primaryZpos);
-            var overlaySuccess = presenter.OverlayPlane.SetPlaneZPosition(overlayZpos);
-
-            if (primarySuccess && overlaySuccess)
-            {
-                Logger.LogInformation("Z-positioning successful: OSD will render on top of video");
-            }
-            else
-            {
-                Logger.LogWarning("Failed to set z-positions - OSD may not appear on top of video");
-            }
-        }
+        // Create the dual-plane presenter
+        using var presenter = new DualPlanePresenter2(drmDevice, presenterConfig);
+        presenter.Start();
 
         // Setup input manager
         Logger.LogInformation("Initializing input system...");
         using var inputManager = new InputManager((uint)Width, (uint)Height,
             LoggerFactory.CreateLogger<InputManager>());
 
-        // Configure ImGui - get GBM surface from atomic presenter
-        var gbmAtomicPresenter = presenter.AsGbmAtomicPresenter();
-        if (gbmAtomicPresenter == null)
-        {
-            throw new Exception("Failed to get GBM atomic presenter");
-        }
-
+        // Configure ImGui with the GBM surface
         var imguiConfig = new ImGuiDrmConfiguration
         {
             Width = (uint)Width,
             Height = (uint)Height,
             DrmDevice = drmDevice,
             GbmDevice = gbmDevice,
-            GbmSurfaceHandle = gbmAtomicPresenter.GetNativeGbmSurfaceHandle(),
+            GbmSurfaceHandle = gbmSurface.Handle,
             PixelFormat = KnownPixelFormats.DRM_FORMAT_ARGB8888,
             ConfigFlags = ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable,
             DrawCursor = true,
@@ -219,8 +245,8 @@ internal class Program
             new IPEndPoint(IPAddress.Parse(BindAddress), BindPort),
             LoggerFactory);
 
-        // Create decoder pipeline - presenter now works directly with overlay
-        await using var pipeline = new DecoderPipeline(
+        // Create decoder pipeline - now uses DualPlanePresenter2 for video
+        await using var pipeline = new DecoderPipeline2(
             rtpReceiver,
             decoder,
             presenter,
@@ -241,8 +267,15 @@ internal class Program
         Logger.LogInformation("Rendering initial warmup frame...");
         if (imguiManager.WarmupFrame(dt => osdRenderer.Render()))
         {
-            if (gbmAtomicPresenter.SubmitFrame())
+            var warmupBo = GbmSurfaceHelper.LockFrontBuffer(gbmSurface, Logger);
+            if (warmupBo != 0)
             {
+                var releasedBuffers = new nint[4];
+                var (replacedBo, _) = presenter.SetOsdBuffer(warmupBo, releasedBuffers);
+                if (replacedBo != 0)
+                {
+                    GbmSurfaceHelper.ReleaseBuffer(gbmSurface, replacedBo);
+                }
                 Logger.LogInformation("Warmup frame submitted successfully");
             }
         }
@@ -250,11 +283,21 @@ internal class Program
         Thread.Sleep(100);
 
         // Main loop
-        await RunMainLoopAsync(imguiManager, gbmAtomicPresenter, inputManager, osdRenderer, pipeline.Statistics, cancellationToken);
+        await RunMainLoopAsync(imguiManager, presenter, gbmSurface, inputManager, osdRenderer, pipeline.Statistics, cancellationToken);
 
         // Cleanup
         await pipeline.StopAsync();
-        presenter.Dispose();
+        presenter.Stop();
+
+        // Drain any remaining OSD buffers
+        var finalReleasedBuffers = new nint[4];
+        var releasedCount = presenter.GetReleasedOsdBuffers(finalReleasedBuffers);
+        for (int i = 0; i < releasedCount; i++)
+        {
+            GbmSurfaceHelper.ReleaseBuffer(gbmSurface, finalReleasedBuffers[i]);
+        }
+
+        gbmSurface.Dispose();
         gbmDevice.Dispose();
         drmDevice.Dispose();
 
@@ -272,7 +315,8 @@ internal class Program
 
     private static async Task RunMainLoopAsync(
         ImGuiManager imguiManager,
-        DrmPlaneGbmAtomicPresenter primaryPresenter,
+        DualPlanePresenter2 presenter,
+        GbmSurface gbmSurface,
         InputManager inputManager,
         OsdRenderer osdRenderer,
         PlayerStatistics statistics,
@@ -287,6 +331,7 @@ internal class Program
         var exiting = false;
 
         var inputFd = inputManager.GetFileDescriptor();
+        var releasedOsdBuffers = new nint[4];
 
         while (!exiting)
         {
@@ -328,8 +373,25 @@ internal class Program
 
                 if (frameRendered)
                 {
-                    if (primaryPresenter.SubmitFrame())
+                    // Lock front buffer from GBM surface
+                    var osdBo = GbmSurfaceHelper.LockFrontBuffer(gbmSurface, Logger);
+                    if (osdBo != 0)
                     {
+                        // Submit to presenter
+                        var (replacedBo, releasedCount) = presenter.SetOsdBuffer(osdBo, releasedOsdBuffers);
+
+                        // Release replaced buffer
+                        if (replacedBo != 0)
+                        {
+                            GbmSurfaceHelper.ReleaseBuffer(gbmSurface, replacedBo);
+                        }
+
+                        // Release any additional buffers
+                        for (int i = 0; i < releasedCount; i++)
+                        {
+                            GbmSurfaceHelper.ReleaseBuffer(gbmSurface, releasedOsdBuffers[i]);
+                        }
+
                         frameCount++;
                     }
                     else
@@ -401,5 +463,40 @@ internal class Program
         }
 
         return mediaDevice;
+    }
+
+    /// <summary>
+    /// Converts a managed DrmModeInfo to native DrmModeModeInfo.
+    /// </summary>
+    private static DrmModeModeInfo ConvertToNativeMode(DrmModeInfo mode)
+    {
+        var nativeMode = new DrmModeModeInfo
+        {
+            Clock = mode.Clock,
+            HDisplay = mode.HDisplay,
+            HSyncStart = mode.HSyncStart,
+            HSyncEnd = mode.HSyncEnd,
+            HTotal = mode.HTotal,
+            HSkew = mode.HSkew,
+            VDisplay = mode.VDisplay,
+            VSyncStart = mode.VSyncStart,
+            VSyncEnd = mode.VSyncEnd,
+            VTotal = mode.VTotal,
+            VScan = mode.VScan,
+            VRefresh = mode.VRefresh,
+            Flags = mode.Flags,
+            Type = mode.Type
+        };
+
+        unsafe
+        {
+            var nameBytes = Encoding.UTF8.GetBytes(mode.Name);
+            for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
+            {
+                nativeMode.Name[i] = nameBytes[i];
+            }
+        }
+
+        return nativeMode;
     }
 }

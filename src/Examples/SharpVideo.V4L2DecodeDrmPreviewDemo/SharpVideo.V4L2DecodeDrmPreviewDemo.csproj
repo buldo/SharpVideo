@@ -13,6 +13,7 @@
     <ProjectReference Include="../../SharpVideo.Linux.Native/SharpVideo.Linux.Native.csproj" />
     <ProjectReference Include="../../SharpVideo/SharpVideo.csproj" />
     <ProjectReference Include="..\..\SharpVideo.Utils\SharpVideo.Utils.csproj" />
+    <ProjectReference Include="..\..\SharpVideo.Decoding\SharpVideo.Decoding.csproj" />
     <ProjectReference Include="..\SharpVideo.DemoMedia\SharpVideo.DemoMedia.csproj" />
     <ProjectReference Include="..\SharpVideo.V4L2Decoding\SharpVideo.V4L2Decoding.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.1" />

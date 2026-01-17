@@ -8,14 +8,14 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
 /// <summary>
 /// DRM/KMS host for ImGui-based OSD rendering with hardware video plane.
-/// Uses dual-plane architecture via DualPlanePresenter:
+/// Uses dual-plane architecture via DualPlanePresenter2:
 /// - OSD plane (GBM/OpenGL ES): ImGui interface with transparency, rendered on top
 /// - Video plane (DMA buffers): Video frames from decoder, rendered below OSD
 /// </summary>
 /// <remarks>
 /// Architecture:
 /// - Single render loop manages both OSD rendering and video frame submission
-/// - DualPlanePresenter handles atomic commits and z-ordering
+/// - DualPlanePresenter2 handles atomic commits with fence-based synchronization
 /// - VideoOverlayManager bridges VideoFrameManager with the presenter
 /// - OSD remains responsive even when no video frames are available
 /// </remarks>

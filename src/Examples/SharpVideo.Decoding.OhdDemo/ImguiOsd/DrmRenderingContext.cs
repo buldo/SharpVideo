@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Text;
 
 using Hexa.NET.ImGui;
 
@@ -9,6 +10,7 @@ using SharpVideo.ImGui;
 using SharpVideo.Linux.Native;
 using SharpVideo.Linux.Native.C;
 using SharpVideo.Utils;
+using SharpVideo.Utils.Buffers;
 
 namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 
@@ -17,7 +19,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// Handles device setup, dual-plane configuration, and ImGui integration.
 /// </summary>
 /// <remarks>
-/// Uses DualPlanePresenter for unified management of OSD and video planes.
+/// Uses DualPlanePresenter2 for unified management of OSD and video planes.
 /// OSD plane renders on top of video plane via zpos configuration.
 /// </remarks>
 [SupportedOSPlatform("linux")]
@@ -28,7 +30,8 @@ internal sealed class DrmRenderingContext : IDisposable
     private readonly bool _ownsBufferManager;
 
     private GbmDevice? _gbmDevice;
-    private DualPlanePresenter? _presenter;
+    private GbmSurface? _gbmSurface;
+    private DualPlanePresenter2? _presenter;
     private InputManager? _inputManager;
     private ImGuiManager? _imguiManager;
 
@@ -43,8 +46,14 @@ internal sealed class DrmRenderingContext : IDisposable
     /// <summary>
     /// Gets the dual-plane presenter for OSD and video rendering.
     /// </summary>
-    public DualPlanePresenter Presenter =>
+    public DualPlanePresenter2 Presenter =>
         _presenter ?? throw new InvalidOperationException("Context not initialized");
+
+    /// <summary>
+    /// Gets the GBM surface for OSD rendering.
+    /// </summary>
+    public GbmSurface GbmSurface =>
+        _gbmSurface ?? throw new InvalidOperationException("Context not initialized");
 
     /// <summary>
     /// Gets the ImGui manager for OSD rendering.
@@ -108,7 +117,7 @@ internal sealed class DrmRenderingContext : IDisposable
 
         _logger.LogInformation("Rendering warmup frame...");
 
-        if (_presenter == null || _imguiManager == null)
+        if (_presenter == null || _imguiManager == null || _gbmSurface == null)
         {
             _logger.LogWarning("Presenter or ImGui manager not available for warmup");
             return false;
@@ -119,9 +128,18 @@ internal sealed class DrmRenderingContext : IDisposable
             return false;
         }
 
-        if (!_presenter.SubmitOsdFrame())
+        // Lock front buffer and submit to presenter
+        var osdBo = GbmSurfaceHelper.LockFrontBuffer(_gbmSurface, _logger);
+        if (osdBo == 0)
         {
             return false;
+        }
+
+        var releasedBuffers = new nint[4];
+        var (replacedBo, _) = _presenter.SetOsdBuffer(osdBo, releasedBuffers);
+        if (replacedBo != 0)
+        {
+            GbmSurfaceHelper.ReleaseBuffer(_gbmSurface, replacedBo);
         }
 
         _logger.LogInformation("Warmup frame submitted");
@@ -174,7 +192,7 @@ internal sealed class DrmRenderingContext : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_presenter == null || _imguiManager == null)
+        if (_presenter == null || _imguiManager == null || _gbmSurface == null)
         {
             return false;
         }
@@ -184,7 +202,29 @@ internal sealed class DrmRenderingContext : IDisposable
             return false;
         }
 
-        return _presenter.SubmitOsdFrame();
+        // Lock front buffer and submit to presenter
+        var osdBo = GbmSurfaceHelper.LockFrontBuffer(_gbmSurface, _logger);
+        if (osdBo == 0)
+        {
+            return false;
+        }
+
+        var releasedBuffers = new nint[4];
+        var (replacedBo, releasedCount) = _presenter.SetOsdBuffer(osdBo, releasedBuffers);
+
+        // Release replaced buffer
+        if (replacedBo != 0)
+        {
+            GbmSurfaceHelper.ReleaseBuffer(_gbmSurface, replacedBo);
+        }
+
+        // Release any additional buffers that finished displaying
+        for (int i = 0; i < releasedCount; i++)
+        {
+            GbmSurfaceHelper.ReleaseBuffer(_gbmSurface, releasedBuffers[i]);
+        }
+
+        return true;
     }
 
     private void Initialize(
@@ -199,24 +239,38 @@ internal sealed class DrmRenderingContext : IDisposable
         // Get the DRM device from the buffer manager
         var drmDevice = _drmBufferManager.DrmDevice;
 
-        // Create GBM device for ImGui rendering
-        _gbmDevice = GbmDevice.CreateFromDrmDevice(drmDevice);
-        _logger.LogInformation("Created GBM device for ImGui rendering");
+        // Get device resources
+        var resources = drmDevice.GetResources();
+        if (resources == null)
+        {
+            throw new InvalidOperationException("Failed to get DRM resources");
+        }
 
-        // Create dual-plane presenter
-        _presenter = DualPlanePresenter.Create(
-            drmDevice,
-            _gbmDevice,
-            _drmBufferManager,
-            configuration.DisplayWidth,
-            configuration.DisplayHeight,
-            KnownPixelFormats.DRM_FORMAT_ARGB8888,
-            videoPixelFormat,
-            loggerFactory);
+        // Find connected connector
+        var connector = resources.Connectors
+            .FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
 
-        // Get actual display dimensions
-        DisplayWidth = _presenter.Width;
-        DisplayHeight = _presenter.Height;
+        if (connector == null)
+        {
+            throw new InvalidOperationException("No connected display found");
+        }
+
+        _logger.LogInformation("Found connector: {Type}-{TypeId} (ID: {Id})",
+            connector.ConnectorType, connector.ConnectorTypeId, connector.ConnectorId);
+
+        // Get display mode
+        var mode = connector.Modes
+            .FirstOrDefault(m => m.HDisplay == configuration.DisplayWidth && m.VDisplay == configuration.DisplayHeight)
+            ?? connector.Modes.FirstOrDefault();
+
+        if (mode == null)
+        {
+            throw new InvalidOperationException("No suitable display mode found");
+        }
+
+        // Set actual display dimensions
+        DisplayWidth = (uint)mode.HDisplay;
+        DisplayHeight = (uint)mode.VDisplay;
 
         if (DisplayWidth != configuration.DisplayWidth || DisplayHeight != configuration.DisplayHeight)
         {
@@ -224,6 +278,65 @@ internal sealed class DrmRenderingContext : IDisposable
                 "Display mode differs from requested: requested {ReqWidth}x{ReqHeight}, actual {ActWidth}x{ActHeight}",
                 configuration.DisplayWidth, configuration.DisplayHeight, DisplayWidth, DisplayHeight);
         }
+
+        // Get CRTC ID
+        uint crtcId = connector.Encoder?.CrtcId ?? 0;
+        if (crtcId == 0)
+        {
+            crtcId = resources.Crtcs.FirstOrDefault();
+            if (crtcId == 0)
+            {
+                throw new InvalidOperationException("No CRTC found");
+            }
+        }
+
+        _logger.LogInformation("Using CRTC: {CrtcId}", crtcId);
+
+        // Create GBM device for ImGui rendering
+        _gbmDevice = GbmDevice.CreateFromDrmDevice(drmDevice);
+        _logger.LogInformation("Created GBM device for ImGui rendering");
+
+        // Select planes for video and OSD
+        DualPlaneSelection planeSelection;
+        try
+        {
+            planeSelection = DualPlaneSelector.Select(
+                drmDevice,
+                crtcId,
+                videoPixelFormat.Fourcc,                      // Video plane format
+                KnownPixelFormats.DRM_FORMAT_ARGB8888.Fourcc, // OSD plane format
+                _logger);
+
+            _logger.LogInformation("Selected planes - Video: {VideoId}, OSD: {OsdId}",
+                planeSelection.VideoPlane.Id, planeSelection.OsdPlane.Id);
+        }
+        catch (DrmException ex)
+        {
+            throw new InvalidOperationException($"Failed to select planes: {ex.Message}", ex);
+        }
+
+        // Create GBM surface for OSD plane
+        _gbmSurface = GbmSurfaceHelper.CreateForRendering(
+            _gbmDevice,
+            DisplayWidth,
+            DisplayHeight,
+            KnownPixelFormats.DRM_FORMAT_ARGB8888,
+            _logger);
+
+        // Build presenter configuration
+        var presenterConfig = DualPlanePresenterConfig.CreateBuilder()
+            .WithVideoPlane(planeSelection.VideoPlane, new PlaneDrawConfiguration(DisplayWidth, DisplayHeight))
+            .WithOsdPlane(planeSelection.OsdPlane, new PlaneDrawConfiguration(DisplayWidth, DisplayHeight))
+            .WithCrtc(crtcId)
+            .WithConnector(connector.ConnectorId)
+            .WithMode(ConvertToNativeMode(mode))
+            .WithZPos(planeSelection.ZPos)
+            .WithLogger(_logger)
+            .Build();
+
+        // Create the dual-plane presenter
+        _presenter = new DualPlanePresenter2(drmDevice, presenterConfig);
+        _presenter.Start();
 
         _logger.LogInformation("Created dual-plane presenter ({Width}x{Height})", DisplayWidth, DisplayHeight);
 
@@ -251,7 +364,7 @@ internal sealed class DrmRenderingContext : IDisposable
             Height = DisplayHeight,
             DrmDevice = drmDevice,
             GbmDevice = _gbmDevice!,
-            GbmSurfaceHandle = _presenter!.GbmSurfaceHandle,
+            GbmSurfaceHandle = _gbmSurface!.Handle,
             PixelFormat = KnownPixelFormats.DRM_FORMAT_ARGB8888,
             ConfigFlags = ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable,
             DrawCursor = true,
@@ -268,6 +381,41 @@ internal sealed class DrmRenderingContext : IDisposable
         _logger.LogInformation("ImGui manager initialized");
     }
 
+    /// <summary>
+    /// Converts a managed DrmModeInfo to native DrmModeModeInfo.
+    /// </summary>
+    private static DrmModeModeInfo ConvertToNativeMode(DrmModeInfo mode)
+    {
+        var nativeMode = new DrmModeModeInfo
+        {
+            Clock = mode.Clock,
+            HDisplay = mode.HDisplay,
+            HSyncStart = mode.HSyncStart,
+            HSyncEnd = mode.HSyncEnd,
+            HTotal = mode.HTotal,
+            HSkew = mode.HSkew,
+            VDisplay = mode.VDisplay,
+            VSyncStart = mode.VSyncStart,
+            VSyncEnd = mode.VSyncEnd,
+            VTotal = mode.VTotal,
+            VScan = mode.VScan,
+            VRefresh = mode.VRefresh,
+            Flags = mode.Flags,
+            Type = mode.Type
+        };
+
+        unsafe
+        {
+            var nameBytes = Encoding.UTF8.GetBytes(mode.Name);
+            for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
+            {
+                nativeMode.Name[i] = nameBytes[i];
+            }
+        }
+
+        return nativeMode;
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -281,7 +429,22 @@ internal sealed class DrmRenderingContext : IDisposable
 
         _imguiManager?.Dispose();
         _inputManager?.Dispose();
+
+        // Drain any remaining OSD buffers before stopping presenter
+        if (_presenter != null && _gbmSurface != null)
+        {
+            var releasedBuffers = new nint[4];
+            var releasedCount = _presenter.GetReleasedOsdBuffers(releasedBuffers);
+            for (int i = 0; i < releasedCount; i++)
+            {
+                GbmSurfaceHelper.ReleaseBuffer(_gbmSurface, releasedBuffers[i]);
+            }
+        }
+
+        _presenter?.Stop();
         _presenter?.Dispose();
+
+        _gbmSurface?.Dispose();
         _gbmDevice?.Dispose();
 
         // Only dispose buffer manager if we own it

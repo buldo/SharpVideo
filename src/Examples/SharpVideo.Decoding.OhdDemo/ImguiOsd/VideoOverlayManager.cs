@@ -8,7 +8,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 /// <summary>
 /// Manages video frame submission to the video overlay plane.
 /// Provides a simple interface for the decoder to submit frames,
-/// and handles frame lifecycle with the DualPlanePresenter.
+/// and handles frame lifecycle with the DualPlanePresenter2.
 /// </summary>
 /// <remarks>
 /// Thread Safety:
@@ -18,7 +18,7 @@ namespace SharpVideo.Decoding.OhdDemo.ImguiOsd;
 [SupportedOSPlatform("linux")]
 internal sealed class VideoOverlayManager : IDisposable
 {
-    private readonly DualPlanePresenter _presenter;
+    private readonly DualPlanePresenter2 _presenter;
     private readonly VideoFrameManager<V4l2H264StatelessDecoder, SharedDmaBuffer> _frameManager;
     private readonly Action<SharedDmaBuffer>? _onFrameSubmitted;
     private readonly ILogger _logger;
@@ -41,7 +41,7 @@ internal sealed class VideoOverlayManager : IDisposable
     public int CompletedFrameCount => _completedCount;
 
     public VideoOverlayManager(
-        DualPlanePresenter presenter,
+        DualPlanePresenter2 presenter,
         VideoFrameManager<V4l2H264StatelessDecoder, SharedDmaBuffer> frameManager,
         Action<SharedDmaBuffer>? onFrameSubmitted,
         ILoggerFactory loggerFactory)
@@ -91,8 +91,36 @@ internal sealed class VideoOverlayManager : IDisposable
             _framesInFlight[buffer] = buffer;
         }
 
-        // Submit to presenter (zero-copy)
-        _presenter.SubmitVideoFrame(buffer);
+        // Submit to presenter using new API (returns replaced buffer if any)
+        var releasedBuffers = new SharedDmaBuffer[8];
+        var (replacedBuffer, releasedCount) = _presenter.EnqueueVideoFrame(buffer, releasedBuffers);
+
+        // Release replaced buffer (never displayed)
+        if (replacedBuffer != null)
+        {
+            lock (_lock)
+            {
+                if (_framesInFlight.Remove(replacedBuffer, out var frame))
+                {
+                    _frameManager.ReleaseFrame(frame);
+                    _completedCount++;
+                }
+            }
+        }
+
+        // Release any buffers that finished displaying
+        for (int i = 0; i < releasedCount; i++)
+        {
+            var releasedBuffer = releasedBuffers[i];
+            lock (_lock)
+            {
+                if (_framesInFlight.Remove(releasedBuffer, out var frame))
+                {
+                    _frameManager.ReleaseFrame(frame);
+                    _completedCount++;
+                }
+            }
+        }
 
         _submittedCount++;
         _onFrameSubmitted?.Invoke(buffer);
@@ -108,16 +136,18 @@ internal sealed class VideoOverlayManager : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var completedBuffers = _presenter.GetCompletedVideoBuffers();
-        if (completedBuffers.Length == 0)
+        var releasedBuffers = new SharedDmaBuffer[8];
+        var releasedCount = _presenter.GetReleasedVideoBuffers(releasedBuffers);
+        if (releasedCount == 0)
         {
             return;
         }
 
         lock (_lock)
         {
-            foreach (var buffer in completedBuffers)
+            for (int i = 0; i < releasedCount; i++)
             {
+                var buffer = releasedBuffers[i];
                 if (_framesInFlight.Remove(buffer, out var frame))
                 {
                     _frameManager.ReleaseFrame(frame);
@@ -160,11 +190,13 @@ internal sealed class VideoOverlayManager : IDisposable
         // This ensures buffers that were in-flight are properly returned
         try
         {
-            var completedBuffers = _presenter.GetCompletedVideoBuffers();
+            var releasedBuffers = new SharedDmaBuffer[8];
+            var releasedCount = _presenter.GetReleasedVideoBuffers(releasedBuffers);
             lock (_lock)
             {
-                foreach (var buffer in completedBuffers)
+                for (int i = 0; i < releasedCount; i++)
                 {
+                    var buffer = releasedBuffers[i];
                     if (_framesInFlight.Remove(buffer, out var frame))
                     {
                         _frameManager.ReleaseFrame(frame);

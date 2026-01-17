@@ -10,15 +10,16 @@ using SharpVideo.V4L2Decoding.NaluSources;
 namespace SharpVideo.RtpPlayerDemo;
 
 /// <summary>
-/// Manages H.264 decoding pipeline from RTP receiver to DRM display
+/// Manages H.264 decoding pipeline from RTP receiver to DualPlanePresenter2.
+/// Uses fence-based synchronization with the new presenter API.
 /// </summary>
 [SupportedOSPlatform("linux")]
-public class DecoderPipeline : IAsyncDisposable
+public class DecoderPipeline2 : IAsyncDisposable
 {
     private readonly RtpReceiverService _rtpReceiver;
     private readonly H264V4L2StatelessDecoder _decoder;
-    private readonly DrmPresenter _presenter;
-    private readonly ILogger<DecoderPipeline> _logger;
+    private readonly DualPlanePresenter2 _presenter;
+    private readonly ILogger<DecoderPipeline2> _logger;
     private readonly BlockingCollection<SharedDmaBuffer> _buffersToPresent = new(boundedCapacity: 3);
     private readonly CancellationTokenSource _cts = new();
     private readonly RtpNaluSource _naluSource;
@@ -28,16 +29,16 @@ public class DecoderPipeline : IAsyncDisposable
     private readonly Stopwatch _decodeStopwatch = new();
     private readonly Stopwatch _presentStopwatch = new();
 
-    public DecoderPipeline(
+    public DecoderPipeline2(
         RtpReceiverService rtpReceiver,
         H264V4L2StatelessDecoder decoder,
-        DrmPresenter presenter,
+        DualPlanePresenter2 presenter,
         ILoggerFactory loggerFactory)
     {
         _rtpReceiver = rtpReceiver;
         _decoder = decoder;
         _presenter = presenter;
-        _logger = loggerFactory.CreateLogger<DecoderPipeline>();
+        _logger = loggerFactory.CreateLogger<DecoderPipeline2>();
 
         // Create RTP NALU source with bounded queue for low latency
         _naluSource = new RtpNaluSource(loggerFactory.CreateLogger<RtpNaluSource>(), queueCapacity: 30);
@@ -261,6 +262,8 @@ public class DecoderPipeline : IAsyncDisposable
     {
         _logger.LogInformation("Display thread started");
 
+        var releasedBuffers = new SharedDmaBuffer[4];
+
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -281,21 +284,34 @@ public class DecoderPipeline : IAsyncDisposable
                         Statistics.PresentedFrames + 1, _buffersToPresent.Count);
                 }
 
-                _presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(buffer);
+                // Submit video frame using DualPlanePresenter2 API
+                var (replacedBuffer, releasedCount) = _presenter.EnqueueVideoFrame(buffer, releasedBuffers);
+
                 Statistics.IncrementPresentedFrames();
 
-                var toRequeue = _presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers();
-
-                // Batch requeue for better performance
-                for (int i = 0; i < toRequeue.Length; i++)
+                // Requeue replaced buffer (was pending but replaced by newer frame)
+                if (replacedBuffer != null)
                 {
-                    _decoder.RequeueCaptureBuffer(toRequeue[i]);
+                    _decoder.RequeueCaptureBuffer(replacedBuffer);
+                }
+
+                // Requeue released buffers (finished displaying)
+                for (int i = 0; i < releasedCount; i++)
+                {
+                    _decoder.RequeueCaptureBuffer(releasedBuffers[i]);
                 }
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error in display routine");
+        }
+
+        // Drain any remaining released buffers
+        var finalReleasedCount = _presenter.GetReleasedVideoBuffers(releasedBuffers);
+        for (int i = 0; i < finalReleasedCount; i++)
+        {
+            _decoder.RequeueCaptureBuffer(releasedBuffers[i]);
         }
 
         _logger.LogInformation("Display thread stopped. Frames: {FrameCount}; Time: {Elapsed}s",

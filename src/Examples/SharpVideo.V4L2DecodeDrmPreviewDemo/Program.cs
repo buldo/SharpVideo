@@ -1,17 +1,25 @@
 using System.Runtime.Versioning;
+using System.Text;
+
 using Microsoft.Extensions.Logging;
+
+using SharpVideo.Decoding;
+using SharpVideo.Decoding.V4l2;
+using SharpVideo.Decoding.V4l2.Discovery;
+using SharpVideo.Decoding.V4l2.Stateful;
+using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
+using SharpVideo.Linux.Native;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
-using SharpVideo.V4L2Decoding.Models;
-using SharpVideo.V4L2Decoding.Services;
 
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo;
 
 /// <summary>
-/// Demonstrates H.264 video decoding using V4L2 stateless decoder with zero-copy DRM display.
+/// Demonstrates H.264 video decoding using V4L2 decoder with zero-copy DRM display.
 /// Uses DMABUF sharing between V4L2 decoder and DRM display for efficient video presentation.
+/// Now uses DualPlanePresenter2 with OUT_FENCE_PTR for precise buffer synchronization.
 /// </summary>
 [SupportedOSPlatform("linux")]
 internal class Program
@@ -32,10 +40,9 @@ internal class Program
 
     static async Task Main(string[] args)
     {
-        Logger.LogInformation("SharpVideo H.264 V4L2 Decoder with DRM Preview Demo");
+        Logger.LogInformation("SharpVideo H.264 V4L2 Decoder with DRM Preview Demo (DualPlanePresenter2)");
 
         // Setup DRM display
-        // Note: DrmDevice should implement IDisposable in the future for proper resource management
         var drmDevice = DrmUtils.OpenDrmDevice(Logger);
         if (drmDevice == null)
         {
@@ -53,69 +60,86 @@ internal class Program
         using var drmBufferManager = new DrmBufferManager(
             drmDevice,
             allocator,
-            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_ARGB8888],
+            [KnownPixelFormats.DRM_FORMAT_NV12],
             drmBufferManagerLogger);
-        var presenter = DrmPresenter.Create(
-            drmDevice,
-            Width,
-            Height,
-            drmBufferManager,
-            KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary plane format (with alpha for transparency)
-            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format (video)
-            Logger);
 
-        // Configure z-order: Primary plane (transparent) on top, Overlay plane (video) below
-        // Note: Z-position may not be supported on all hardware (e.g., some Raspberry Pi configurations)
-        Logger.LogInformation("Configuring plane z-order: video below, transparent primary on top");
-        var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
-        var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
-
-        if (primaryZposRange.HasValue && overlayZposRange.HasValue)
+        // Get device resources to find connector, CRTC, and mode
+        var resources = drmDevice.GetResources();
+        if (resources == null)
         {
-            var primarySuccess = presenter.PrimaryPlane.SetPlaneZPosition(primaryZposRange.Value.max);
-            var overlaySuccess = presenter.OverlayPlane.SetPlaneZPosition(overlayZposRange.Value.min);
-
-            if (primarySuccess && overlaySuccess)
-            {
-                Logger.LogInformation("Set Primary zpos={PrimaryZ} (top), Overlay zpos={OverlayZ} (bottom)",
-                    primaryZposRange.Value.max, overlayZposRange.Value.min);
-            }
-            else
-            {
-                Logger.LogWarning("Failed to set z-position: Primary={PrimarySuccess}, Overlay={OverlaySuccess}. " +
-                    "Using default layer ordering.", primarySuccess, overlaySuccess);
-            }
-        }
-        else
-        {
-            Logger.LogWarning("Z-position not supported on this hardware. Primary zpos available: {PrimaryAvail}, " +
-                "Overlay zpos available: {OverlayAvail}. Using default layer ordering.",
-                primaryZposRange.HasValue, overlayZposRange.HasValue);
+            throw new Exception("Failed to get DRM resources");
         }
 
-        var (v4L2Device, deviceInfo) = GetVideoDevice(Logger);
-        using var _ = v4L2Device; // Ensure disposal
+        // Find the first connected connector
+        var connector = resources.Connectors
+            .FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
 
-        var config = new DecoderConfiguration
+        if (connector == null)
         {
-            // Use more buffers if streaming is supported for smoother playback
-            OutputBufferCount = 3u,
-            CaptureBufferCount = 6u,
-            RequestPoolSize = 6,
-            UseDrmPrimeBuffers = true // Enable zero-copy DMABUF mode for lowest latency
-        };
+            throw new Exception("No connected display found");
+        }
 
-        var decoderLogger = LoggerFactory.CreateLogger<H264V4L2StatelessDecoder>();
-        using var mediaDevice = GetMediaDevice();
-        await using var decoder = new H264V4L2StatelessDecoder(
-            v4L2Device,
-            mediaDevice,
-            decoderLogger,
-            config,
-            processDecodedAction: null, // Not used in DMABUF mode
-            drmBufferManager: drmBufferManager);
+        Logger.LogInformation("Found connector: {Type}-{TypeId} (ID: {Id})",
+            connector.ConnectorType, connector.ConnectorTypeId, connector.ConnectorId);
 
-        var player = new Player(presenter, decoder, LoggerFactory);
+        // Get the preferred mode (or first mode matching Width x Height)
+        var mode = connector.Modes
+            .FirstOrDefault(m => m.HDisplay == Width && m.VDisplay == Height)
+            ?? connector.Modes.FirstOrDefault();
+
+        if (mode == null)
+        {
+            throw new Exception("No suitable display mode found");
+        }
+
+        Logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{Hz}Hz)",
+            mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
+
+        // Get CRTC ID from the connector's current encoder
+        uint crtcId = connector.Encoder?.CrtcId ?? 0;
+        if (crtcId == 0)
+        {
+            // Fall back to first CRTC
+            crtcId = resources.Crtcs.FirstOrDefault();
+            if (crtcId == 0)
+            {
+                throw new Exception("No CRTC found");
+            }
+        }
+
+        Logger.LogInformation("Using CRTC: {CrtcId}", crtcId);
+
+        // Find a plane supporting NV12 for video-only mode
+        var crtcList = resources.Crtcs.ToList();
+        var crtcIndex = crtcList.IndexOf(crtcId);
+        var crtcMask = 1u << crtcIndex;
+
+        var videoPlane = resources.Planes
+            .Where(p => (p.PossibleCrtcs & crtcMask) != 0)
+            .FirstOrDefault(p => p.Formats.Contains(KnownPixelFormats.DRM_FORMAT_NV12.Fourcc));
+
+        if (videoPlane == null)
+        {
+            throw new Exception($"No plane found supporting NV12 format for CRTC {crtcId}");
+        }
+
+        Logger.LogInformation("Selected video plane: {PlaneId}", videoPlane.Id);
+
+        // Build the presenter configuration (video-only mode)
+        var presenterConfig = DualPlanePresenterConfig.CreateBuilder()
+            .WithVideoPlane(videoPlane, new PlaneDrawConfiguration((uint)Width, (uint)Height))
+            .WithCrtc(crtcId)
+            .WithConnector(connector.ConnectorId)
+            .WithMode(ConvertToNativeMode(mode))
+            .WithLogger(Logger)
+            .Build();
+
+        // Create the dual-plane presenter
+        using var presenter = new DualPlanePresenter2(drmDevice, presenterConfig);
+
+        var decoder = CreateV4l2Decoder(drmBufferManager);
+
+        var player = new Player(presenter, (BaseDecoder<SharedDmaBuffer>)decoder, LoggerFactory);
         player.Init();
 
         await using var fileStream = GetFileStream();
@@ -129,56 +153,67 @@ internal class Program
         Logger.LogWarning("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}", player.Statistics.DecodedFrames, player.Statistics.DecodedFrames / player.Statistics.DecodeElapsed.TotalSeconds);
         Logger.LogWarning("Displayed {FrameCount} frames, average present FPS: {Fps:F2}", player.Statistics.PresentedFrames, player.Statistics.PresentedFrames / player.Statistics.PresentElapsed.TotalSeconds);
         Logger.LogWarning("Processing completed successfully!");
-
-        presenter.Dispose();
-
     }
 
-    private static (V4L2Device device, V4L2DeviceInfo deviceInfo) GetVideoDevice(ILogger logger)
+    /// <summary>
+    /// Creates a V4L2 hardware decoder with automatic hardware detection.
+    /// </summary>
+    /// <param name="drmBufferManager">DRM buffer manager for zero-copy decoding.</param>
+    /// <returns>A V4L2 decoder (stateless or stateful based on hardware).</returns>
+    private static IDecoder CreateV4l2Decoder(DrmBufferManager drmBufferManager)
     {
-        var h264Devices = V4L2.V4L2DeviceManager.GetH264Devices();
-        if (!h264Devices.Any())
+        var provider = new V4l2H264DecoderProvider(LoggerFactory.CreateLogger<V4l2H264DecoderProvider>());
+        var decoderInfo = provider.FindBestDecoder();
+        if (decoderInfo == null)
         {
-            throw new Exception("Error: No H.264 capable V4L2 devices found.");
+            throw new Exception("Failed to find V4L2 H264 decoder");
         }
 
-        var selectedDevice = h264Devices.First();
-        logger.LogInformation("Using device: {@Device}", selectedDevice);
+        Logger.LogInformation(
+            "Found {DecoderType} decoder at {Path} ({Driver}: {Card})",
+            decoderInfo.DecoderType,
+            decoderInfo.DevicePath,
+            decoderInfo.Driver,
+            decoderInfo.Card);
 
-        // Log device capabilities for optimization analysis
-        LogDeviceCapabilities(selectedDevice, logger);
-
-        var v4L2Device = V4L2DeviceFactory.Open(selectedDevice.DevicePath);
-        if (v4L2Device == null)
+        var device = V4L2DeviceFactory.Open(decoderInfo.DevicePath);
+        if (device == null)
         {
-            throw new Exception($"Error: Failed to open V4L2 device at path '{selectedDevice.DevicePath}'.");
+            throw new Exception($"Failed to open device {decoderInfo.DevicePath}");
         }
 
-        return (v4L2Device, selectedDevice);
-    }
+        IDecoder? decoder;
 
-    private static void LogDeviceCapabilities(V4L2DeviceInfo deviceInfo, ILogger logger)
-    {
-        logger.LogInformation("Driver: {Driver}; Card: {Card}; Device Path: {Path}; DeviceCapabilities: {DeviceCapabilities}", deviceInfo.DriverName, deviceInfo.CardName, deviceInfo.DevicePath, deviceInfo.DeviceCapabilities);
-
-        logger.LogInformation("=== Supported Formats ===");
-        foreach (var format in deviceInfo.SupportedFormats)
+        if (decoderInfo.DecoderType == V4l2H264DecoderType.Stateful)
         {
-            logger.LogInformation("  Format: {Description} (FourCC: {FourCC})",
-                format.Description, format.PixelFormat);
+            decoder = V4l2H264StatefulDecoder.Create(
+                device,
+                LoggerFactory,
+                null,
+                drmBufferManager);
         }
-    }
-
-    private static MediaDevice GetMediaDevice()
-    {
-        // TODO: media device discovery
-        var mediaDevice = MediaDevice.Open("/dev/media0");
-        if (mediaDevice == null)
+        else if (decoderInfo.DecoderType == V4l2H264DecoderType.Stateless)
         {
-            throw new Exception("Not able to open /dev/media0");
+            var mediaDevice = MediaDevice.Open(decoderInfo.MediaDevicePath!);
+            if (mediaDevice == null)
+            {
+                throw new Exception($"Failed to open media device {decoderInfo.MediaDevicePath}");
+            }
+
+            decoder = V4l2H264StatelessDecoder.Create(
+                device,
+                mediaDevice,
+                LoggerFactory,
+                null,
+                drmBufferManager);
+        }
+        else
+        {
+            throw new Exception($"Unknown decoder type: {decoderInfo.DecoderType}");
         }
 
-        return mediaDevice;
+        decoder.Initialize();
+        return decoder;
     }
 
     private static FileStream GetFileStream()
@@ -194,4 +229,38 @@ internal class Program
         return File.OpenRead(filePath);
     }
 
+    /// <summary>
+    /// Converts a managed DrmModeInfo to native DrmModeModeInfo.
+    /// </summary>
+    private static DrmModeModeInfo ConvertToNativeMode(DrmModeInfo mode)
+    {
+        var nativeMode = new DrmModeModeInfo
+        {
+            Clock = mode.Clock,
+            HDisplay = mode.HDisplay,
+            HSyncStart = mode.HSyncStart,
+            HSyncEnd = mode.HSyncEnd,
+            HTotal = mode.HTotal,
+            HSkew = mode.HSkew,
+            VDisplay = mode.VDisplay,
+            VSyncStart = mode.VSyncStart,
+            VSyncEnd = mode.VSyncEnd,
+            VTotal = mode.VTotal,
+            VScan = mode.VScan,
+            VRefresh = mode.VRefresh,
+            Flags = mode.Flags,
+            Type = mode.Type
+        };
+
+        unsafe
+        {
+            var nameBytes = Encoding.UTF8.GetBytes(mode.Name);
+            for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
+            {
+                nativeMode.Name[i] = nameBytes[i];
+            }
+        }
+
+        return nativeMode;
+    }
 }
