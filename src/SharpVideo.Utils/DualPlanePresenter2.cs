@@ -18,15 +18,15 @@ internal sealed class AtomicModesetProperties
 {
     /// <summary>CRTC "ACTIVE" property ID</summary>
     public uint CrtcActivePropertyId { get; init; }
-    
+
     /// <summary>CRTC "MODE_ID" property ID</summary>
     public uint CrtcModeIdPropertyId { get; init; }
-    
+
     /// <summary>Connector "CRTC_ID" property ID</summary>
     public uint ConnectorCrtcIdPropertyId { get; init; }
 
-    public bool IsValid => CrtcActivePropertyId != 0 && 
-                          CrtcModeIdPropertyId != 0 && 
+    public bool IsValid => CrtcActivePropertyId != 0 &&
+                          CrtcModeIdPropertyId != 0 &&
                           ConnectorCrtcIdPropertyId != 0;
 
     public static unsafe AtomicModesetProperties Query(int drmFd, uint crtcId, uint connectorId)
@@ -80,14 +80,14 @@ internal sealed class AtomicModesetProperties
 /// <summary>
 /// High-performance dual-plane DRM presenter optimized for minimal video latency.
 /// Uses atomic modesetting with blocking commits and a dedicated commit thread.
-/// 
+///
 /// Features:
 /// - Atomic-only: Uses DRM atomic modesetting for tearless updates
 /// - Blocking commits: Each commit blocks until vsync for precise timing
 /// - Latest frame wins: New video frames replace pending ones immediately
 /// - Automatic commit triggering: New frame arrival triggers immediate commit attempt
 /// - Dedicated commit thread with elevated priority
-/// 
+///
 /// Buffer lifecycle:
 /// - Maximum 3 buffers in flight per plane (pending, committed, displaying)
 /// - Released buffers returned immediately via EnqueueVideoFrame return value
@@ -103,37 +103,42 @@ public sealed class DualPlanePresenter2 : IDisposable
     private readonly AtomicModesetProperties _modesetProps;
     private readonly AtomicPlaneProperties? _videoPlaneProps;
     private readonly AtomicPlaneProperties? _osdPlaneProps;
-    
+
     // Mode blob
     private uint _modeBlobId;
-    
-    // OSD framebuffer cache
+
+    // Framebuffer caches
+    private readonly VideoFramebufferCache? _videoFbCache;
     private readonly OsdFramebufferCache? _osdFbCache;
-    
+
     // Video plane buffer tracking (max 3 in flight)
     private volatile SharedDmaBuffer? _pendingVideoBuffer;
     private SharedDmaBuffer? _committedVideoBuffer;
     private SharedDmaBuffer? _displayingVideoBuffer;
     private SharedDmaBuffer? _releasedVideoBuffer;
-    
+
     // OSD plane buffer tracking (max 3 in flight)
     private volatile nint _pendingOsdBo;
     private nint _committedOsdBo;
     private nint _displayingOsdBo;
     private nint _releasedOsdBo;
     private uint _currentOsdFbId;
-    
+
     // Commit thread synchronization
     private readonly AutoResetEvent _commitSignal = new(false);
     private readonly CancellationTokenSource _cts = new();
     private Thread? _commitThread;
     private bool _started;
-    
+
+    // Plane initialization tracking (planes are configured on first commit with valid FB)
+    private bool _videoPlaneInitialized;
+    private bool _osdPlaneInitialized;
+
     // Page flip event handling
     private readonly LibDrm.DrmEventPageFlipHandler _pageFlipHandler;
     private readonly GCHandle _gcHandle;
     private DrmEventContext _eventContext;
-    
+
     private bool _disposed;
 
     /// <summary>
@@ -147,9 +152,9 @@ public sealed class DualPlanePresenter2 : IDisposable
     {
         ArgumentNullException.ThrowIfNull(drmDevice);
         ArgumentNullException.ThrowIfNull(config);
-        
+
         config.Validate();
-        
+
         _drmDevice = drmDevice;
         _config = config;
         _logger = config.Logger;
@@ -160,7 +165,7 @@ public sealed class DualPlanePresenter2 : IDisposable
             throw new InvalidOperationException(
                 $"Atomic modesetting not supported by this DRM device. Error code: {atomicResult}");
         }
-        
+
         _logger?.LogDebug("Atomic modesetting enabled");
 
         // Query atomic properties for modeset
@@ -179,6 +184,9 @@ public sealed class DualPlanePresenter2 : IDisposable
             {
                 throw new InvalidOperationException($"Video plane {config.VideoPlane.Id} lacks required atomic properties");
             }
+
+            // Create video framebuffer cache
+            _videoFbCache = new VideoFramebufferCache(drmDevice.DeviceFd, _logger);
         }
 
         if (config.OsdPlaneEnabled && config.OsdPlane != null)
@@ -188,7 +196,7 @@ public sealed class DualPlanePresenter2 : IDisposable
             {
                 throw new InvalidOperationException($"OSD plane {config.OsdPlane.Id} lacks required atomic properties");
             }
-            
+
             // Create OSD framebuffer cache
             var osdDrawConfig = config.OsdDrawConfig!.Value;
             // Use AR24 format for OSD (ARGB8888)
@@ -196,7 +204,8 @@ public sealed class DualPlanePresenter2 : IDisposable
                 drmDevice.DeviceFd,
                 osdDrawConfig.SrcWidth,
                 osdDrawConfig.SrcHeight,
-                0x34325241); // DRM_FORMAT_ARGB8888
+                0x34325241, // DRM_FORMAT_ARGB8888
+                _logger);
         }
 
         // Setup page flip event handler
@@ -221,8 +230,9 @@ public sealed class DualPlanePresenter2 : IDisposable
     /// <summary>
     /// Enqueues a video frame for display. Returns immediately.
     /// If a frame was already pending and not yet committed, it is returned immediately.
+    /// The framebuffer is created automatically from the DMA buffer if needed.
     /// </summary>
-    /// <param name="buffer">The video buffer to display. Must have a valid FramebufferId.</param>
+    /// <param name="buffer">The video buffer to display.</param>
     /// <returns>
     /// The previous pending buffer that was replaced (caller should return it to decoder),
     /// or null if no buffer was replaced.
@@ -231,25 +241,20 @@ public sealed class DualPlanePresenter2 : IDisposable
     public SharedDmaBuffer? EnqueueVideoFrame(SharedDmaBuffer buffer)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         if (!_config.VideoPlaneEnabled)
         {
             throw new InvalidOperationException("Video plane is not enabled");
         }
-        
+
         ArgumentNullException.ThrowIfNull(buffer);
-        
-        if (buffer.FramebufferId == 0)
-        {
-            throw new ArgumentException("Buffer must have a valid FramebufferId", nameof(buffer));
-        }
 
         // Atomically replace pending buffer
         var previous = Interlocked.Exchange(ref _pendingVideoBuffer, buffer);
-        
+
         // Signal commit thread
         _commitSignal.Set();
-        
+
         return previous;
     }
 
@@ -261,7 +266,7 @@ public sealed class DualPlanePresenter2 : IDisposable
     public int GetReleasedVideoBuffers(Span<SharedDmaBuffer> destination)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         if (destination.IsEmpty)
             return 0;
 
@@ -271,7 +276,7 @@ public sealed class DualPlanePresenter2 : IDisposable
             destination[0] = released;
             return 1;
         }
-        
+
         return 0;
     }
 
@@ -283,7 +288,7 @@ public sealed class DualPlanePresenter2 : IDisposable
     public void SetOsdBuffer(nint gbmBo)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         if (!_config.OsdPlaneEnabled)
         {
             throw new InvalidOperationException("OSD plane is not enabled");
@@ -291,7 +296,7 @@ public sealed class DualPlanePresenter2 : IDisposable
 
         // Atomically replace pending OSD buffer
         Interlocked.Exchange(ref _pendingOsdBo, gbmBo);
-        
+
         // Signal commit thread
         _commitSignal.Set();
     }
@@ -304,7 +309,7 @@ public sealed class DualPlanePresenter2 : IDisposable
     public nint GetReleasedOsdBuffer()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         return Interlocked.Exchange(ref _releasedOsdBo, 0);
     }
 
@@ -314,12 +319,12 @@ public sealed class DualPlanePresenter2 : IDisposable
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         if (_started)
             return;
 
         _started = true;
-        
+
         _commitThread = new Thread(CommitLoop)
         {
             Name = "DualPlanePresenter2 Commit",
@@ -327,7 +332,7 @@ public sealed class DualPlanePresenter2 : IDisposable
             Priority = ThreadPriority.AboveNormal
         };
         _commitThread.Start();
-        
+
         _logger?.LogInformation("Commit thread started");
     }
 
@@ -342,7 +347,7 @@ public sealed class DualPlanePresenter2 : IDisposable
         _cts.Cancel();
         _commitSignal.Set(); // Wake the thread
         _commitThread.Join(TimeSpan.FromSeconds(2));
-        
+
         _started = false;
         _logger?.LogInformation("Commit thread stopped");
     }
@@ -405,59 +410,9 @@ public sealed class DualPlanePresenter2 : IDisposable
             // Connector CRTC_ID
             LibDrm.drmModeAtomicAddProperty(req, _config.ConnectorId, _modesetProps.ConnectorCrtcIdPropertyId, _config.CrtcId);
 
-            // Setup video plane (attached but empty)
-            if (_config.VideoPlaneEnabled && _videoPlaneProps != null)
-            {
-                var videoConfig = _config.VideoDrawConfig!.Value;
-                var planeId = _config.VideoPlane!.Id;
-
-                // Set geometry
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcIdPropertyId, _config.CrtcId);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcXPropertyId, videoConfig.DstX);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcYPropertyId, videoConfig.DstY);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcWPropertyId, videoConfig.EffectiveDstWidth);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcHPropertyId, videoConfig.EffectiveDstHeight);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcXPropertyId, 0);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcYPropertyId, 0);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcWPropertyId, (ulong)videoConfig.SrcWidth << 16);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcHPropertyId, (ulong)videoConfig.SrcHeight << 16);
-                
-                // FB_ID = 0 (empty initially)
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.FbIdPropertyId, 0);
-
-                // Set zpos if available
-                if (_videoPlaneProps.HasZpos() && _config.ZPos.HasValue)
-                {
-                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.ZposPropertyId, _config.ZPos.Value.VideoZPos);
-                }
-            }
-
-            // Setup OSD plane (attached but empty)
-            if (_config.OsdPlaneEnabled && _osdPlaneProps != null)
-            {
-                var osdConfig = _config.OsdDrawConfig!.Value;
-                var planeId = _config.OsdPlane!.Id;
-
-                // Set geometry
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcIdPropertyId, _config.CrtcId);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcXPropertyId, osdConfig.DstX);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcYPropertyId, osdConfig.DstY);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcWPropertyId, osdConfig.EffectiveDstWidth);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcHPropertyId, osdConfig.EffectiveDstHeight);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcXPropertyId, 0);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcYPropertyId, 0);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcWPropertyId, (ulong)osdConfig.SrcWidth << 16);
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcHPropertyId, (ulong)osdConfig.SrcHeight << 16);
-                
-                // FB_ID = 0 (empty initially)
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.FbIdPropertyId, 0);
-
-                // Set zpos if available
-                if (_osdPlaneProps.HasZpos() && _config.ZPos.HasValue)
-                {
-                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.ZposPropertyId, _config.ZPos.Value.OsdZPos);
-                }
-            }
+            // NOTE: We do NOT configure planes during initial modeset.
+            // Some drivers (notably VC4 on Raspberry Pi) reject planes with FB_ID=0.
+            // Planes will be configured on first commit when actual framebuffers are available.
 
             // Commit with ALLOW_MODESET flag (blocking)
             var flags = DrmModeAtomicFlags.DRM_MODE_ATOMIC_ALLOW_MODESET;
@@ -497,6 +452,15 @@ public sealed class DualPlanePresenter2 : IDisposable
                     continue;
                 }
 
+                // Don't commit only OSD if video plane is not yet initialized
+                // OSD will be committed together with video on the first video frame
+                if (!_videoPlaneInitialized && !hasPendingVideo && hasPendingOsd)
+                {
+                    _logger?.LogTrace("Waiting for video before initializing OSD plane");
+                    _commitSignal.WaitOne(100);
+                    continue;
+                }
+
                 // Grab pending buffers atomically
                 var videoBuffer = Interlocked.Exchange(ref _pendingVideoBuffer, null);
                 var osdBo = Interlocked.Exchange(ref _pendingOsdBo, 0);
@@ -507,7 +471,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                     var oldDisplaying = _displayingVideoBuffer;
                     _displayingVideoBuffer = _committedVideoBuffer;
                     _committedVideoBuffer = null;
-                    
+
                     if (oldDisplaying != null)
                     {
                         // Release previous displaying buffer
@@ -520,7 +484,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                     var oldDisplaying = _displayingOsdBo;
                     _displayingOsdBo = _committedOsdBo;
                     _committedOsdBo = 0;
-                    
+
                     if (oldDisplaying != 0)
                     {
                         Interlocked.Exchange(ref _releasedOsdBo, oldDisplaying);
@@ -537,7 +501,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                     {
                         _committedVideoBuffer = videoBuffer;
                     }
-                    
+
                     if (osdBo != 0)
                     {
                         _committedOsdBo = osdBo;
@@ -548,13 +512,13 @@ public sealed class DualPlanePresenter2 : IDisposable
                 else
                 {
                     _logger?.LogWarning("Commit failed");
-                    
+
                     // Return buffers on failure
                     if (videoBuffer != null)
                     {
                         Interlocked.Exchange(ref _releasedVideoBuffer, videoBuffer);
                     }
-                    
+
                     if (osdBo != 0)
                     {
                         Interlocked.Exchange(ref _releasedOsdBo, osdBo);
@@ -584,13 +548,56 @@ public sealed class DualPlanePresenter2 : IDisposable
         try
         {
             // Video plane
-            if (_config.VideoPlaneEnabled && _videoPlaneProps != null)
+            if (_config.VideoPlaneEnabled && _videoPlaneProps != null && _videoFbCache != null && videoBuffer != null)
             {
                 var planeId = _config.VideoPlane!.Id;
-                uint fbId = videoBuffer?.FramebufferId ?? 0;
-                
-                // Only set FB_ID, geometry was set at modeset
+
+                // Get or create framebuffer from cache
+                uint fbId = _videoFbCache.GetOrCreate(videoBuffer);
+                if (fbId == 0)
+                {
+                    _logger?.LogError("Failed to create framebuffer for video buffer");
+                    return false;
+                }
+
+                // On first commit with valid FB, configure full plane geometry
+                if (!_videoPlaneInitialized)
+                {
+                    var videoConfig = _config.VideoDrawConfig!.Value;
+
+                    _logger?.LogDebug(
+                        "Video plane {PlaneId} geometry: CRTC=({X},{Y},{W},{H}), SRC=({SrcW},{SrcH}), SrcShifted=({SrcWS},{SrcHS})",
+                        planeId,
+                        videoConfig.DstX, videoConfig.DstY, videoConfig.EffectiveDstWidth, videoConfig.EffectiveDstHeight,
+                        videoConfig.SrcWidth, videoConfig.SrcHeight,
+                        (ulong)videoConfig.SrcWidth << 16, (ulong)videoConfig.SrcHeight << 16);
+
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcXPropertyId, videoConfig.DstX);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcYPropertyId, videoConfig.DstY);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcWPropertyId, videoConfig.EffectiveDstWidth);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcHPropertyId, videoConfig.EffectiveDstHeight);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcXPropertyId, 0);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcYPropertyId, 0);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcWPropertyId, (ulong)videoConfig.SrcWidth << 16);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.SrcHPropertyId, (ulong)videoConfig.SrcHeight << 16);
+
+                    // Set zpos if available, requested, and NOT immutable
+                    if (_videoPlaneProps.HasZpos() && _config.ZPos.HasValue && !_config.ZPos.Value.VideoZPosImmutable)
+                    {
+                        _logger?.LogDebug("Video plane {PlaneId} setting zpos={ZPos}", planeId, _config.ZPos.Value.VideoZPos);
+                        LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.ZposPropertyId, _config.ZPos.Value.VideoZPos);
+                    }
+                    else if (_config.ZPos.HasValue)
+                    {
+                        _logger?.LogDebug("Video plane {PlaneId} zpos={ZPos} (immutable, not setting)", planeId, _config.ZPos.Value.VideoZPos);
+                    }
+                }
+
+                // CRTC_ID and FB_ID must be set in every atomic commit
+                LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.CrtcIdPropertyId, _config.CrtcId);
                 LibDrm.drmModeAtomicAddProperty(req, planeId, _videoPlaneProps.FbIdPropertyId, fbId);
+
+                _logger?.LogTrace("Video plane {PlaneId}: CRTC_ID={CrtcId}, FB_ID={FbId}", planeId, _config.CrtcId, fbId);
             }
 
             // OSD plane
@@ -598,23 +605,93 @@ public sealed class DualPlanePresenter2 : IDisposable
             {
                 var planeId = _config.OsdPlane!.Id;
                 uint fbId = 0;
-                
+
                 if (osdBo != 0)
                 {
+                    _logger?.LogTrace("OSD: Creating FB for BO={Bo}", osdBo);
                     fbId = _osdFbCache.GetOrCreate(osdBo);
+                    if (fbId == 0)
+                    {
+                        _logger?.LogError("OSD: Failed to create framebuffer for BO={Bo}", osdBo);
+                    }
+                    else
+                    {
+                        _logger?.LogTrace("OSD: Got FB_ID={FbId} for BO={Bo}", fbId, osdBo);
+                    }
                     _currentOsdFbId = fbId;
                 }
                 else if (_currentOsdFbId != 0)
                 {
                     // Keep displaying current OSD if no new one
                     fbId = _currentOsdFbId;
+                    _logger?.LogTrace("OSD: Using existing FB_ID={FbId}", fbId);
                 }
-                
-                LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.FbIdPropertyId, fbId);
+                else
+                {
+                    _logger?.LogTrace("OSD: No buffer available (osdBo=0, currentFbId=0)");
+                }
+
+                // On first commit with valid FB, configure full plane geometry
+                if (!_osdPlaneInitialized && fbId != 0)
+                {
+                    var osdConfig = _config.OsdDrawConfig!.Value;
+
+                    _logger?.LogDebug(
+                        "OSD plane {PlaneId} geometry: CRTC=({X},{Y},{W},{H}), SRC=({SrcW},{SrcH})",
+                        planeId,
+                        osdConfig.DstX, osdConfig.DstY, osdConfig.EffectiveDstWidth, osdConfig.EffectiveDstHeight,
+                        osdConfig.SrcWidth, osdConfig.SrcHeight);
+
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcXPropertyId, osdConfig.DstX);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcYPropertyId, osdConfig.DstY);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcWPropertyId, osdConfig.EffectiveDstWidth);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcHPropertyId, osdConfig.EffectiveDstHeight);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcXPropertyId, 0);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcYPropertyId, 0);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcWPropertyId, (ulong)osdConfig.SrcWidth << 16);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.SrcHPropertyId, (ulong)osdConfig.SrcHeight << 16);
+
+                    // Set zpos if available, requested, and NOT immutable
+                    if (_osdPlaneProps.HasZpos() && _config.ZPos.HasValue && !_config.ZPos.Value.OsdZPosImmutable)
+                    {
+                        _logger?.LogDebug("OSD plane {PlaneId} setting zpos={ZPos}", planeId, _config.ZPos.Value.OsdZPos);
+                        LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.ZposPropertyId, _config.ZPos.Value.OsdZPos);
+                    }
+                    else if (_config.ZPos.HasValue)
+                    {
+                        _logger?.LogDebug("OSD plane {PlaneId} zpos={ZPos} (immutable, not setting)", planeId, _config.ZPos.Value.OsdZPos);
+                    }
+
+                    _logger?.LogDebug("OSD plane {PlaneId} initialized with geometry", planeId);
+                }
+
+                if (fbId != 0)
+                {
+                    // CRTC_ID and FB_ID must be set in every atomic commit
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.CrtcIdPropertyId, _config.CrtcId);
+                    LibDrm.drmModeAtomicAddProperty(req, planeId, _osdPlaneProps.FbIdPropertyId, fbId);
+                    _logger?.LogTrace("OSD plane {PlaneId}: CRTC_ID={CrtcId}, FB_ID={FbId}", planeId, _config.CrtcId, fbId);
+                }
             }
 
             // Commit with page flip event - this blocks until vsync
-            var flags = DrmModeAtomicFlags.DRM_MODE_PAGE_FLIP_EVENT;
+            // Use ALLOW_MODESET on first plane initialization
+            DrmModeAtomicFlags flags;
+            bool needsModeset = !_videoPlaneInitialized || !_osdPlaneInitialized;
+
+            if (needsModeset)
+            {
+                // First commit with plane initialization - blocking modeset
+                // Use ALLOW_MODESET without NONBLOCK for synchronous completion
+                flags = DrmModeAtomicFlags.DRM_MODE_ATOMIC_ALLOW_MODESET;
+                _logger?.LogTrace("Commit with ALLOW_MODESET (blocking)");
+            }
+            else
+            {
+                // Normal commit - use page flip event for vsync
+                flags = DrmModeAtomicFlags.DRM_MODE_PAGE_FLIP_EVENT;
+            }
+
             var result = LibDrm.drmModeAtomicCommit(_drmDevice.DeviceFd, req, flags, 0);
 
             if (result != 0)
@@ -624,8 +701,23 @@ public sealed class DualPlanePresenter2 : IDisposable
                 return false;
             }
 
-            // Wait for page flip event (blocking)
-            WaitForPageFlip();
+            // Mark planes as initialized after successful commit
+            if (videoBuffer != null && !_videoPlaneInitialized)
+            {
+                _videoPlaneInitialized = true;
+                _logger?.LogDebug("Video plane initialized successfully");
+            }
+            if (_currentOsdFbId != 0 && !_osdPlaneInitialized)
+            {
+                _osdPlaneInitialized = true;
+                _logger?.LogDebug("OSD plane initialized successfully");
+            }
+
+            // Wait for page flip event only if we used PAGE_FLIP_EVENT flag
+            if (!needsModeset)
+            {
+                WaitForPageFlip();
+            }
 
             return true;
         }
@@ -680,7 +772,8 @@ public sealed class DualPlanePresenter2 : IDisposable
             _modeBlobId = 0;
         }
 
-        // Dispose OSD framebuffer cache
+        // Dispose framebuffer caches
+        _videoFbCache?.Dispose();
         _osdFbCache?.Dispose();
 
         // Free callback handle

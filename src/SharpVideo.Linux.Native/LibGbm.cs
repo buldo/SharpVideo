@@ -29,6 +29,49 @@ public static unsafe class LibGbm
     [DllImport(LibraryName, EntryPoint = "gbm_surface_destroy")]
     public static extern void DestroySurface(nint surface);
 
+    // GBM Buffer Object (BO) creation and destruction
+    /// <summary>
+    /// Allocate a buffer object for the given dimensions.
+    /// </summary>
+    [DllImport(LibraryName, EntryPoint = "gbm_bo_create")]
+    public static extern nint CreateBo(nint gbm, uint width, uint height, uint format, GbmBoUse flags);
+
+    /// <summary>
+    /// Destroy a buffer object.
+    /// </summary>
+    [DllImport(LibraryName, EntryPoint = "gbm_bo_destroy")]
+    public static extern void DestroyBo(nint bo);
+
+    /// <summary>
+    /// Write data directly to the buffer object.
+    /// Only works if the buffer was created with GBM_BO_USE_WRITE flag.
+    /// </summary>
+    [DllImport(LibraryName, EntryPoint = "gbm_bo_write")]
+    public static extern int Write(nint bo, void* buf, nuint count);
+
+    /// <summary>
+    /// Map the buffer object for CPU access.
+    /// </summary>
+    [DllImport(LibraryName, EntryPoint = "gbm_bo_map")]
+    public static extern void* Map(nint bo, uint x, uint y, uint width, uint height, GbmBoTransferFlags flags, uint* stride, void** mapData);
+
+    /// <summary>
+    /// Unmap the buffer object.
+    /// </summary>
+    [DllImport(LibraryName, EntryPoint = "gbm_bo_unmap")]
+    public static extern void Unmap(nint bo, void* mapData);
+
+    /// <summary>
+    /// Flags for gbm_bo_map transfer direction.
+    /// </summary>
+    [Flags]
+    public enum GbmBoTransferFlags : uint
+    {
+        GBM_BO_TRANSFER_READ = 1 << 0,
+        GBM_BO_TRANSFER_WRITE = 1 << 1,
+        GBM_BO_TRANSFER_READ_WRITE = GBM_BO_TRANSFER_READ | GBM_BO_TRANSFER_WRITE
+    }
+
     /// <summary>
     /// Lock the surface's current front buffer for rendering.
     /// </summary>

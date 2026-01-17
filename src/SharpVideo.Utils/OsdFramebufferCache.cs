@@ -1,5 +1,7 @@
 using System.Runtime.Versioning;
 
+using Microsoft.Extensions.Logging;
+
 using SharpVideo.Linux.Native;
 
 namespace SharpVideo.Utils;
@@ -12,12 +14,13 @@ namespace SharpVideo.Utils;
 internal sealed class OsdFramebufferCache : IDisposable
 {
     private const int MaxEntries = 4;
-    
+
     private readonly int _drmFd;
     private readonly uint _width;
     private readonly uint _height;
     private readonly uint _format;
-    
+    private readonly ILogger? _logger;
+
     private readonly (nint Bo, uint FbId)[] _entries = new (nint, uint)[MaxEntries];
     private int _count;
     private int _oldestIndex;
@@ -30,12 +33,14 @@ internal sealed class OsdFramebufferCache : IDisposable
     /// <param name="width">Width for framebuffers.</param>
     /// <param name="height">Height for framebuffers.</param>
     /// <param name="format">Pixel format fourcc for framebuffers.</param>
-    public OsdFramebufferCache(int drmFd, uint width, uint height, uint format)
+    /// <param name="logger">Optional logger.</param>
+    public OsdFramebufferCache(int drmFd, uint width, uint height, uint format, ILogger? logger = null)
     {
         _drmFd = drmFd;
         _width = width;
         _height = height;
         _format = format;
+        _logger = logger;
     }
 
     /// <summary>
@@ -48,7 +53,7 @@ internal sealed class OsdFramebufferCache : IDisposable
     public unsafe uint GetOrCreate(nint bo)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         if (bo == 0)
             return 0;
 
@@ -62,8 +67,27 @@ internal sealed class OsdFramebufferCache : IDisposable
         }
 
         // Create new framebuffer
-        var handle = LibGbm.GetHandle(bo);
+        // Get DMA-BUF FD and convert to GEM handle (more reliable than gbm_bo_get_handle on some drivers)
+        var fd = LibGbm.GetFd(bo);
+        if (fd < 0)
+        {
+            _logger?.LogError("OsdFbCache: gbm_bo_get_fd failed");
+            return 0;
+        }
+
+        var result = LibDrm.drmPrimeFDToHandle(_drmFd, fd, out uint handle);
+        Libc.close(fd); // Close the exported FD after converting to handle
+
+        if (result != 0)
+        {
+            _logger?.LogError("OsdFbCache: drmPrimeFDToHandle failed with result={Result}", result);
+            return 0;
+        }
+
         var stride = LibGbm.GetStride(bo);
+
+        _logger?.LogDebug("OsdFbCache: Creating FB for BO={Bo}, handle={Handle}, stride={Stride}, size={W}x{H}, format={Format:X8}",
+            bo, handle, stride, _width, _height, _format);
 
         uint* handles = stackalloc uint[4];
         uint* pitches = stackalloc uint[4];
@@ -80,17 +104,20 @@ internal sealed class OsdFramebufferCache : IDisposable
             offsets[i] = 0;
         }
 
-        var result = LibDrm.drmModeAddFB2(
+        var fbResult = LibDrm.drmModeAddFB2(
             _drmFd,
             _width, _height,
             _format,
             handles, pitches, offsets,
             out var fbId, 0);
 
-        if (result != 0)
+        if (fbResult != 0)
         {
+            _logger?.LogError("OsdFbCache: drmModeAddFB2 failed with result={Result}", fbResult);
             return 0;
         }
+
+        _logger?.LogDebug("OsdFbCache: Created FB_ID={FbId} for BO={Bo}", fbId, bo);
 
         // Add to cache, evicting oldest if full
         if (_count < MaxEntries)
@@ -106,7 +133,7 @@ internal sealed class OsdFramebufferCache : IDisposable
             {
                 LibDrm.drmModeRmFB(_drmFd, oldEntry.FbId);
             }
-            
+
             _entries[_oldestIndex] = (bo, fbId);
             _oldestIndex = (_oldestIndex + 1) % MaxEntries;
         }
@@ -122,7 +149,7 @@ internal sealed class OsdFramebufferCache : IDisposable
     public uint TryGet(nint bo)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         for (int i = 0; i < _count; i++)
         {
             if (_entries[i].Bo == bo)
@@ -130,7 +157,7 @@ internal sealed class OsdFramebufferCache : IDisposable
                 return _entries[i].FbId;
             }
         }
-        
+
         return 0;
     }
 
@@ -142,7 +169,7 @@ internal sealed class OsdFramebufferCache : IDisposable
     public void Invalidate(nint bo)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        
+
         for (int i = 0; i < _count; i++)
         {
             if (_entries[i].Bo == bo)
@@ -152,21 +179,21 @@ internal sealed class OsdFramebufferCache : IDisposable
                 {
                     LibDrm.drmModeRmFB(_drmFd, _entries[i].FbId);
                 }
-                
+
                 for (int j = i; j < _count - 1; j++)
                 {
                     _entries[j] = _entries[j + 1];
                 }
-                
+
                 _entries[_count - 1] = default;
                 _count--;
-                
+
                 // Adjust oldest index if needed
                 if (_oldestIndex >= _count && _count > 0)
                 {
                     _oldestIndex = 0;
                 }
-                
+
                 return;
             }
         }
@@ -177,9 +204,9 @@ internal sealed class OsdFramebufferCache : IDisposable
     {
         if (_disposed)
             return;
-        
+
         _disposed = true;
-        
+
         // Destroy all cached framebuffers
         for (int i = 0; i < _count; i++)
         {
@@ -189,7 +216,7 @@ internal sealed class OsdFramebufferCache : IDisposable
             }
             _entries[i] = default;
         }
-        
+
         _count = 0;
     }
 }
