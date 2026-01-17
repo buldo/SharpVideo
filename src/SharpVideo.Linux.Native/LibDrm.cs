@@ -213,6 +213,27 @@ public static unsafe partial class LibDrm
     public static partial void drmModeFreePropertyBlob(DrmModePropertyBlobRes* blob);
 
     /// <summary>
+    /// Create a property blob.
+    /// Used for atomic modesetting to pass mode information.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="data">Pointer to the blob data</param>
+    /// <param name="size">Size of the blob data in bytes</param>
+    /// <param name="id">Returned blob ID</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeCreatePropertyBlob")]
+    public static partial int drmModeCreatePropertyBlob(int fd, void* data, nuint size, out uint id);
+
+    /// <summary>
+    /// Destroy a property blob.
+    /// </summary>
+    /// <param name="fd">Open DRM device file descriptor</param>
+    /// <param name="id">Blob ID to destroy</param>
+    /// <returns>0 on success, negative error code on failure</returns>
+    [LibraryImport(LibraryName, EntryPoint = "drmModeDestroyPropertyBlob")]
+    public static partial int drmModeDestroyPropertyBlob(int fd, uint id);
+
+    /// <summary>
     /// Retrieve object properties for a given object ID and type.
     /// The returned pointer must be freed with <see cref="drmModeFreeObjectProperties" />.
     /// </summary>
