@@ -537,26 +537,24 @@ public sealed class DualPlanePresenter2 : IDisposable
         {
             try
             {
-                // Wait for previous fence to signal before releasing buffers
-                // This ensures the GPU has finished reading the buffer
+                // MUST wait for previous fence to signal before next commit
+                // DRM allows only one pending page flip per CRTC - committing
+                // before previous completes causes -ENOMEM or -EBUSY
                 if (_outFenceFd >= 0)
                 {
-                    // Use adaptive timeout: 0 if frames pending (non-blocking check),
-                    // frameTimeMs if idle (allow fence to complete)
-                    bool hasPending = _pendingVideoBuffer != null || _pendingOsdBo != 0;
-                    int pollTimeout = hasPending ? 0 : _frameTimeMs;
-
                     var pollFd = new PollFd
                     {
                         fd = _outFenceFd,
                         events = PollEvents.POLLIN
                     };
 
-                    var pollResult = Libc.poll(ref pollFd, 1, pollTimeout);
+                    // Always wait for fence - this is required for correct operation
+                    // Use longer timeout to handle slow displays
+                    var pollResult = Libc.poll(ref pollFd, 1, _frameTimeMs * 2);
 
-                    if (pollResult > 0 || pollTimeout == 0)
+                    if (pollResult > 0)
                     {
-                        // Fence signaled (or we didn't wait) - close it
+                        // Fence signaled - close it and release buffers
                         Libc.close(_outFenceFd);
                         _outFenceFd = -1;
 
@@ -587,7 +585,11 @@ public sealed class DualPlanePresenter2 : IDisposable
                     }
                     else if (pollResult == 0)
                     {
-                        // Fence not yet signaled and no pending frames - wait more
+                        // Fence timeout - log warning but continue to prevent deadlock
+                        _logger?.LogWarning("Fence wait timeout ({TimeoutMs}ms), forcing release", _frameTimeMs * 2);
+                        Libc.close(_outFenceFd);
+                        _outFenceFd = -1;
+                        // Don't release buffers on timeout - they may still be in use
                         continue;
                     }
                     else
@@ -866,7 +868,9 @@ public sealed class DualPlanePresenter2 : IDisposable
             else
             {
                 // Normal commit - use NONBLOCK with OUT_FENCE_PTR
-                flags = DrmModeAtomicFlags.DRM_MODE_ATOMIC_NONBLOCK | DrmModeAtomicFlags.DRM_MODE_PAGE_FLIP_EVENT;
+                // Note: PAGE_FLIP_EVENT is NOT used because we rely on fence for synchronization.
+                // Using PAGE_FLIP_EVENT without reading events via drmHandleEvent() causes -ENOMEM.
+                flags = DrmModeAtomicFlags.DRM_MODE_ATOMIC_NONBLOCK;
 
                 // Add OUT_FENCE_PTR property - kernel writes fence fd here
                 // Use pointer to local variable (no fixed needed for stack-allocated int)

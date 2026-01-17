@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using System.Text;
 
 using Microsoft.Extensions.Logging;
 
@@ -9,6 +10,7 @@ using SharpVideo.Decoding.V4l2.Stateful;
 using SharpVideo.Decoding.V4l2.Stateless;
 using SharpVideo.DmaBuffers;
 using SharpVideo.Drm;
+using SharpVideo.Linux.Native;
 using SharpVideo.Utils;
 using SharpVideo.V4L2;
 
@@ -17,6 +19,7 @@ namespace SharpVideo.V4L2DecodeDrmPreviewDemo2;
 /// <summary>
 /// Demonstrates H.264 video decoding using V4L2 stateless decoder with zero-copy DRM display.
 /// Uses DMABUF sharing between V4L2 decoder and DRM display for efficient video presentation.
+/// Now uses DualPlanePresenter2 with OUT_FENCE_PTR for precise buffer synchronization.
 /// </summary>
 [SupportedOSPlatform("linux")]
 internal class Program
@@ -37,10 +40,9 @@ internal class Program
 
     static async Task Main(string[] args)
     {
-        Logger.LogInformation("SharpVideo H.264 V4L2 Decoder with DRM Preview Demo");
+        Logger.LogInformation("SharpVideo H.264 V4L2 Decoder with DRM Preview Demo (DualPlanePresenter2)");
 
         // Setup DRM display
-        // Note: DrmDevice should implement IDisposable in the future for proper resource management
         var drmDevice = DrmUtils.OpenDrmDevice(Logger);
         if (drmDevice == null)
         {
@@ -58,45 +60,82 @@ internal class Program
         using var drmBufferManager = new DrmBufferManager(
             drmDevice,
             allocator,
-            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_ARGB8888],
+            [KnownPixelFormats.DRM_FORMAT_NV12],
             drmBufferManagerLogger);
-        var presenter = DrmPresenter.Create(
-            drmDevice,
-            Width,
-            Height,
-            drmBufferManager,
-            KnownPixelFormats.DRM_FORMAT_ARGB8888,  // Primary plane format (with alpha for transparency)
-            KnownPixelFormats.DRM_FORMAT_NV12,      // Overlay plane format (video)
-            Logger);
 
-        // Configure z-order: Primary plane (transparent) on top, Overlay plane (video) below
-        // Note: Z-position may not be supported on all hardware (e.g., some Raspberry Pi configurations)
-        Logger.LogInformation("Configuring plane z-order: video below, transparent primary on top");
-        var primaryZposRange = presenter.PrimaryPlane.GetPlaneZPositionRange();
-        var overlayZposRange = presenter.OverlayPlane.GetPlaneZPositionRange();
-
-        if (primaryZposRange.HasValue && overlayZposRange.HasValue)
+        // Get device resources to find connector, CRTC, and mode
+        var resources = drmDevice.GetResources();
+        if (resources == null)
         {
-            var primarySuccess = presenter.PrimaryPlane.SetPlaneZPosition(primaryZposRange.Value.max);
-            var overlaySuccess = presenter.OverlayPlane.SetPlaneZPosition(overlayZposRange.Value.min);
+            throw new Exception("Failed to get DRM resources");
+        }
 
-            if (primarySuccess && overlaySuccess)
+        // Find the first connected connector
+        var connector = resources.Connectors
+            .FirstOrDefault(c => c.Connection == DrmModeConnection.Connected);
+
+        if (connector == null)
+        {
+            throw new Exception("No connected display found");
+        }
+
+        Logger.LogInformation("Found connector: {Type}-{TypeId} (ID: {Id})",
+            connector.ConnectorType, connector.ConnectorTypeId, connector.ConnectorId);
+
+        // Get the preferred mode (or first mode matching Width x Height)
+        var mode = connector.Modes
+            .FirstOrDefault(m => m.HDisplay == Width && m.VDisplay == Height)
+            ?? connector.Modes.FirstOrDefault();
+
+        if (mode == null)
+        {
+            throw new Exception("No suitable display mode found");
+        }
+
+        Logger.LogInformation("Using mode: {Name} ({Width}x{Height}@{Hz}Hz)",
+            mode.Name, mode.HDisplay, mode.VDisplay, mode.VRefresh);
+
+        // Get CRTC ID from the connector's current encoder
+        uint crtcId = connector.Encoder?.CrtcId ?? 0;
+        if (crtcId == 0)
+        {
+            // Fall back to first CRTC
+            crtcId = resources.Crtcs.FirstOrDefault();
+            if (crtcId == 0)
             {
-                Logger.LogInformation("Set Primary zpos={PrimaryZ} (top), Overlay zpos={OverlayZ} (bottom)",
-                    primaryZposRange.Value.max, overlayZposRange.Value.min);
-            }
-            else
-            {
-                Logger.LogWarning("Failed to set z-position: Primary={PrimarySuccess}, Overlay={OverlaySuccess}. " +
-                    "Using default layer ordering.", primarySuccess, overlaySuccess);
+                throw new Exception("No CRTC found");
             }
         }
-        else
+
+        Logger.LogInformation("Using CRTC: {CrtcId}", crtcId);
+
+        // Find a plane supporting NV12 for video-only mode
+        var crtcList = resources.Crtcs.ToList();
+        var crtcIndex = crtcList.IndexOf(crtcId);
+        var crtcMask = 1u << crtcIndex;
+
+        var videoPlane = resources.Planes
+            .Where(p => (p.PossibleCrtcs & crtcMask) != 0)
+            .FirstOrDefault(p => p.Formats.Contains(KnownPixelFormats.DRM_FORMAT_NV12.Fourcc));
+
+        if (videoPlane == null)
         {
-            Logger.LogWarning("Z-position not supported on this hardware. Primary zpos available: {PrimaryAvail}, " +
-                "Overlay zpos available: {OverlayAvail}. Using default layer ordering.",
-                primaryZposRange.HasValue, overlayZposRange.HasValue);
+            throw new Exception($"No plane found supporting NV12 format for CRTC {crtcId}");
         }
+
+        Logger.LogInformation("Selected video plane: {PlaneId}", videoPlane.Id);
+
+        // Build the presenter configuration (video-only mode)
+        var presenterConfig = DualPlanePresenterConfig.CreateBuilder()
+            .WithVideoPlane(videoPlane, new PlaneDrawConfiguration((uint)Width, (uint)Height))
+            .WithCrtc(crtcId)
+            .WithConnector(connector.ConnectorId)
+            .WithMode(ConvertToNativeMode(mode))
+            .WithLogger(Logger)
+            .Build();
+
+        // Create the dual-plane presenter
+        using var presenter = new DualPlanePresenter2(drmDevice, presenterConfig);
 
         var decoder = CreateV4l2Decoder(drmBufferManager);
 
@@ -114,9 +153,6 @@ internal class Program
         Logger.LogWarning("Decoded {FrameCount} frames, average decode FPS: {Fps:F2}", player.Statistics.DecodedFrames, player.Statistics.DecodedFrames / player.Statistics.DecodeElapsed.TotalSeconds);
         Logger.LogWarning("Displayed {FrameCount} frames, average present FPS: {Fps:F2}", player.Statistics.PresentedFrames, player.Statistics.PresentedFrames / player.Statistics.PresentElapsed.TotalSeconds);
         Logger.LogWarning("Processing completed successfully!");
-
-        presenter.Dispose();
-
     }
 
     /// <summary>
@@ -193,4 +229,38 @@ internal class Program
         return File.OpenRead(filePath);
     }
 
+    /// <summary>
+    /// Converts a managed DrmModeInfo to native DrmModeModeInfo.
+    /// </summary>
+    private static DrmModeModeInfo ConvertToNativeMode(DrmModeInfo mode)
+    {
+        var nativeMode = new DrmModeModeInfo
+        {
+            Clock = mode.Clock,
+            HDisplay = mode.HDisplay,
+            HSyncStart = mode.HSyncStart,
+            HSyncEnd = mode.HSyncEnd,
+            HTotal = mode.HTotal,
+            HSkew = mode.HSkew,
+            VDisplay = mode.VDisplay,
+            VSyncStart = mode.VSyncStart,
+            VSyncEnd = mode.VSyncEnd,
+            VTotal = mode.VTotal,
+            VScan = mode.VScan,
+            VRefresh = mode.VRefresh,
+            Flags = mode.Flags,
+            Type = mode.Type
+        };
+
+        unsafe
+        {
+            var nameBytes = Encoding.UTF8.GetBytes(mode.Name);
+            for (int i = 0; i < Math.Min(nameBytes.Length, 32); i++)
+            {
+                nativeMode.Name[i] = nameBytes[i];
+            }
+        }
+
+        return nativeMode;
+    }
 }

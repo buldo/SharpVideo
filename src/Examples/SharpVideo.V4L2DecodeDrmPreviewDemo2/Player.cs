@@ -10,7 +10,7 @@ using SharpVideo.V4L2Decoding.NaluSources;
 namespace SharpVideo.V4L2DecodeDrmPreviewDemo2;
 
 /// <summary>
-/// Optimized video player with minimal latency pipeline.
+/// Optimized video player with minimal latency pipeline using DualPlanePresenter2.
 /// Uses a simplified 2-thread model:
 /// - Decode thread: reads NALUs and submits to decoder
 /// - Display thread: receives decoded frames directly from BlockingCollection and presents them
@@ -20,11 +20,12 @@ namespace SharpVideo.V4L2DecodeDrmPreviewDemo2;
 /// 1. Direct read from decoder's BlockingCollection - no intermediate Channel
 /// 2. Reduced NALU source buffer size for faster initial frame display
 /// 3. Single display thread handles both decode output and presentation
+/// 4. Uses DualPlanePresenter2 with OUT_FENCE_PTR for precise buffer release timing
 /// </remarks>
 [SupportedOSPlatform("linux")]
 public class Player
 {
-    private readonly DrmPresenter _presenter;
+    private readonly DualPlanePresenter2 _presenter;
     private readonly BaseDecoder<SharedDmaBuffer> _decoder;
     private readonly ILogger<Player> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -40,7 +41,7 @@ public class Player
     private readonly ManualResetEventSlim _decodeCompleted = new(false);
 
     public Player(
-        DrmPresenter presenter,
+        DualPlanePresenter2 presenter,
         BaseDecoder<SharedDmaBuffer> decoder,
         ILoggerFactory loggerFactory)
     {
@@ -59,6 +60,9 @@ public class Player
 
     public void StartPlay(FileStream fileStream)
     {
+        // Start the presenter commit thread
+        _presenter.Start();
+
         // Start unified decode-display thread - reads from decoder and presents directly
         _displayTask = Task.Run(() => DecodeAndDisplayRoutine(_cts.Token));
 
@@ -86,6 +90,16 @@ public class Player
         {
             // Expected when cancelled
         }
+
+        // Stop the presenter
+        _presenter.Stop();
+
+        // Drain any remaining released buffers
+        var releasedCount = _presenter.GetReleasedVideoBuffers(_requeueBuffer);
+        for (int i = 0; i < releasedCount; i++)
+        {
+            _decoder.ReuseDecodedFrame(_requeueBuffer[i]);
+        }
     }
 
     private async Task DecodeLocalAsync(FileStream fileStream)
@@ -103,6 +117,7 @@ public class Player
         foreach (var nalu in queue.GetConsumingEnumerable())
         {
             _decoder.Decode(nalu.Data);
+            await Task.Delay(15);
         }
 
         _logger.LogInformation("All NALUs processed, signaling decode complete");
@@ -141,15 +156,22 @@ public class Player
                     _logger.LogTrace("Presenting frame {FrameNumber}", Statistics.PresentedFrames + 1);
                 }
 
-                // Present directly - no intermediate buffering
-                _presenter.OverlayPlanePresenter.SetOverlayPlaneBuffer(decodedFrame);
+                // Present using DualPlanePresenter2's EnqueueVideoFrame
+                // Returns replaced buffer (if any) and drains release queue
+                var (replacedBuffer, releasedCount) = _presenter.EnqueueVideoFrame(
+                    decodedFrame,
+                    _requeueBuffer);
+
                 Statistics.IncrementPresentedFrames();
 
-                // Use pre-allocated buffer to avoid allocations in hot path
-                var requeueCount = _presenter.OverlayPlanePresenter.GetPresentedOverlayBuffers(_requeueBuffer);
+                // Handle replaced buffer (was pending but not yet committed)
+                if (replacedBuffer != null)
+                {
+                    _decoder.ReuseDecodedFrame(replacedBuffer);
+                }
 
-                // Batch requeue for better performance
-                for (int i = 0; i < requeueCount; i++)
+                // Return released buffers to decoder for reuse
+                for (int i = 0; i < releasedCount; i++)
                 {
                     _decoder.ReuseDecodedFrame(_requeueBuffer[i]);
                 }

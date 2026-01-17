@@ -16,7 +16,7 @@ namespace SharpVideo.Utils;
 [SupportedOSPlatform("linux")]
 internal sealed class VideoFramebufferCache : IDisposable
 {
-    private const int MaxEntries = 8;
+    private const int MaxEntries = 32; // Must be >= CaptureBufferCount to avoid eviction
 
     private readonly int _drmFd;
     private readonly ILogger? _logger;
