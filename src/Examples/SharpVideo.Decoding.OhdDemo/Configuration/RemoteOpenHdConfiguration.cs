@@ -9,4 +9,6 @@ public class RemoteOpenHdConfiguration
     public string Ip { get; set; }
 
     public int Port { get; set; }
+
+    public bool OhdOnSameHost { get; set; }
 }

@@ -42,7 +42,11 @@ public class RemoteOpenHdConnector : IHostedService, IAsyncDisposable
 
         _logger.LogInformation("Starting RemoteOpenHdConnector");
 
-        _tcpConnectionTask = RxThreadAsync(_stoppingCts.Token);
+        if (!_configuration.OhdOnSameHost)
+        {
+            _tcpConnectionTask = RxThreadAsync(_stoppingCts.Token);
+        }
+
         _h264ListenTask = H264RxThreadAsync(_stoppingCts.Token);
 
         return Task.CompletedTask;
