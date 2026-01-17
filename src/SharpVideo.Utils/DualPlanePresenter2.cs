@@ -26,9 +26,13 @@ internal sealed class AtomicModesetProperties
     /// <summary>Connector "CRTC_ID" property ID</summary>
     public uint ConnectorCrtcIdPropertyId { get; init; }
 
+    /// <summary>CRTC "OUT_FENCE_PTR" property ID for fence-based synchronization</summary>
+    public uint OutFencePtrPropertyId { get; init; }
+
     public bool IsValid => CrtcActivePropertyId != 0 &&
                           CrtcModeIdPropertyId != 0 &&
-                          ConnectorCrtcIdPropertyId != 0;
+                          ConnectorCrtcIdPropertyId != 0 &&
+                          OutFencePtrPropertyId != 0;
 
     public static unsafe AtomicModesetProperties Query(int drmFd, uint crtcId, uint connectorId)
     {
@@ -37,6 +41,7 @@ internal sealed class AtomicModesetProperties
             CrtcActivePropertyId = GetObjectPropertyId(drmFd, crtcId, LibDrm.DRM_MODE_OBJECT_CRTC, "ACTIVE"),
             CrtcModeIdPropertyId = GetObjectPropertyId(drmFd, crtcId, LibDrm.DRM_MODE_OBJECT_CRTC, "MODE_ID"),
             ConnectorCrtcIdPropertyId = GetObjectPropertyId(drmFd, connectorId, LibDrm.DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID"),
+            OutFencePtrPropertyId = GetObjectPropertyId(drmFd, crtcId, LibDrm.DRM_MODE_OBJECT_CRTC, "OUT_FENCE_PTR"),
         };
     }
 
@@ -135,10 +140,9 @@ public sealed class DualPlanePresenter2 : IDisposable
     private bool _videoPlaneInitialized;
     private bool _osdPlaneInitialized;
 
-    // Page flip event handling
-    private readonly LibDrm.DrmEventPageFlipHandler _pageFlipHandler;
-    private readonly GCHandle _gcHandle;
-    private DrmEventContext _eventContext;
+    // Fence-based synchronization
+    private int _outFenceFd = -1;
+    private readonly int _frameTimeMs;
 
     private bool _disposed;
 
@@ -209,14 +213,9 @@ public sealed class DualPlanePresenter2 : IDisposable
                 _logger);
         }
 
-        // Setup page flip event handler
-        _pageFlipHandler = OnPageFlipComplete;
-        _gcHandle = GCHandle.Alloc(_pageFlipHandler);
-        _eventContext = new DrmEventContext
-        {
-            version = LibDrm.DRM_EVENT_CONTEXT_VERSION,
-            page_flip_handler = Marshal.GetFunctionPointerForDelegate(_pageFlipHandler)
-        };
+        // Calculate frame time for adaptive timeouts
+        var vrefresh = config.Mode.VRefresh > 0 ? config.Mode.VRefresh : 60;
+        _frameTimeMs = (int)Math.Ceiling(1000.0 / vrefresh);
 
         // Perform modeset
         PerformModeset();
@@ -439,6 +438,13 @@ public sealed class DualPlanePresenter2 : IDisposable
             _displayingOsdBo = 0;
         }
 
+        // Close any pending fence
+        if (_outFenceFd >= 0)
+        {
+            Libc.close(_outFenceFd);
+            _outFenceFd = -1;
+        }
+
         _logger?.LogInformation("Commit thread stopped, in-flight buffers moved to release queues");
     }
 
@@ -531,6 +537,69 @@ public sealed class DualPlanePresenter2 : IDisposable
         {
             try
             {
+                // Wait for previous fence to signal before releasing buffers
+                // This ensures the GPU has finished reading the buffer
+                if (_outFenceFd >= 0)
+                {
+                    // Use adaptive timeout: 0 if frames pending (non-blocking check),
+                    // frameTimeMs if idle (allow fence to complete)
+                    bool hasPending = _pendingVideoBuffer != null || _pendingOsdBo != 0;
+                    int pollTimeout = hasPending ? 0 : _frameTimeMs;
+
+                    var pollFd = new PollFd
+                    {
+                        fd = _outFenceFd,
+                        events = PollEvents.POLLIN
+                    };
+
+                    var pollResult = Libc.poll(ref pollFd, 1, pollTimeout);
+
+                    if (pollResult > 0 || pollTimeout == 0)
+                    {
+                        // Fence signaled (or we didn't wait) - close it
+                        Libc.close(_outFenceFd);
+                        _outFenceFd = -1;
+
+                        // Now safe to release displaying buffers
+                        if (_config.VideoPlaneEnabled)
+                        {
+                            var oldDisplaying = _displayingVideoBuffer;
+                            _displayingVideoBuffer = _committedVideoBuffer;
+                            _committedVideoBuffer = null;
+
+                            if (oldDisplaying != null)
+                            {
+                                _releasedVideoBuffers.Enqueue(oldDisplaying);
+                            }
+                        }
+
+                        if (_config.OsdPlaneEnabled)
+                        {
+                            var oldDisplaying = _displayingOsdBo;
+                            _displayingOsdBo = _committedOsdBo;
+                            _committedOsdBo = 0;
+
+                            if (oldDisplaying != 0)
+                            {
+                                _releasedOsdBuffers.Enqueue(oldDisplaying);
+                            }
+                        }
+                    }
+                    else if (pollResult == 0)
+                    {
+                        // Fence not yet signaled and no pending frames - wait more
+                        continue;
+                    }
+                    else
+                    {
+                        // Poll error
+                        var errno = Marshal.GetLastPInvokeError();
+                        _logger?.LogWarning("Fence poll failed: errno={Errno}", errno);
+                        Libc.close(_outFenceFd);
+                        _outFenceFd = -1;
+                    }
+                }
+
                 // Check for pending buffers
                 var hasPendingVideo = _pendingVideoBuffer != null;
                 var hasPendingOsd = _pendingOsdBo != 0;
@@ -538,7 +607,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                 if (!hasPendingVideo && !hasPendingOsd)
                 {
                     // Wait for signal or timeout
-                    _commitSignal.WaitOne(100);
+                    _commitSignal.WaitOne(_frameTimeMs);
                     continue;
                 }
 
@@ -548,7 +617,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                 if (_config.VideoPlaneEnabled && !_videoPlaneInitialized && !hasPendingVideo && hasPendingOsd)
                 {
                     _logger?.LogTrace("Waiting for video before initializing OSD plane");
-                    _commitSignal.WaitOne(100);
+                    _commitSignal.WaitOne(_frameTimeMs);
                     continue;
                 }
 
@@ -556,37 +625,14 @@ public sealed class DualPlanePresenter2 : IDisposable
                 var videoBuffer = Interlocked.Exchange(ref _pendingVideoBuffer, null);
                 var osdBo = Interlocked.Exchange(ref _pendingOsdBo, 0);
 
-                // Move displaying -> released, committed -> displaying
-                if (_config.VideoPlaneEnabled)
-                {
-                    var oldDisplaying = _displayingVideoBuffer;
-                    _displayingVideoBuffer = _committedVideoBuffer;
-                    _committedVideoBuffer = null;
-
-                    if (oldDisplaying != null)
-                    {
-                        // Release previous displaying buffer
-                        _releasedVideoBuffers.Enqueue(oldDisplaying);
-                    }
-                }
-
-                if (_config.OsdPlaneEnabled)
-                {
-                    var oldDisplaying = _displayingOsdBo;
-                    _displayingOsdBo = _committedOsdBo;
-                    _committedOsdBo = 0;
-
-                    if (oldDisplaying != 0)
-                    {
-                        _releasedOsdBuffers.Enqueue(oldDisplaying);
-                    }
-                }
-
                 // Build and execute atomic commit
-                var success = PerformCommit(videoBuffer, osdBo);
+                var (success, fenceFd) = PerformCommit(videoBuffer, osdBo);
 
                 if (success)
                 {
+                    // Store fence for next iteration
+                    _outFenceFd = fenceFd;
+
                     // Move grabbed buffers to committed
                     if (videoBuffer != null)
                     {
@@ -598,15 +644,17 @@ public sealed class DualPlanePresenter2 : IDisposable
                         _committedOsdBo = osdBo;
                     }
 
-                    _logger?.LogTrace("Commit successful");
-
-                    // Wait for next signal instead of spinning - saves CPU at low FPS
-                    // New frames will signal immediately via _commitSignal.Set()
-                    _commitSignal.WaitOne(100);
+                    _logger?.LogTrace("Commit successful, fenceFd={FenceFd}", fenceFd);
                 }
                 else
                 {
                     _logger?.LogWarning("Commit failed");
+
+                    // Close fence if returned on failure
+                    if (fenceFd >= 0)
+                    {
+                        Libc.close(fenceFd);
+                    }
 
                     // Return buffers on failure
                     if (videoBuffer != null)
@@ -644,13 +692,15 @@ public sealed class DualPlanePresenter2 : IDisposable
         return true;
     }
 
-    private unsafe bool PerformCommit(SharedDmaBuffer? videoBuffer, nint osdBo)
+    private unsafe (bool success, int fenceFd) PerformCommit(SharedDmaBuffer? videoBuffer, nint osdBo)
     {
+        int fenceFd = -1;
+
         var req = LibDrm.drmModeAtomicAlloc();
         if (req == null)
         {
             _logger?.LogError("Failed to allocate atomic request for commit");
-            return false;
+            return (false, -1);
         }
 
         try
@@ -665,7 +715,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                 if (fbId == 0)
                 {
                     _logger?.LogError("Failed to create framebuffer for video buffer");
-                    return false;
+                    return (false, -1);
                 }
 
                 // On first commit with valid FB, configure full plane geometry
@@ -689,7 +739,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                         !AddPropertyChecked(req, planeId, _videoPlaneProps.SrcWPropertyId, (ulong)videoConfig.SrcWidth << 16, "SRC_W") ||
                         !AddPropertyChecked(req, planeId, _videoPlaneProps.SrcHPropertyId, (ulong)videoConfig.SrcHeight << 16, "SRC_H"))
                     {
-                        return false;
+                        return (false, -1);
                     }
 
                     // Set zpos if available, requested, and NOT immutable
@@ -698,7 +748,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                         _logger?.LogDebug("Video plane {PlaneId} setting zpos={ZPos}", planeId, _config.ZPos.Value.VideoZPos);
                         if (!AddPropertyChecked(req, planeId, _videoPlaneProps.ZposPropertyId, _config.ZPos.Value.VideoZPos, "zpos"))
                         {
-                            return false;
+                            return (false, -1);
                         }
                     }
                     else if (_config.ZPos.HasValue)
@@ -711,7 +761,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                 if (!AddPropertyChecked(req, planeId, _videoPlaneProps.CrtcIdPropertyId, _config.CrtcId, "CRTC_ID") ||
                     !AddPropertyChecked(req, planeId, _videoPlaneProps.FbIdPropertyId, fbId, "FB_ID"))
                 {
-                    return false;
+                    return (false, -1);
                 }
 
                 _logger?.LogTrace("Video plane {PlaneId}: CRTC_ID={CrtcId}, FB_ID={FbId}", planeId, _config.CrtcId, fbId);
@@ -768,7 +818,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                         !AddPropertyChecked(req, planeId, _osdPlaneProps.SrcWPropertyId, (ulong)osdConfig.SrcWidth << 16, "SRC_W") ||
                         !AddPropertyChecked(req, planeId, _osdPlaneProps.SrcHPropertyId, (ulong)osdConfig.SrcHeight << 16, "SRC_H"))
                     {
-                        return false;
+                        return (false, -1);
                     }
 
                     // Set zpos if available, requested, and NOT immutable
@@ -777,7 +827,7 @@ public sealed class DualPlanePresenter2 : IDisposable
                         _logger?.LogDebug("OSD plane {PlaneId} setting zpos={ZPos}", planeId, _config.ZPos.Value.OsdZPos);
                         if (!AddPropertyChecked(req, planeId, _osdPlaneProps.ZposPropertyId, _config.ZPos.Value.OsdZPos, "zpos"))
                         {
-                            return false;
+                            return (false, -1);
                         }
                     }
                     else if (_config.ZPos.HasValue)
@@ -794,14 +844,15 @@ public sealed class DualPlanePresenter2 : IDisposable
                     if (!AddPropertyChecked(req, planeId, _osdPlaneProps.CrtcIdPropertyId, _config.CrtcId, "CRTC_ID") ||
                         !AddPropertyChecked(req, planeId, _osdPlaneProps.FbIdPropertyId, fbId, "FB_ID"))
                     {
-                        return false;
+                        return (false, -1);
                     }
                     _logger?.LogTrace("OSD plane {PlaneId}: CRTC_ID={CrtcId}, FB_ID={FbId}", planeId, _config.CrtcId, fbId);
                 }
             }
 
-            // Commit with page flip event - this blocks until vsync
-            // Use ALLOW_MODESET on first plane initialization
+            // Determine commit flags
+            // Use ALLOW_MODESET on first plane initialization (blocking)
+            // Use NONBLOCK for normal commits with fence return
             DrmModeAtomicFlags flags;
             bool needsModeset = !_videoPlaneInitialized || !_osdPlaneInitialized;
 
@@ -814,8 +865,17 @@ public sealed class DualPlanePresenter2 : IDisposable
             }
             else
             {
-                // Normal commit - use page flip event for vsync
-                flags = DrmModeAtomicFlags.DRM_MODE_PAGE_FLIP_EVENT;
+                // Normal commit - use NONBLOCK with OUT_FENCE_PTR
+                flags = DrmModeAtomicFlags.DRM_MODE_ATOMIC_NONBLOCK | DrmModeAtomicFlags.DRM_MODE_PAGE_FLIP_EVENT;
+
+                // Add OUT_FENCE_PTR property - kernel writes fence fd here
+                // Use pointer to local variable (no fixed needed for stack-allocated int)
+                int* fencePtr = &fenceFd;
+                if (!AddPropertyChecked(req, _config.CrtcId, _modesetProps.OutFencePtrPropertyId,
+                    (ulong)fencePtr, "OUT_FENCE_PTR"))
+                {
+                    return (false, -1);
+                }
             }
 
             var result = LibDrm.drmModeAtomicCommit(_drmDevice.DeviceFd, req, flags, 0);
@@ -824,7 +884,7 @@ public sealed class DualPlanePresenter2 : IDisposable
             {
                 var errno = Marshal.GetLastPInvokeError();
                 _logger?.LogTrace("Atomic commit failed: result={Result}, errno={Errno}", result, errno);
-                return false;
+                return (false, -1);
             }
 
             // Mark planes as initialized after successful commit
@@ -839,60 +899,12 @@ public sealed class DualPlanePresenter2 : IDisposable
                 _logger?.LogDebug("OSD plane initialized successfully");
             }
 
-            // Wait for page flip event only if we used PAGE_FLIP_EVENT flag
-            if (!needsModeset)
-            {
-                WaitForPageFlip();
-            }
-
-            return true;
+            return (true, fenceFd);
         }
         finally
         {
             LibDrm.drmModeAtomicFree(req);
         }
-    }
-
-    private unsafe void WaitForPageFlip()
-    {
-        // Poll for DRM event
-        var pollFd = new PollFd
-        {
-            fd = _drmDevice.DeviceFd,
-            events = PollEvents.POLLIN
-        };
-
-        var timeout = (int)(1000.0 / (_config.Mode.VRefresh > 0 ? _config.Mode.VRefresh : 60) * 2);
-        var ret = Libc.poll(ref pollFd, 1, timeout);
-
-        // Check for cancellation after poll returns
-        if (_cts.Token.IsCancellationRequested)
-        {
-            return;
-        }
-
-        if (ret > 0 && (pollFd.revents & PollEvents.POLLIN) != 0)
-        {
-            fixed (DrmEventContext* ctx = &_eventContext)
-            {
-                LibDrm.drmHandleEvent(_drmDevice.DeviceFd, ctx);
-            }
-        }
-        else if (ret == 0)
-        {
-            _logger?.LogWarning("Page flip wait timed out after {Timeout}ms", timeout);
-        }
-        else if (ret < 0)
-        {
-            var errno = Marshal.GetLastPInvokeError();
-            _logger?.LogWarning("Page flip poll failed: errno={Errno}", errno);
-        }
-    }
-
-    private void OnPageFlipComplete(int fd, uint sequence, uint tvSec, uint tvUsec, nint userData)
-    {
-        // Page flip completed - buffer transition already handled in commit loop
-        _logger?.LogTrace("Page flip complete: seq={Sequence}", sequence);
     }
 
     /// <inheritdoc />
@@ -903,7 +915,7 @@ public sealed class DualPlanePresenter2 : IDisposable
 
         _disposed = true;
 
-        // Stop commit thread
+        // Stop commit thread (also closes fence fd)
         Stop();
 
         // Destroy mode blob
@@ -916,12 +928,6 @@ public sealed class DualPlanePresenter2 : IDisposable
         // Dispose framebuffer caches
         _videoFbCache?.Dispose();
         _osdFbCache?.Dispose();
-
-        // Free callback handle
-        if (_gcHandle.IsAllocated)
-        {
-            _gcHandle.Free();
-        }
 
         _commitSignal.Dispose();
         _cts.Dispose();
