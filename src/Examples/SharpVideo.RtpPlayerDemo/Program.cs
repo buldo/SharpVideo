@@ -142,7 +142,6 @@ internal class Program
         using var drmBufferManager = new DrmBufferManager(
             drmDevice,
             allocator,
-            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_ARGB8888],
             drmBufferManagerLogger);
 
         // Select planes for video (NV12) and OSD (ARGB8888)

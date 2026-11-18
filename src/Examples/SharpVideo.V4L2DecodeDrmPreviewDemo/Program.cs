@@ -60,7 +60,6 @@ internal class Program
         using var drmBufferManager = new DrmBufferManager(
             drmDevice,
             allocator,
-            [KnownPixelFormats.DRM_FORMAT_NV12],
             drmBufferManagerLogger);
 
         // Get device resources to find connector, CRTC, and mode

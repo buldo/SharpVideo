@@ -141,64 +141,6 @@ internal sealed class OsdFramebufferCache : IDisposable
         return fbId;
     }
 
-    /// <summary>
-    /// Gets the cached framebuffer ID for a BO without creating one.
-    /// </summary>
-    /// <param name="bo">The GBM buffer object handle.</param>
-    /// <returns>The framebuffer ID if cached, 0 otherwise.</returns>
-    public uint TryGet(nint bo)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        for (int i = 0; i < _count; i++)
-        {
-            if (_entries[i].Bo == bo)
-            {
-                return _entries[i].FbId;
-            }
-        }
-
-        return 0;
-    }
-
-    /// <summary>
-    /// Invalidates the cache entry for a specific BO.
-    /// Does not destroy the framebuffer - call this when the BO is being released.
-    /// </summary>
-    /// <param name="bo">The GBM buffer object handle.</param>
-    public void Invalidate(nint bo)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        for (int i = 0; i < _count; i++)
-        {
-            if (_entries[i].Bo == bo)
-            {
-                // Remove entry by shifting
-                if (_entries[i].FbId != 0)
-                {
-                    LibDrm.drmModeRmFB(_drmFd, _entries[i].FbId);
-                }
-
-                for (int j = i; j < _count - 1; j++)
-                {
-                    _entries[j] = _entries[j + 1];
-                }
-
-                _entries[_count - 1] = default;
-                _count--;
-
-                // Adjust oldest index if needed
-                if (_oldestIndex >= _count && _count > 0)
-                {
-                    _oldestIndex = 0;
-                }
-
-                return;
-            }
-        }
-    }
-
     /// <inheritdoc />
     public void Dispose()
     {

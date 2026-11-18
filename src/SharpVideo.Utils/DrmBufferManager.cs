@@ -29,7 +29,6 @@ public class DrmBufferManager : IDisposable
     public DrmBufferManager(
         DrmDevice drmDevice,
         DmaBuffersAllocator allocator,
-        PixelFormat[] supportedPixelFormats,
         ILogger<DrmBufferManager> logger)
     {
         _drmDevice = drmDevice;

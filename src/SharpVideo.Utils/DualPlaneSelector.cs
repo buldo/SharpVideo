@@ -212,34 +212,4 @@ public static class DualPlaneSelector
             $"OSD plane candidates: {osdCandidates.Count}. Could not configure z-ordering for OSD above video.",
             device.DeviceFd);
     }
-
-    /// <summary>
-    /// Attempts to select compatible planes for dual-plane rendering.
-    /// </summary>
-    /// <param name="device">The DRM device to query for planes.</param>
-    /// <param name="crtcId">The CRTC ID the planes must be compatible with.</param>
-    /// <param name="videoFormat">The pixel format required for the video plane.</param>
-    /// <param name="osdFormat">The pixel format required for the OSD plane.</param>
-    /// <param name="selection">The selected planes if successful.</param>
-    /// <param name="logger">Optional logger for diagnostic output.</param>
-    /// <returns>True if selection was successful, false otherwise.</returns>
-    public static bool TrySelect(
-        DrmDevice device,
-        uint crtcId,
-        uint videoFormat,
-        uint osdFormat,
-        out DualPlaneSelection selection,
-        ILogger? logger = null)
-    {
-        try
-        {
-            selection = Select(device, crtcId, videoFormat, osdFormat, logger);
-            return true;
-        }
-        catch (DrmException)
-        {
-            selection = default;
-            return false;
-        }
-    }
 }

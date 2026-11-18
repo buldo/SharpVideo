@@ -93,7 +93,6 @@ internal class UiHostFactory
         var bufferManager = new DrmBufferManager(
             drmDevice,
             dmaAllocator,
-            [KnownPixelFormats.DRM_FORMAT_NV12, KnownPixelFormats.DRM_FORMAT_ARGB8888],
             _loggerFactory.CreateLogger<DrmBufferManager>());
 
         return bufferManager;

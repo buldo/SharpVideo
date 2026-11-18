@@ -130,7 +130,6 @@ namespace SharpVideo.MultiPlaneExample
             var buffersManager = new DrmBufferManager(
                 drmDevice,
                 allocator,
-                [KnownPixelFormats.DRM_FORMAT_ARGB8888, KnownPixelFormats.DRM_FORMAT_NV12],
                 LoggerFactory.CreateLogger<DrmBufferManager>());
 
             // Create GBM device for OSD buffer allocation
